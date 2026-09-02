@@ -1,0 +1,48 @@
+.env
+.env.*
+!.env.example
+
+# Python
+*.pyc
+__pycache__/
+.venv-test/
+.venv/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Node / Vite / Playwright
+node_modules/
+frontend/node_modules/
+frontend/dist/
+frontend/coverage/
+frontend/playwright-report/
+frontend/test-results/
+
+# OS and editor files
+.DS_Store
+.idea/
+.vscode/
+.~*
+~$*
+
+# Go build output
+backend/bin/
+backend/server
+
+# Local runtime state
+*.log
+*.db
+*.sqlite
+*.sqlite3
+
+# Internal office requirement/source documents are kept out of the public repo
+docs/*.doc
+docs/*.docx
+docs/*.xls
+docs/*.xlsx
+
+.prepare-env.lock
+.sales_orders_sync.lock

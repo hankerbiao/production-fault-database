@@ -17,8 +17,12 @@ from collections import OrderedDict
 from contextlib import contextmanager
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any, Iterator, Mapping
 from urllib.parse import quote_plus
+
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
+if str(PROJECT_ROOT) not in __import__("sys").path:
+    __import__("sys").path.insert(0, str(PROJECT_ROOT))
 
 try:
     import httpx
@@ -28,7 +32,7 @@ except ImportError as exc:  # pragma: no cover - exercised by deployment, not un
     print(json.dumps({"success": False, "error": f"missing dependency: {exc.name}; install httpx and pymongo"}, ensure_ascii=False))
     raise SystemExit(2) from exc
 
-from hana_view_sync import (
+from scripts.sources.hana.hana_view_sync import (
     mongo_client_options,
     mongo_lease_lock,
     mongo_write_concern_summary,
@@ -36,7 +40,7 @@ from hana_view_sync import (
 )
 
 
-ROOT = Path(__file__).resolve().parent
+ROOT = PROJECT_ROOT
 SOURCES = OrderedDict((
     ("SG", "http://10.2.101.37:8000/sap/ZHTTP_SIMS?sap-client=800"),
     ("KK", "http://10.8.100.11:8001/sap/ZHTTP_SIMS?sap-client=600"),
@@ -53,6 +57,8 @@ REPAIR_COLUMNS = tuple(
     "RECORD01REPAIRM SLOT AUFNR VBELN POSNR U_FIND U_RMA_NAME RMA_RESULT RMA_TYPE2".split()
 )
 REPAIR_KEY_FIELDS = ("MANDT", "PCODE", "ZMCOD1", "ZDATE_WX", "ZTIME")
+# The repair view is only in scope from this date onward. This lower bound is
+# enforced for both full and incremental runs, even when callers omit a start.
 REPAIR_START_DATE = date(2026, 1, 1)
 
 
@@ -240,19 +246,21 @@ def hana_connection() -> Iterator[Any]:
         connection.close()
 
 
-def sync_repair(db: Any, collection: str, checkpoint_collection: str, mode: str, start_date: date | None, end_date: date, lookback_days: int, batch_size: int, dry_run: bool, run_id: str) -> dict[str, Any]:
+def sync_repair(db: Any, collection: str, checkpoint_collection: str, mode: str, start_date: date | None, end_date: date, lookback_days: int, batch_size: int, dry_run: bool, run_id: str, defer_finalize: bool = False) -> dict[str, Any]:
     if end_date < REPAIR_START_DATE:
         raise ValueError("维修数据仅同步 2026-01-01 及之后的数据")
     checkpoint = None if mode == "full" or dry_run else db[checkpoint_collection].find_one({"_id": "repair_records"})
     if mode == "incremental" and checkpoint and checkpoint.get("watermark"):
         watermark_date = date.fromisoformat(str(checkpoint["watermark"]["ZDATE"]))
         start_date = watermark_date - timedelta(days=lookback_days)
+    # First run without a checkpoint starts at 2026-01-01; later incremental
+    # runs may move the effective start forward from the stored watermark.
     start_date = max(start_date or REPAIR_START_DATE, REPAIR_START_DATE)
     allowed_vbelns = sales_order_vbelns(db)
     if not allowed_vbelns:
         raise RuntimeError("sales_orders_sap 中没有有效 VBELN，拒绝同步维修数据")
     sql, params = repair_query(mode, checkpoint, start_date, end_date)
-    stats = {"success": False, "source_rows": 0, "matched_sales_orders": 0, "filtered_missing_sales_order": 0, "batches": 0, "inserted": 0, "updated": 0, "sales_order_vbelns": len(allowed_vbelns), "range": {"start": start_date.isoformat(), "end": end_date.isoformat()}}
+    stats = {"success": False, "source_rows": 0, "matched_sales_orders": 0, "empty_sales_orders_retained": 0, "filtered_missing_sales_order": 0, "batches": 0, "inserted": 0, "updated": 0, "sales_order_vbelns": len(allowed_vbelns), "range": {"start": start_date.isoformat(), "end": end_date.isoformat()}}
     watermark = None
     if not dry_run:
         db[collection].create_index("_source_key", unique=True, name="source_key_unique")
@@ -266,10 +274,14 @@ def sync_repair(db: Any, collection: str, checkpoint_collection: str, mode: str,
                     row = dict(zip(REPAIR_COLUMNS, values, strict=True))
                     watermark = watermark_max(watermark, row, ("ZDATE", "ZTIME"))
                     stats["source_rows"] += 1
-                    if str(row.get("VBELN") or "").strip() not in allowed_vbelns:
+                    normalized_vbeln = str(row.get("VBELN") or "").strip()
+                    if normalized_vbeln and normalized_vbeln not in allowed_vbelns:
                         stats["filtered_missing_sales_order"] += 1
                         continue
-                    stats["matched_sales_orders"] += 1
+                    if normalized_vbeln:
+                        stats["matched_sales_orders"] += 1
+                    else:
+                        stats["empty_sales_orders_retained"] += 1
                     if not dry_run:
                         key = source_key(row, REPAIR_KEY_FIELDS)
                         document = {key: bson_value(value) for key, value in row.items()}
@@ -284,7 +296,7 @@ def sync_repair(db: Any, collection: str, checkpoint_collection: str, mode: str,
             cursor.close()
     if watermark is None and checkpoint:
         watermark = checkpoint.get("watermark")
-    if not dry_run:
+    if not dry_run and not defer_finalize:
         db[collection].create_index([("PCODE", ASCENDING), ("ZDATE_WX", ASCENDING)], name="repair_pcode_date")
         if mode == "full":
             result = db[collection].delete_many({"_source_view": "ZSGV_ZZT_WLJL", "_scope_run_id": {"$ne": run_id}})
@@ -293,6 +305,22 @@ def sync_repair(db: Any, collection: str, checkpoint_collection: str, mode: str,
     stats["watermark"] = watermark
     stats["success"] = True
     return stats
+
+
+def finalize_repair_run(db: Any, collection: str, checkpoint_collection: str, sync_result: Mapping[str, Any], run_id: str) -> dict[str, int]:
+    """Advance repair watermark and remove stale full-sync rows after cleanup."""
+    if not sync_result.get("success"):
+        raise ValueError("不能提交失败的维修同步")
+    deleted = 0
+    if sync_result.get("mode") == "full":
+        deleted = db[collection].delete_many({"_source_view": "ZSGV_ZZT_WLJL", "_scope_run_id": {"$ne": run_id}}).deleted_count
+    db[collection].create_index([("PCODE", ASCENDING), ("ZDATE_WX", ASCENDING)], name="repair_pcode_date")
+    db[checkpoint_collection].update_one(
+        {"_id": "repair_records"},
+        {"$set": {"dataset": "repair_records", "watermark": sync_result.get("watermark"), "run_id": run_id, "updated_at": datetime.now(timezone.utc)}},
+        upsert=True,
+    )
+    return {"deleted_out_of_scope": deleted}
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -489,31 +517,3 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     repair_result = run(argparse.Namespace(**{**vars(args), "dataset": "repair"}))
     return {"success": sales_result.get("success", False) and repair_result.get("success", False), "run_id": sales_result.get("run_id"), "dataset": "all", "sales": sales_result, "repair": repair_result}
 
-
-def main() -> int:
-    load_dotenv(ROOT / ".env")
-    def handle_shutdown(signum: int, _frame: Any) -> None:
-        raise RuntimeError(f"收到终止信号 {signum}，正在关闭数据库连接")
-    signal.signal(signal.SIGTERM, handle_shutdown)
-    parser = build_parser()
-    args = parser.parse_args()
-    lock_client = None
-    try:
-        with process_lock(env("SYNC_LOCK_PATH", str(ROOT / ".sales_orders_sync.lock"))):
-            lock_client = MongoClient(mongo_uri(), **mongo_client_options())
-            with mongo_lease_lock(
-                lock_client[env("MONGODB_DATABASE")],
-                env("SYNC_DISTRIBUTED_LOCK_NAME", "sales_repair_sync"),
-            ):
-                result = run(args)
-    except Exception as exc:
-        result = {"success": False, "error": str(exc)}
-    finally:
-        if lock_client is not None:
-            lock_client.close()
-    print(json.dumps(result, ensure_ascii=False, default=str, sort_keys=True))
-    return 0 if result.get("success") else 1
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())

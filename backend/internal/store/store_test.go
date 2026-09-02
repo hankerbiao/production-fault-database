@@ -23,12 +23,57 @@ func TestRepairFilterEscapesRegexAndCombinesConditions(t *testing.T) {
 
 func TestOrderFilterAndMissingField(t *testing.T) {
 	filter := orderFilter(OrderFilters{Source: "SG", GSTRSFrom: "2026-01-01", GSTRSTo: "2026-01-31", Keyword: "SO"})
-	if len(filter["$and"].(primitive.A)) != 4 {
+	if len(filter["$and"].(primitive.A)) != 3 {
 		t.Fatalf("filter=%v", filter)
 	}
 	missing := missingField("VBELN")
 	if len(missing["$or"].(primitive.A)) != 3 {
 		t.Fatalf("missing=%v", missing)
+	}
+}
+
+func TestOrderDateRangeFilterSupportsISOAndSAPDates(t *testing.T) {
+	filter := orderFilter(OrderFilters{DateFrom: "2026-08-04", DateTo: "20260902"})
+	conditions := filter["$and"].(primitive.A)
+	if len(conditions) != 1 {
+		t.Fatalf("filter=%v", filter)
+	}
+	branches := conditions[0].(bson.M)["$or"].(primitive.A)
+	if len(branches) != 3 {
+		t.Fatalf("date branches=%v", branches)
+	}
+	normalized := branches[0].(bson.M)["gstrs_date"].(bson.M)
+	if normalized["$gte"] != "2026-08-04" || normalized["$lte"] != "2026-09-02" {
+		t.Fatalf("normalized date range=%v", normalized)
+	}
+	compact := branches[2].(bson.M)["data.GSTRS"].(bson.M)
+	if compact["$gte"] != "20260804" || compact["$lte"] != "20260902" {
+		t.Fatalf("compact date range=%v", compact)
+	}
+}
+
+func TestBatchAndLeadingZeroFilters(t *testing.T) {
+	filter := repairFilter(Filters{SNS: "SN001，SN002", ProductionOrders: "123,0000456"})
+	conditions := filter["$and"].(primitive.A)
+	if len(conditions) != 2 {
+		t.Fatalf("filter=%v", filter)
+	}
+	production := conditions[1].(bson.M)["$or"].(primitive.A)
+	if len(production) != 2 {
+		t.Fatalf("production batch=%v", production)
+	}
+	first := production[0].(bson.M)["AUFNR"].(bson.M)
+	if first["$regex"] != "^0*123$" {
+		t.Fatalf("leading-zero regex=%v", first)
+	}
+}
+
+func TestViewFilterIncludesEndDateForStationDatetimes(t *testing.T) {
+	filter := viewFilter("Z_V_ZMES_T_001", ViewFilters{DateTo: "2026-03-31"}, nil, "ACTUAL_START_TIME")
+	conditions := filter["$and"].(primitive.A)
+	dateCondition := conditions[0].(bson.M)["ACTUAL_START_TIME"].(bson.M)
+	if dateCondition["$lte"] != "2026-03-31 23:59:59" {
+		t.Fatalf("end date=%v", dateCondition["$lte"])
 	}
 }
 
@@ -52,10 +97,33 @@ func TestStatsUseSingleAggregationPipeline(t *testing.T) {
 	}
 }
 
+func TestStationViewStatsPipelineCountsMissingOrders(t *testing.T) {
+	pipeline := viewStatsPipeline("Z_V_ZMES_T_001", bson.M{"PCODE": "PC-1"}, "ACTUAL_START_TIME")
+	group := pipeline[1].Map()["$group"].(bson.M)
+	project := pipeline[2].Map()["$project"].(bson.M)
+	if _, ok := group["missingSalesOrder"]; !ok {
+		t.Fatalf("group=%v", group)
+	}
+	if _, ok := group["missingProductionOrder"]; !ok {
+		t.Fatalf("group=%v", group)
+	}
+	if project["missingSalesOrder"] != 1 || project["missingProductionOrder"] != 1 {
+		t.Fatalf("project=%v", project)
+	}
+}
+
+func TestOrderStatsPipelineExposesMachineQuantity(t *testing.T) {
+	pipeline := orderStatsPipeline(orderFilter(OrderFilters{Source: "SG"}))
+	project := pipeline[2].Map()["$project"].(bson.M)
+	if project["machineQuantity"] != "$orderQuantity" {
+		t.Fatalf("machineQuantity projection=%v", project["machineQuantity"])
+	}
+}
+
 func TestNormalizeFaultAndOrder(t *testing.T) {
-	doc := bson.M{"_source_key": "key", "PCODE": " PC-1 ", "ZMCOD1": "SN-1", "ERROR_CODE": "E1", "ZDATE_WX": "20260102", "ZTIME": "030405", "VBELN": "SO1", "AUFNR": "PO1", "_synced_at": primitive.NewDateTimeFromTime(time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC))}
+	doc := bson.M{"_source_key": "key", "PCODE": " PC-1 ", "ZMCOD1": "SN-1", "ERROR_CODE": "E1", "ZDATE_WX": "20260102", "ZTIME": "030405", "VBELN": "SO1", "AUFNR": "PO1", "GSTRS": "20260101", "_synced_at": primitive.NewDateTimeFromTime(time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC))}
 	fault := normalizeFault(doc)
-	if fault.ID != "key" || fault.HostBarcode != "PC-1" || fault.RepairAt.IsZero() || fault.SalesOrder != "SO1" {
+	if fault.ID != "key" || fault.HostBarcode != "PC-1" || fault.RepairAt.IsZero() || fault.SalesOrder != "SO1" || fault.PlannedStartDate != "20260101" {
 		t.Fatalf("fault=%+v", fault)
 	}
 
@@ -92,5 +160,25 @@ func TestStationDetailFieldsUseDocumentedChineseLabelsAndOrder(t *testing.T) {
 	}
 	if fields[1].Key != "ACTUAL_END_TIME" || fields[2].Key != "CLASSCODE" || fields[3].Key != "PRODH" {
 		t.Fatalf("documented order not preserved: %+v", fields)
+	}
+}
+
+func TestSerialBindingDetailFieldsUseBilingualLabelsAndOrder(t *testing.T) {
+	doc := bson.M{
+		"PRODH": "00100", "AUFNR_ITEM": "PO-ITEM", "ZCODE_HEAD": "HEAD-1", "ZCODE_ITEM": "ITEM-1", "AUFNR_HEAD": "PO-HEAD",
+		"_id": "ignored",
+	}
+	fields := viewDetailFields("ZSGV_ZPP_SERNOLIST", doc)
+	if len(fields) != 5 {
+		t.Fatalf("fields=%+v", fields)
+	}
+	wantKeys := []string{"ZCODE_HEAD", "ZCODE_ITEM", "AUFNR_HEAD", "AUFNR_ITEM", "PRODH"}
+	for index, wantKey := range wantKeys {
+		if fields[index].Key != wantKey || fields[index].Label == wantKey {
+			t.Fatalf("field %d=%+v, want translated %s", index, fields[index], wantKey)
+		}
+	}
+	if fields[0].Label != "大刀/机头序列号（ZCODE_HEAD）" {
+		t.Fatalf("unexpected label=%q", fields[0].Label)
 	}
 }

@@ -6,6 +6,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"go.mongodb.org/mongo-driver/bson"
@@ -21,8 +22,14 @@ type Store struct {
 	views   map[string]*mongo.Collection
 }
 
-type Filters struct{ Keyword, HostBarcode, DefectResponsibility, NGStation, SalesOrder, ProductionOrder string }
-type OrderFilters struct{ Keyword, Source, GSTRSFrom, GSTRSTo string }
+type Filters struct {
+	Keyword, HostBarcode, DefectResponsibility, NGStation, SalesOrder, ProductionOrder string
+	SNS, ProductionOrders, SalesOrders, DateFrom, DateTo, Station, ProductModel        string
+}
+type OrderFilters struct {
+	Keyword, Source, GSTRSFrom, GSTRSTo                                                                   string
+	SalesOrder, ProductionOrder, SerialNumber, ProductModel, Customer, Base, DateFrom, DateTo, OrderScope string
+}
 
 type Fault struct {
 	ID                   string    `json:"id"`
@@ -38,11 +45,13 @@ type Fault struct {
 	RepairPerson         string    `json:"repairPerson"`
 	SalesOrder           string    `json:"salesOrder"`
 	ProductionOrder      string    `json:"productionOrder"`
+	PlannedStartDate     string    `json:"plannedStartDate"`
 	MaterialCode         string    `json:"materialCode"`
 	MaterialDescription  string    `json:"materialDescription"`
 	NGStation            string    `json:"ngStation"`
 	RetestStation        string    `json:"retestStation"`
 	RepairRemarks        string    `json:"repairRemarks"`
+	Raw                  bson.M    `json:"raw,omitempty"`
 }
 
 type Field struct {
@@ -53,6 +62,7 @@ type Field struct {
 type FaultDetail struct {
 	Fault  Fault   `json:"fault"`
 	Fields []Field `json:"fields"`
+	Raw    bson.M  `json:"raw"`
 }
 type ListResult struct {
 	Items    []Fault `json:"items"`
@@ -87,10 +97,12 @@ type Order struct {
 	OrderQuantity       float64 `json:"orderQuantity"`
 	StorageQuantity     float64 `json:"storageQuantity"`
 	RecordCount         int     `json:"recordCount"`
+	Raw                 bson.M  `json:"raw,omitempty"`
 }
 type OrderDetail struct {
 	Order  Order   `json:"order"`
 	Fields []Field `json:"fields"`
+	Raw    bson.M  `json:"raw"`
 }
 type OrderListResult struct {
 	Items    []Order `json:"items"`
@@ -98,6 +110,9 @@ type OrderListResult struct {
 	PageSize int     `json:"pageSize"`
 	Total    int64   `json:"total"`
 }
+
+const MaxOrderQueryRows = 10000
+
 type OrderStatsResult struct {
 	Total           int64   `json:"total"`
 	SalesOrders     int64   `json:"salesOrders"`
@@ -107,10 +122,18 @@ type OrderStatsResult struct {
 	SG              int64   `json:"sg"`
 	KK              int64   `json:"kk"`
 	OrderQuantity   float64 `json:"orderQuantity"`
+	MachineQuantity float64 `json:"machineQuantity"`
 	StorageQuantity float64 `json:"storageQuantity"`
 }
+type OrderModelsResult struct {
+	Items []string `json:"items"`
+}
 
-type ViewFilters struct{ Keyword, From, To string }
+type ViewFilters struct {
+	Keyword, From, To                                                                  string
+	DateFrom, DateTo, StationCode, SN, ProductionOrder, SalesOrder, Base, ProductModel string
+	HeadOrder, ItemOrder, HeadSN, ItemSN, MaterialCode                                 string
+}
 type ViewListResult struct {
 	Items    []bson.M `json:"items"`
 	Page     int      `json:"page"`
@@ -118,14 +141,23 @@ type ViewListResult struct {
 	Total    int64    `json:"total"`
 }
 type ViewStatsResult struct {
-	Total          int64  `json:"total"`
-	DataStartDate  string `json:"dataStartDate"`
-	DataEndDate    string `json:"dataEndDate"`
-	LatestSyncedAt string `json:"latestSyncedAt"`
+	Total                  int64  `json:"total"`
+	MissingSalesOrder      int64  `json:"missingSalesOrder"`
+	MissingProductionOrder int64  `json:"missingProductionOrder"`
+	DataStartDate          string `json:"dataStartDate"`
+	DataEndDate            string `json:"dataEndDate"`
+	LatestSyncedAt         string `json:"latestSyncedAt"`
 }
 type ViewDetailResult struct {
 	Item   bson.M  `json:"item"`
 	Fields []Field `json:"fields"`
+}
+type DataStatus struct {
+	SalesOrdersLastSyncedAt    string `json:"salesOrdersLastSyncedAt"`
+	FaultsLastSyncedAt         string `json:"faultsLastSyncedAt"`
+	StationRecordsLastSyncedAt string `json:"stationRecordsLastSyncedAt"`
+	SerialBindingsLastSyncedAt string `json:"serialBindingsLastSyncedAt"`
+	BOMPostingsLastSyncedAt    string `json:"bomPostingsLastSyncedAt"`
 }
 
 var documentedViews = map[string]struct {
@@ -139,8 +171,10 @@ var documentedViews = map[string]struct {
 	"Z_V_ZMES_T_001":     {"station_records_sap", "ACTUAL_START_TIME", []string{"HISTROYID", "PCODE", "OCODE", "AUFNR", "SPEC", "OPERATION", "GSTRS", "ACTUAL_START_TIME", "ACTUAL_END_TIME"}, []string{"ACTUAL_START_TIME", "HISTROYID", "SPEC_TIME"}},
 }
 
-// List responses only need the fields used to construct their public summaries.
-// Detail endpoints continue to read the complete source document on demand.
+const viewListIndexName = "api_view_list_order"
+
+// Legacy projections are retained for callers that import these definitions; raw-data
+// list endpoints intentionally read the complete source document.
 var repairListProjection = bson.M{
 	"_source_key": 1, "PCODE": 1, "ZMCOD1": 1, "ERROR_CODE": 1, "ZGZMS": 1, "ERROR_MSG": 1, "RPDESC": 1, "ZZRFL": 1,
 	"ZWXDT": 1, "ZDATE_WX": 1, "ZDATE": 1, "ZTIME": 1, "ZUSER": 1, "U_FIX": 1, "VBELN": 1, "AUFNR": 1, "MATNR": 1, "MAKTX": 1, "ZNGGZ": 1, "RETEST_STATION": 1, "FIX_REMARKS": 1, "_synced_at": 1,
@@ -164,13 +198,61 @@ func New(ctx context.Context, uri, database, repairCollection, orderCollection s
 	db := client.Database(database)
 	views := make(map[string]*mongo.Collection, len(documentedViews))
 	for id, config := range documentedViews {
-		views[id] = db.Collection(config.collection)
+		collection := db.Collection(config.collection)
+		views[id] = collection
+		keys := bson.D{}
+		for _, field := range config.orderFields {
+			keys = append(keys, bson.E{Key: field, Value: -1})
+		}
+		// Index creation can take minutes on a large remote collection. Keep it
+		// out of the startup critical path; MongoDB will use it once complete.
+		go func(collection *mongo.Collection, keys bson.D) {
+			indexCtx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+			defer cancel()
+			_, _ = collection.Indexes().CreateOne(indexCtx, mongo.IndexModel{Keys: keys, Options: options.Index().SetName(viewListIndexName)})
+		}(collection, keys)
 	}
 	return &Store{client: client, repairs: db.Collection(repairCollection), orders: db.Collection(orderCollection), views: views}, nil
 }
 
 func (s *Store) Close(ctx context.Context) error { return s.client.Disconnect(ctx) }
 func (s *Store) Ping(ctx context.Context) error  { return s.client.Ping(ctx, nil) }
+
+func (s *Store) DataStatus(ctx context.Context) (DataStatus, error) {
+	type source struct {
+		collection *mongo.Collection
+		field      string
+	}
+	sources := []source{
+		{s.orders, "last_synced_at"}, {s.repairs, "_synced_at"}, {s.views["Z_V_ZMES_T_001"], "_synced_at"},
+		{s.views["ZSGV_ZPP_SERNOLIST"], "_synced_at"}, {s.views["ZSGV_ZSD124"], "_synced_at"},
+	}
+	values := make([]string, len(sources))
+	var wg sync.WaitGroup
+	var once sync.Once
+	var resultErr error
+	for index, item := range sources {
+		wg.Add(1)
+		go func(index int, item source) {
+			defer wg.Done()
+			var doc bson.M
+			err := item.collection.FindOne(ctx, bson.M{}, options.FindOne().SetSort(bson.D{{Key: item.field, Value: -1}}).SetProjection(bson.M{item.field: 1})).Decode(&doc)
+			if err == mongo.ErrNoDocuments {
+				return
+			}
+			if err != nil {
+				once.Do(func() { resultErr = err })
+				return
+			}
+			values[index] = timeText(doc[item.field])
+		}(index, item)
+	}
+	wg.Wait()
+	if resultErr != nil {
+		return DataStatus{}, resultErr
+	}
+	return DataStatus{SalesOrdersLastSyncedAt: values[0], FaultsLastSyncedAt: values[1], StationRecordsLastSyncedAt: values[2], SerialBindingsLastSyncedAt: values[3], BOMPostingsLastSyncedAt: values[4]}, nil
+}
 
 func (s *Store) Stats(ctx context.Context, f Filters) (StatsResult, error) {
 	cur, err := s.repairs.Aggregate(ctx, repairStatsPipeline(repairFilter(f)))
@@ -203,7 +285,40 @@ func (s *Store) OrderStats(ctx context.Context, f OrderFilters) (OrderStatsResul
 		return OrderStatsResult{}, nil
 	}
 	row := rows[0]
-	return OrderStatsResult{Total: int64(number(row["total"])), SalesOrders: int64(number(row["salesOrders"])), DataStartDate: firstText(row, "dataStartDate"), DataEndDate: firstText(row, "dataEndDate"), LatestSyncedAt: firstText(row, "latestSyncedAt"), SG: int64(number(row["sg"])), KK: int64(number(row["kk"])), OrderQuantity: number(row["orderQuantity"]), StorageQuantity: number(row["storageQuantity"])}, nil
+	orderQuantity := number(row["orderQuantity"])
+	machineQuantity := number(row["machineQuantity"])
+	if machineQuantity == 0 {
+		machineQuantity = orderQuantity
+	}
+	return OrderStatsResult{Total: int64(number(row["total"])), SalesOrders: int64(number(row["salesOrders"])), DataStartDate: firstText(row, "dataStartDate"), DataEndDate: firstText(row, "dataEndDate"), LatestSyncedAt: firstText(row, "latestSyncedAt"), SG: int64(number(row["sg"])), KK: int64(number(row["kk"])), OrderQuantity: orderQuantity, MachineQuantity: machineQuantity, StorageQuantity: number(row["storageQuantity"])}, nil
+}
+
+// OrderModels returns the distinct production-model values used by the sales-order board.
+// The optional keyword keeps the endpoint useful when a deployment has many model values.
+func (s *Store) OrderModels(ctx context.Context, keyword string) (OrderModelsResult, error) {
+	filter := bson.M{"data.MAKTX_TH": bson.M{"$exists": true, "$nin": bson.A{"", nil}}}
+	if keyword = strings.TrimSpace(keyword); keyword != "" {
+		filter["data.MAKTX_TH"] = bson.M{"$regex": regexp.QuoteMeta(keyword), "$options": "i"}
+	}
+	values, err := s.orders.Distinct(ctx, "data.MAKTX_TH", filter)
+	if err != nil {
+		return OrderModelsResult{}, err
+	}
+	items := make([]string, 0, len(values))
+	seen := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		text := strings.TrimSpace(fmt.Sprint(value))
+		if text == "" || text == "<nil>" {
+			continue
+		}
+		if _, ok := seen[text]; ok {
+			continue
+		}
+		seen[text] = struct{}{}
+		items = append(items, text)
+	}
+	sort.Strings(items)
+	return OrderModelsResult{Items: items}, nil
 }
 
 func (s *Store) List(ctx context.Context, f Filters, page, pageSize int) (ListResult, error) {
@@ -212,7 +327,7 @@ func (s *Store) List(ctx context.Context, f Filters, page, pageSize int) (ListRe
 	if err != nil {
 		return ListResult{}, err
 	}
-	cur, err := s.repairs.Find(ctx, filter, options.Find().SetSort(bson.D{{Key: "ZDATE_WX", Value: -1}, {Key: "ZTIME", Value: -1}}).SetProjection(repairListProjection).SetSkip(int64((page-1)*pageSize)).SetLimit(int64(pageSize)))
+	cur, err := s.repairs.Find(ctx, filter, options.Find().SetSort(bson.D{{Key: "ZDATE_WX", Value: -1}, {Key: "ZTIME", Value: -1}}).SetSkip(int64((page-1)*pageSize)).SetLimit(int64(pageSize)))
 	if err != nil {
 		return ListResult{}, err
 	}
@@ -234,7 +349,7 @@ func (s *Store) FaultDetail(ctx context.Context, id string) (FaultDetail, error)
 	if err != nil {
 		return FaultDetail{}, err
 	}
-	return FaultDetail{Fault: normalizeFault(doc), Fields: detailFields(doc)}, nil
+	return FaultDetail{Fault: normalizeFault(doc), Fields: detailFields(doc), Raw: doc}, nil
 }
 
 // statsLegacy retains the original multi-query implementation for comparison while
@@ -317,7 +432,7 @@ func (s *Store) Orders(ctx context.Context, f OrderFilters, page, pageSize int) 
 	if err != nil {
 		return OrderListResult{}, err
 	}
-	cur, err := s.orders.Find(ctx, filter, options.Find().SetSort(bson.D{{Key: "data.GSTRS", Value: -1}, {Key: "last_synced_at", Value: -1}}).SetProjection(orderListProjection).SetSkip(int64((page-1)*pageSize)).SetLimit(int64(pageSize)))
+	cur, err := s.orders.Find(ctx, filter, options.Find().SetSort(bson.D{{Key: "data.GSTRS", Value: -1}, {Key: "last_synced_at", Value: -1}}).SetSkip(int64((page-1)*pageSize)).SetLimit(int64(pageSize)))
 	if err != nil {
 		return OrderListResult{}, err
 	}
@@ -333,12 +448,18 @@ func (s *Store) Orders(ctx context.Context, f OrderFilters, page, pageSize int) 
 	return OrderListResult{Items: items, Page: page, PageSize: pageSize, Total: total}, nil
 }
 
+// OrdersAll returns every filtered order up to the API's bounded bulk-query limit.
+// It intentionally reuses the same filter and ordering as the paginated board.
+func (s *Store) OrdersAll(ctx context.Context, f OrderFilters) (OrderListResult, error) {
+	return s.Orders(ctx, f, 1, MaxOrderQueryRows)
+}
+
 func (s *Store) OrderDetail(ctx context.Context, id string) (OrderDetail, error) {
 	var doc bson.M
 	if err := s.orders.FindOne(ctx, bson.M{"_id": id}).Decode(&doc); err != nil {
 		return OrderDetail{}, err
 	}
-	return OrderDetail{Order: normalizeOrder(doc), Fields: orderDetailFields(doc)}, nil
+	return OrderDetail{Order: normalizeOrder(doc), Fields: orderDetailFields(doc), Raw: doc}, nil
 }
 
 // orderStatsLegacy retains the original multi-query implementation for comparison.
@@ -430,7 +551,7 @@ func (s *Store) orderStatsLegacy(ctx context.Context, f OrderFilters) (OrderStat
 		orderQuantity = number(rows[0]["orderQuantity"])
 		storageQuantity = number(rows[0]["storageQuantity"])
 	}
-	return OrderStatsResult{Total: total, SalesOrders: salesOrders, DataStartDate: dataStartDate, DataEndDate: dataEndDate, LatestSyncedAt: latestSyncedAt, SG: sg, KK: kk, OrderQuantity: orderQuantity, StorageQuantity: storageQuantity}, nil
+	return OrderStatsResult{Total: total, SalesOrders: salesOrders, DataStartDate: dataStartDate, DataEndDate: dataEndDate, LatestSyncedAt: latestSyncedAt, SG: sg, KK: kk, OrderQuantity: orderQuantity, MachineQuantity: orderQuantity, StorageQuantity: storageQuantity}, nil
 }
 
 func repairStatsPipeline(filter bson.M) mongo.Pipeline {
@@ -473,7 +594,7 @@ func orderStatsPipeline(filter bson.M) mongo.Pipeline {
 			"dataStartDate":   bson.M{"$min": "$data.GSTRS"}, "dataEndDate": bson.M{"$max": "$data.GSTRS"}, "latestSyncedAt": bson.M{"$max": "$last_synced_at"},
 		}}},
 		{{Key: "$project", Value: bson.M{
-			"_id": 0, "total": 1, "sg": 1, "kk": 1, "orderQuantity": 1, "storageQuantity": 1, "dataStartDate": 1, "dataEndDate": 1,
+			"_id": 0, "total": 1, "sg": 1, "kk": 1, "orderQuantity": 1, "machineQuantity": "$orderQuantity", "storageQuantity": 1, "dataStartDate": 1, "dataEndDate": 1,
 			"salesOrders":    bson.M{"$size": bson.M{"$setDifference": bson.A{"$salesOrderValues", bson.A{""}}}},
 			"latestSyncedAt": bson.M{"$dateToString": bson.M{"date": "$latestSyncedAt", "format": "%Y-%m-%dT%H:%M:%SZ", "timezone": "UTC"}},
 		}}},
@@ -485,23 +606,41 @@ func (s *Store) ViewList(ctx context.Context, viewID string, f ViewFilters, page
 	if !ok {
 		return ViewListResult{}, fmt.Errorf("unknown view: %s", viewID)
 	}
-	filter := viewFilter(f, config.searchFields, config.dateField)
-	total, err := s.views[viewID].CountDocuments(ctx, filter)
-	if err != nil {
-		return ViewListResult{}, err
-	}
+	filter := viewFilter(viewID, f, config.searchFields, config.dateField)
 	sortFields := bson.D{}
 	for _, field := range config.orderFields {
 		sortFields = append(sortFields, bson.E{Key: field, Value: -1})
 	}
-	cur, err := s.views[viewID].Find(ctx, filter, options.Find().SetSort(sortFields).SetSkip(int64((page-1)*pageSize)).SetLimit(int64(pageSize)))
-	if err != nil {
-		return ViewListResult{}, err
-	}
-	defer cur.Close(ctx)
+
+	// Count and page retrieval are independent MongoDB operations. Running
+	// them together removes one full network/database round-trip from the
+	// request latency, which matters for the unfiltered large station view.
+	var total int64
 	var docs []bson.M
-	if err := cur.All(ctx, &docs); err != nil {
-		return ViewListResult{}, err
+	var countErr, findErr error
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		total, countErr = s.views[viewID].CountDocuments(ctx, filter)
+	}()
+	go func() {
+		defer wg.Done()
+		findOptions := options.Find().SetSort(sortFields).SetSkip(int64((page - 1) * pageSize)).SetLimit(int64(pageSize))
+		cur, err := s.views[viewID].Find(ctx, filter, findOptions)
+		if err != nil {
+			findErr = err
+			return
+		}
+		defer cur.Close(ctx)
+		findErr = cur.All(ctx, &docs)
+	}()
+	wg.Wait()
+	if countErr != nil {
+		return ViewListResult{}, countErr
+	}
+	if findErr != nil {
+		return ViewListResult{}, findErr
 	}
 	for _, doc := range docs {
 		normalizeViewID(doc)
@@ -527,7 +666,7 @@ func (s *Store) ViewStats(ctx context.Context, viewID string, f ViewFilters) (Vi
 	if !ok {
 		return ViewStatsResult{}, fmt.Errorf("unknown view: %s", viewID)
 	}
-	filter := viewFilter(f, config.searchFields, config.dateField)
+	filter := viewFilter(viewID, f, config.searchFields, config.dateField)
 	total, err := s.views[viewID].CountDocuments(ctx, filter)
 	if err != nil {
 		return ViewStatsResult{}, err
@@ -536,11 +675,7 @@ func (s *Store) ViewStats(ctx context.Context, viewID string, f ViewFilters) (Vi
 	if config.dateField == "" {
 		return result, nil
 	}
-	cur, err := s.views[viewID].Aggregate(ctx, mongo.Pipeline{
-		{{Key: "$match", Value: filter}},
-		{{Key: "$group", Value: bson.M{"_id": nil, "dataStartDate": bson.M{"$min": "$" + config.dateField}, "dataEndDate": bson.M{"$max": "$" + config.dateField}, "latestSyncedAt": bson.M{"$max": "$_synced_at"}}}},
-		{{Key: "$project", Value: bson.M{"_id": 0, "dataStartDate": 1, "dataEndDate": 1, "latestSyncedAt": bson.M{"$dateToString": bson.M{"date": "$latestSyncedAt", "format": "%Y-%m-%dT%H:%M:%SZ", "timezone": "UTC"}}}}},
-	})
+	cur, err := s.views[viewID].Aggregate(ctx, viewStatsPipeline(viewID, filter, config.dateField))
 	if err != nil {
 		return ViewStatsResult{}, err
 	}
@@ -551,6 +686,8 @@ func (s *Store) ViewStats(ctx context.Context, viewID string, f ViewFilters) (Vi
 	}
 	if len(rows) > 0 {
 		result.DataStartDate, result.DataEndDate = firstText(rows[0], "dataStartDate"), firstText(rows[0], "dataEndDate")
+		result.MissingSalesOrder = int64(number(rows[0]["missingSalesOrder"]))
+		result.MissingProductionOrder = int64(number(rows[0]["missingProductionOrder"]))
 		if value, ok := rows[0]["latestSyncedAt"]; ok && value != nil {
 			result.LatestSyncedAt = fmt.Sprint(value)
 		}
@@ -558,7 +695,44 @@ func (s *Store) ViewStats(ctx context.Context, viewID string, f ViewFilters) (Vi
 	return result, nil
 }
 
-func viewFilter(f ViewFilters, searchFields []string, dateField string) bson.M {
+func viewStatsPipeline(viewID string, filter bson.M, dateField string) mongo.Pipeline {
+	group := bson.M{
+		"_id":            nil,
+		"dataStartDate":  bson.M{"$min": "$" + dateField},
+		"dataEndDate":    bson.M{"$max": "$" + dateField},
+		"latestSyncedAt": bson.M{"$max": "$_synced_at"},
+	}
+	project := bson.M{
+		"_id":           0,
+		"dataStartDate": 1,
+		"dataEndDate":   1,
+		"latestSyncedAt": bson.M{"$dateToString": bson.M{
+			"date": "$latestSyncedAt", "format": "%Y-%m-%dT%H:%M:%SZ", "timezone": "UTC",
+		}},
+	}
+	if viewID == "Z_V_ZMES_T_001" {
+		group["missingSalesOrder"] = bson.M{"$sum": bson.M{"$cond": bson.A{emptyViewField("KDAUF"), 1, 0}}}
+		group["missingProductionOrder"] = bson.M{"$sum": bson.M{"$cond": bson.A{emptyViewField("AUFNR"), 1, 0}}}
+		project["missingSalesOrder"] = 1
+		project["missingProductionOrder"] = 1
+	}
+	return mongo.Pipeline{
+		{{Key: "$match", Value: filter}},
+		{{Key: "$group", Value: group}},
+		{{Key: "$project", Value: project}},
+	}
+}
+
+func emptyViewField(field string) bson.M {
+	return bson.M{"$eq": bson.A{
+		bson.M{"$trim": bson.M{"input": bson.M{"$convert": bson.M{
+			"input": "$" + field, "to": "string", "onError": "", "onNull": "",
+		}}}},
+		"",
+	}}
+}
+
+func viewFilter(viewID string, f ViewFilters, searchFields []string, dateField string) bson.M {
 	conditions := bson.A{}
 	if f.Keyword != "" {
 		re := regexp.QuoteMeta(f.Keyword)
@@ -570,8 +744,17 @@ func viewFilter(f ViewFilters, searchFields []string, dateField string) bson.M {
 	}
 	if dateField != "" {
 		from, to := f.From, f.To
+		if f.DateFrom != "" {
+			from = f.DateFrom
+		}
+		if f.DateTo != "" {
+			to = f.DateTo
+		}
 		if dateField == "BUDAT_MKPF" {
 			from, to = strings.ReplaceAll(from, "-", ""), strings.ReplaceAll(to, "-", "")
+		} else if dateField == "ACTUAL_START_TIME" {
+			// Datetime values are commonly stored as `YYYY-MM-DD HH:MM:SS`; include the full end day.
+			to = inclusiveDateTimeEnd(to)
 		}
 		if from != "" {
 			conditions = append(conditions, bson.M{dateField: bson.M{"$gte": from}})
@@ -580,15 +763,78 @@ func viewFilter(f ViewFilters, searchFields []string, dateField string) bson.M {
 			conditions = append(conditions, bson.M{dateField: bson.M{"$lte": to}})
 		}
 	}
+	addExact := func(field, value string, zeroCompat bool) {
+		if strings.TrimSpace(value) != "" {
+			conditions = append(conditions, exactBatch(field, value, zeroCompat))
+		}
+	}
+	addExact("PCODE", f.SN, false)
+	switch viewID {
+	case "Z_V_ZMES_T_001":
+		addExact("AUFNR", f.ProductionOrder, true)
+		addExact("KDAUF", f.SalesOrder, true)
+		if f.ProductModel != "" {
+			conditions = append(conditions, bson.M{"$or": bson.A{bson.M{"MAKTX_TH": f.ProductModel}, bson.M{"PRODH": f.ProductModel}, bson.M{"CPXH": f.ProductModel}}})
+		}
+	case "ZSGV_ZSD124":
+		addExact("AUFNR_1", f.ProductionOrder, true)
+		addExact("VBELN_EX", f.SalesOrder, true)
+		addExact("MATNR", f.ProductModel, false)
+	case "ZSGV_ZPP_SERNOLIST":
+		if f.ProductionOrder != "" {
+			conditions = append(conditions, bson.M{"$or": bson.A{exactBatch("AUFNR_HEAD", f.ProductionOrder, true), exactBatch("AUFNR_ITEM", f.ProductionOrder, true)}})
+		}
+		if f.ProductModel != "" {
+			conditions = append(conditions, bson.M{"PRODH": f.ProductModel})
+		}
+	}
+	addExact("MATNR", f.MaterialCode, false)
+	if f.StationCode != "" {
+		conditions = append(conditions, bson.M{"$or": bson.A{bson.M{"PCODE": f.StationCode}, bson.M{"LINE_CODE": f.StationCode}, bson.M{"SPEC": f.StationCode}, bson.M{"OPERATION": f.StationCode}}})
+	}
+	if f.Base != "" {
+		conditions = append(conditions, bson.M{"$or": bson.A{bson.M{"LGORT": f.Base}, bson.M{"WERKS": f.Base}}})
+	}
+	if f.HeadOrder != "" {
+		addExact("AUFNR_HEAD", f.HeadOrder, true)
+	}
+	if f.ItemOrder != "" {
+		addExact("AUFNR_ITEM", f.ItemOrder, true)
+	}
+	if f.HeadSN != "" {
+		addExact("ZCODE_HEAD", f.HeadSN, false)
+	}
+	if f.ItemSN != "" {
+		addExact("ZCODE_ITEM", f.ItemSN, false)
+	}
 	if len(conditions) == 0 {
 		return bson.M{}
 	}
 	return bson.M{"$and": conditions}
 }
 
+func inclusiveDateTimeEnd(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return value
+	}
+	if len(value) > 10 && strings.ContainsAny(value, " T") {
+		return value
+	}
+	if len(value) == 10 {
+		return value + " 23:59:59"
+	}
+	return value
+}
+
 func normalizeViewID(doc bson.M) {
-	if value, ok := doc["_id"]; ok {
-		doc["id"] = fmt.Sprint(value)
+	if value := firstText(doc, "_source_key", "_id"); value != "" {
+		doc["id"] = value
+	}
+	if _, ok := doc["stationCode"]; !ok {
+		if value := firstText(doc, "LINE_CODE", "SPEC", "OPERATION"); value != "" {
+			doc["stationCode"] = value
+		}
 	}
 }
 
@@ -612,11 +858,25 @@ var stationFieldLabels = map[string]string{
 	"PASSCOUNT": "通过次数", "TEST_ID": "检验ID", "PRODH": "产品层次",
 }
 
+var serialBindingFieldOrder = []string{"ZCODE_HEAD", "ZCODE_ITEM", "AUFNR_HEAD", "AUFNR_ITEM", "PRODH"}
+var serialBindingFieldLabels = map[string]string{
+	"ZCODE_HEAD": "大刀/机头序列号（ZCODE_HEAD）",
+	"ZCODE_ITEM": "小刀/BOX序列号（ZCODE_ITEM）",
+	"AUFNR_HEAD": "大刀/机头生产订单号（AUFNR_HEAD）",
+	"AUFNR_ITEM": "小刀/BOX生产订单号（AUFNR_ITEM）",
+	"PRODH":      "产品层次（PRODH）",
+}
+
 func viewDetailFields(viewID string, doc bson.M) []Field {
 	keys := make([]string, 0, len(doc))
 	seen := make(map[string]bool, len(doc))
 	if viewID == "Z_V_ZMES_T_001" {
 		keys = append(keys, stationFieldOrder...)
+		for _, key := range keys {
+			seen[key] = true
+		}
+	} else if viewID == "ZSGV_ZPP_SERNOLIST" {
+		keys = append(keys, serialBindingFieldOrder...)
 		for _, key := range keys {
 			seen[key] = true
 		}
@@ -633,9 +893,13 @@ func viewDetailFields(viewID string, doc bson.M) []Field {
 	for _, key := range keys {
 		value := doc[key]
 		if value != nil {
-			label := key
+			label := "字段 / Field（" + key + "）"
 			if viewID == "Z_V_ZMES_T_001" {
 				if translated, ok := stationFieldLabels[key]; ok {
+					label = translated
+				}
+			} else if viewID == "ZSGV_ZPP_SERNOLIST" {
+				if translated, ok := serialBindingFieldLabels[key]; ok {
 					label = translated
 				}
 			}
@@ -646,18 +910,39 @@ func viewDetailFields(viewID string, doc bson.M) []Field {
 }
 
 func repairFilter(f Filters) bson.M {
-	conditions := make(bson.A, 0, 6)
+	conditions := make(bson.A, 0, 12)
 	if f.HostBarcode != "" {
-		conditions = append(conditions, bson.M{"PCODE": f.HostBarcode})
+		conditions = append(conditions, exactBatch("PCODE", f.HostBarcode, false))
 	}
 	if f.SalesOrder != "" {
-		conditions = append(conditions, bson.M{"VBELN": f.SalesOrder})
+		conditions = append(conditions, exactBatch("VBELN", f.SalesOrder, true))
 	}
 	if f.ProductionOrder != "" {
-		conditions = append(conditions, bson.M{"AUFNR": f.ProductionOrder})
+		conditions = append(conditions, exactBatch("AUFNR", f.ProductionOrder, true))
 	}
 	if f.NGStation != "" {
 		conditions = append(conditions, bson.M{"ZNGGZ": f.NGStation})
+	}
+	if f.SNS != "" {
+		conditions = append(conditions, exactBatch("ZMCOD1", f.SNS, false))
+	}
+	if f.ProductionOrders != "" {
+		conditions = append(conditions, exactBatch("AUFNR", f.ProductionOrders, true))
+	}
+	if f.SalesOrders != "" {
+		conditions = append(conditions, exactBatch("VBELN", f.SalesOrders, true))
+	}
+	if f.DateFrom != "" {
+		conditions = append(conditions, bson.M{"ZDATE_WX": bson.M{"$gte": strings.ReplaceAll(f.DateFrom, "-", "")}})
+	}
+	if f.DateTo != "" {
+		conditions = append(conditions, bson.M{"ZDATE_WX": bson.M{"$lte": strings.ReplaceAll(f.DateTo, "-", "")}})
+	}
+	if f.Station != "" {
+		conditions = append(conditions, bson.M{"ZNGGZ": f.Station})
+	}
+	if f.ProductModel != "" {
+		conditions = append(conditions, bson.M{"$or": bson.A{bson.M{"ZJXMC": f.ProductModel}, bson.M{"MAKTX": f.ProductModel}, bson.M{"MATNR": f.ProductModel}}})
 	}
 	if f.DefectResponsibility != "" {
 		conditions = append(conditions, bson.M{"ZZRFL": f.DefectResponsibility})
@@ -673,15 +958,41 @@ func repairFilter(f Filters) bson.M {
 }
 
 func orderFilter(f OrderFilters) bson.M {
-	conditions := make(bson.A, 0, 4)
+	conditions := make(bson.A, 0, 12)
 	if f.Source != "" {
 		conditions = append(conditions, bson.M{"source": f.Source})
 	}
-	if f.GSTRSFrom != "" {
-		conditions = append(conditions, bson.M{"data.GSTRS": bson.M{"$gte": f.GSTRSFrom}})
+	if f.OrderScope != "" {
+		conditions = append(conditions, bson.M{"source": f.OrderScope})
 	}
-	if f.GSTRSTo != "" {
-		conditions = append(conditions, bson.M{"data.GSTRS": bson.M{"$lte": f.GSTRSTo}})
+	if f.SalesOrder != "" {
+		conditions = append(conditions, exactBatch("data.VBELN", f.SalesOrder, true))
+	}
+	if f.ProductionOrder != "" {
+		conditions = append(conditions, exactBatch("aufnr", f.ProductionOrder, true))
+	}
+	if f.SerialNumber != "" {
+		re := regexp.QuoteMeta(strings.TrimSpace(f.SerialNumber))
+		conditions = append(conditions, bson.M{"$or": bson.A{bson.M{"data.ZCODE": bson.M{"$regex": re, "$options": "i"}}, bson.M{"data.ZCODE_HEAD": bson.M{"$regex": re, "$options": "i"}}, bson.M{"data.ZCODE_ITEM": bson.M{"$regex": re, "$options": "i"}}, bson.M{"records.ZCODE": bson.M{"$regex": re, "$options": "i"}}}})
+	}
+	if f.ProductModel != "" {
+		conditions = append(conditions, bson.M{"$or": bson.A{bson.M{"data.MAKTX_TH": f.ProductModel}, bson.M{"data.CPXH": f.ProductModel}, bson.M{"data.MAKTX": f.ProductModel}}})
+	}
+	if f.Customer != "" {
+		conditions = append(conditions, bson.M{"$or": bson.A{bson.M{"data.KID": f.Customer}, bson.M{"data.NAME1_ZU": f.Customer}}})
+	}
+	if f.Base != "" {
+		conditions = append(conditions, bson.M{"$or": bson.A{bson.M{"data.LGORT": f.Base}, bson.M{"data.WERKS": f.Base}}})
+	}
+	dateFrom, dateTo := f.DateFrom, f.DateTo
+	if dateFrom == "" {
+		dateFrom = f.GSTRSFrom
+	}
+	if dateTo == "" {
+		dateTo = f.GSTRSTo
+	}
+	if dateFrom != "" || dateTo != "" {
+		conditions = append(conditions, orderDateRangeFilter(dateFrom, dateTo))
 	}
 	if f.Keyword != "" {
 		re := regexp.QuoteMeta(f.Keyword)
@@ -691,6 +1002,76 @@ func orderFilter(f OrderFilters) bson.M {
 		return bson.M{}
 	}
 	return bson.M{"$and": conditions}
+}
+
+// orderDateRangeFilter supports both the current ISO `GSTRS` values and
+// historical SAP values without separators. gstrs_date is the normalized field
+// written by the sales-order synchronizer and is the preferred query branch.
+func orderDateRangeFilter(dateFrom, dateTo string) bson.M {
+	isoFrom, isoTo := isoDate(dateFrom), isoDate(dateTo)
+	compactFrom, compactTo := strings.ReplaceAll(isoFrom, "-", ""), strings.ReplaceAll(isoTo, "-", "")
+	bounds := func(from, to string) bson.M {
+		result := bson.M{}
+		if from != "" {
+			result["$gte"] = from
+		}
+		if to != "" {
+			result["$lte"] = to
+		}
+		return result
+	}
+	return bson.M{"$or": bson.A{
+		bson.M{"gstrs_date": bounds(isoFrom, isoTo)},
+		bson.M{"data.GSTRS": bounds(isoFrom, isoTo)},
+		bson.M{"data.GSTRS": bounds(compactFrom, compactTo)},
+	}}
+}
+
+func isoDate(value string) string {
+	value = strings.TrimSpace(value)
+	if len(value) == 8 && strings.IndexFunc(value, func(r rune) bool { return r < '0' || r > '9' }) == -1 {
+		return value[:4] + "-" + value[4:6] + "-" + value[6:]
+	}
+	return value
+}
+
+// exactBatch accepts comma-separated values and matches SAP numbers with or without leading zeroes.
+func exactBatch(field, input string, leadingZeroCompatible bool) bson.M {
+	values := splitValues(input)
+	if len(values) == 0 {
+		return bson.M{}
+	}
+	patterns := bson.A{}
+	for _, value := range values {
+		if leadingZeroCompatible {
+			trimmed := strings.TrimLeft(value, "0")
+			if trimmed == "" {
+				trimmed = "0"
+			}
+			patterns = append(patterns, "^0*"+regexp.QuoteMeta(trimmed)+"$")
+		} else {
+			patterns = append(patterns, "^"+regexp.QuoteMeta(value)+"$")
+		}
+	}
+	if len(patterns) == 1 {
+		return bson.M{field: bson.M{"$regex": patterns[0], "$options": "i"}}
+	}
+	or := bson.A{}
+	for _, pattern := range patterns {
+		or = append(or, bson.M{field: bson.M{"$regex": pattern, "$options": "i"}})
+	}
+	return bson.M{"$or": or}
+}
+
+func splitValues(input string) []string {
+	parts := strings.FieldsFunc(input, func(r rune) bool { return r == ',' || r == '，' })
+	values := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if value := strings.TrimSpace(part); value != "" {
+			values = append(values, value)
+		}
+	}
+	return values
 }
 
 func withFilter(base, extra bson.M) bson.M {
@@ -722,11 +1103,13 @@ func normalizeFault(doc bson.M) Fault {
 		RepairPerson:         firstText(doc, "U_FIX"),
 		SalesOrder:           firstText(doc, "VBELN"),
 		ProductionOrder:      firstText(doc, "AUFNR"),
+		PlannedStartDate:     firstText(doc, "GSTRS"),
 		MaterialCode:         firstText(doc, "MATNR"),
 		MaterialDescription:  firstText(doc, "MAKTX"),
 		NGStation:            firstText(doc, "ZNGGZ"),
 		RetestStation:        firstText(doc, "RETEST_STATION"),
 		RepairRemarks:        firstText(doc, "FIX_REMARKS"),
+		Raw:                  cloneDocument(doc),
 	}
 }
 
@@ -746,11 +1129,20 @@ func normalizeOrder(doc bson.M) Order {
 		OrderQuantity:       documentQuantity(doc, "order_quantity", "GAMNG"),
 		StorageQuantity:     documentQuantity(doc, "storage_quantity", "WMENG"),
 		RecordCount:         int(number(doc["record_count"])),
+		Raw:                 cloneDocument(doc),
 	}
 }
 
+func cloneDocument(doc bson.M) bson.M {
+	copy := make(bson.M, len(doc))
+	for key, value := range doc {
+		copy[key] = value
+	}
+	return copy
+}
+
 func detailFields(doc bson.M) []Field {
-	priority := []string{"PCODE", "ZMCOD1", "ERROR_CODE", "ZGZMS", "ERROR_MSG", "ZZRFL", "MATNR", "MAKTX", "ZNGGZ", "RETEST_STATION", "VBELN", "AUFNR", "POSNR", "ZWXDT", "ZDATE_WX", "ZTIME", "ZUSER", "U_FIX", "FIX_REMARKS", "RPDESC", "_synced_at"}
+	priority := []string{"PCODE", "ZMCOD1", "ERROR_CODE", "ZGZMS", "ERROR_MSG", "ZZRFL", "MATNR", "MAKTX", "ZNGGZ", "RETEST_STATION", "VBELN", "AUFNR", "GSTRS", "POSNR", "ZWXDT", "ZDATE_WX", "ZTIME", "ZUSER", "U_FIX", "FIX_REMARKS", "RPDESC", "_synced_at"}
 	seen := map[string]bool{}
 	fields := make([]Field, 0, len(doc))
 	appendField := func(key string) {
@@ -801,7 +1193,7 @@ func orderDetailFields(doc bson.M) []Field {
 }
 
 var repairFieldLabels = map[string]string{
-	"MANDT": "集团", "PCODE": "主机条码", "ZWXDT": "维修日期时间", "ZMCOD1": "序列号", "ZRCOD1": "替换前原厂码", "MATNR": "物料号", "ZJXMC": "机型", "ZNGGZ": "NG工站", "ZNGWD": "不良现象维度", "ZWXWD": "维修维度", "ZBJ": "涉及部件", "ZZRFL": "缺陷责任分类", "ZCCLH": "重插部件料号", "ZGZMS": "故障描述", "MAKTX": "物料描述（短文本）", "ZMCOD2": "替换后曙光码", "ZRCOD2": "替换后原厂码", "ZDATE": "读取日期", "ZTIME": "读取时间", "ZUSER": "读取人", "ZSOURCE": "数据来源", "ZDATE_WX": "维修日期", "REJUDGE": "复判人员", "RET": "复判结论", "RPDESC": "复判问题描述", "RNOTE": "复判备注", "SECFLG": "二次物料标识", "FACTORY": "生产基地", "ZWXWD1": "维修维度1", "ZWXWD2": "维修维度2", "ZWXWD3": "维修维度3", "U_FIX": "维修人员", "FIX_REMARKS": "维修人员备注维修信息", "TESTID": "TESTID", "ZNGSPEC": "NG工序", "T_FIND": "NG时间", "ZNGWD1": "不良现象维度1", "ZNGWD2": "不良现象维度2", "ZNGWD3": "不良现象维度3", "ERROR_CODE": "错误码", "ERROR_MSG": "错误码描述", "RETEST_STATION": "重进产线站位名", "TEST_LOG_NAME": "测试日志名称", "SECOND_PART_NO": "重插物料序号", "RECORD01REPAIRM": "非关键件物料序号", "SLOT": "槽位", "AUFNR": "生产订单", "VBELN": "销售订单", "POSNR": "行项目", "U_FIND": "NG报工人员", "U_RMA_NAME": "RMA复判人员", "RMA_RESULT": "RMA复判结论", "RMA_TYPE2": "故障部件二级",
+	"MANDT": "集团", "PCODE": "主机条码", "ZWXDT": "维修日期时间", "ZMCOD1": "序列号", "ZRCOD1": "替换前原厂码", "MATNR": "物料号", "ZJXMC": "机型", "ZNGGZ": "NG工站", "ZNGWD": "不良现象维度", "ZWXWD": "维修维度", "ZBJ": "涉及部件", "ZZRFL": "缺陷责任分类", "ZCCLH": "重插部件料号", "ZGZMS": "故障描述", "MAKTX": "物料描述（短文本）", "ZMCOD2": "替换后曙光码", "ZRCOD2": "替换后原厂码", "ZDATE": "读取日期", "ZTIME": "读取时间", "ZUSER": "读取人", "ZSOURCE": "数据来源", "ZDATE_WX": "维修日期", "REJUDGE": "复判人员", "RET": "复判结论", "RPDESC": "复判问题描述", "RNOTE": "复判备注", "SECFLG": "二次物料标识", "FACTORY": "生产基地", "ZWXWD1": "维修维度1", "ZWXWD2": "维修维度2", "ZWXWD3": "维修维度3", "U_FIX": "维修人员", "FIX_REMARKS": "维修人员备注维修信息", "TESTID": "TESTID", "ZNGSPEC": "NG工序", "T_FIND": "NG时间", "ZNGWD1": "不良现象维度1", "ZNGWD2": "不良现象维度2", "ZNGWD3": "不良现象维度3", "ERROR_CODE": "错误码", "ERROR_MSG": "错误码描述", "RETEST_STATION": "重进产线站位名", "TEST_LOG_NAME": "测试日志名称", "SECOND_PART_NO": "重插物料序号", "RECORD01REPAIRM": "非关键件物料序号", "SLOT": "槽位", "AUFNR": "生产订单", "VBELN": "销售订单", "GSTRS": "计划开始时间", "POSNR": "行项目", "U_FIND": "NG报工人员", "U_RMA_NAME": "RMA复判人员", "RMA_RESULT": "RMA复判结论", "RMA_TYPE2": "故障部件二级",
 	"_source_view": "源视图名", "_scope_run_id": "全量批次标识", "_sync_run_id": "同步批次标识", "_synced_at": "同步时间",
 }
 
@@ -825,6 +1217,20 @@ func firstText(doc bson.M, keys ...string) string {
 		}
 	}
 	return ""
+}
+
+func timeText(value any) string {
+	if value == nil {
+		return ""
+	}
+	switch typed := value.(type) {
+	case time.Time:
+		return typed.UTC().Format(time.RFC3339)
+	case primitive.DateTime:
+		return typed.Time().UTC().Format(time.RFC3339)
+	default:
+		return strings.TrimSpace(fmt.Sprint(value))
+	}
 }
 
 func documentQuantity(doc bson.M, storedField, sourceField string) float64 {

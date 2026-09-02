@@ -1,0 +1,156 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "产线故障数据库后端 API",
+    "version": "1.0.0",
+    "description": "MongoDB 查询网关。默认地址为 http://127.0.0.1:18080；部署可通过 PORT 修改端口。当前服务不提供认证、授权或限流，生产环境应置于受信任网络或由上游网关保护。"
+  },
+  "servers": [
+    { "url": "http://127.0.0.1:18080", "description": "本地默认地址" },
+    { "url": "http://localhost:18080", "description": "本地别名" }
+  ],
+  "tags": [
+    { "name": "health", "description": "健康检查" },
+    { "name": "faults", "description": "维修故障记录" },
+    { "name": "orders", "description": "销售订单" },
+    { "name": "views", "description": "HANA 原始视图" },
+    { "name": "sync", "description": "同步任务和数据状态" }
+  ],
+  "paths": {
+    "/api/health": {
+      "get": {
+        "tags": ["health"],
+        "operationId": "getHealth",
+        "responses": {
+          "200": { "description": "MongoDB 可用", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Health" } } } },
+          "503": { "$ref": "#/components/responses/ServiceUnavailable" }
+        }
+      }
+    },
+    "/api/faults": {
+      "get": {
+        "tags": ["faults"], "operationId": "listFaults",
+        "parameters": [{ "$ref": "#/components/parameters/Page" }, { "$ref": "#/components/parameters/PageSize" }, { "$ref": "#/components/parameters/Keyword" }, { "$ref": "#/components/parameters/HostBarcode" }, { "$ref": "#/components/parameters/DefectResponsibility" }, { "$ref": "#/components/parameters/NGStation" }, { "$ref": "#/components/parameters/SalesOrder" }, { "$ref": "#/components/parameters/ProductionOrder" }, { "$ref": "#/components/parameters/SNS" }, { "$ref": "#/components/parameters/ProductionOrders" }, { "$ref": "#/components/parameters/SalesOrders" }, { "$ref": "#/components/parameters/DateFrom" }, { "$ref": "#/components/parameters/DateTo" }, { "$ref": "#/components/parameters/Station" }, { "$ref": "#/components/parameters/ProductModel" }],
+        "responses": { "200": { "$ref": "#/components/responses/FaultPage" }, "500": { "$ref": "#/components/responses/ServerError" } }
+      }
+    },
+    "/api/faults/by-sns": {
+      "get": { "tags": ["faults"], "operationId": "listFaultsBySNS", "description": "`/api/faults` 的别名，建议传 sns（逗号或中文逗号分隔）；也接受 /api/faults 的其他筛选参数。", "parameters": [{ "$ref": "#/components/parameters/Page" }, { "$ref": "#/components/parameters/PageSize" }, { "$ref": "#/components/parameters/Keyword" }, { "$ref": "#/components/parameters/HostBarcode" }, { "$ref": "#/components/parameters/DefectResponsibility" }, { "$ref": "#/components/parameters/NGStation" }, { "$ref": "#/components/parameters/SalesOrder" }, { "$ref": "#/components/parameters/ProductionOrder" }, { "$ref": "#/components/parameters/SNS" }, { "$ref": "#/components/parameters/ProductionOrders" }, { "$ref": "#/components/parameters/SalesOrders" }, { "$ref": "#/components/parameters/DateFrom" }, { "$ref": "#/components/parameters/DateTo" }, { "$ref": "#/components/parameters/Station" }, { "$ref": "#/components/parameters/ProductModel" }], "responses": { "200": { "$ref": "#/components/responses/FaultPage" }, "500": { "$ref": "#/components/responses/ServerError" } } }
+    },
+    "/api/faults/by-orders": {
+      "get": { "tags": ["faults"], "operationId": "listFaultsByOrders", "description": "`/api/faults` 的别名，建议传 productionOrders（逗号或中文逗号分隔）；也接受 /api/faults 的其他筛选参数。", "parameters": [{ "$ref": "#/components/parameters/Page" }, { "$ref": "#/components/parameters/PageSize" }, { "$ref": "#/components/parameters/Keyword" }, { "$ref": "#/components/parameters/HostBarcode" }, { "$ref": "#/components/parameters/DefectResponsibility" }, { "$ref": "#/components/parameters/NGStation" }, { "$ref": "#/components/parameters/SalesOrder" }, { "$ref": "#/components/parameters/ProductionOrder" }, { "$ref": "#/components/parameters/SNS" }, { "$ref": "#/components/parameters/ProductionOrders" }, { "$ref": "#/components/parameters/SalesOrders" }, { "$ref": "#/components/parameters/DateFrom" }, { "$ref": "#/components/parameters/DateTo" }, { "$ref": "#/components/parameters/Station" }, { "$ref": "#/components/parameters/ProductModel" }], "responses": { "200": { "$ref": "#/components/responses/FaultPage" }, "500": { "$ref": "#/components/responses/ServerError" } } }
+    },
+    "/api/faults/stats": {
+      "get": { "tags": ["faults"], "operationId": "getFaultStats", "parameters": [{ "$ref": "#/components/parameters/Keyword" }, { "$ref": "#/components/parameters/HostBarcode" }, { "$ref": "#/components/parameters/DefectResponsibility" }, { "$ref": "#/components/parameters/NGStation" }, { "$ref": "#/components/parameters/SalesOrder" }, { "$ref": "#/components/parameters/ProductionOrder" }, { "$ref": "#/components/parameters/SNS" }, { "$ref": "#/components/parameters/ProductionOrders" }, { "$ref": "#/components/parameters/SalesOrders" }, { "$ref": "#/components/parameters/DateFrom" }, { "$ref": "#/components/parameters/DateTo" }, { "$ref": "#/components/parameters/Station" }, { "$ref": "#/components/parameters/ProductModel" }], "responses": { "200": { "description": "统计结果", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/FaultStats" } } } }, "500": { "$ref": "#/components/responses/ServerError" } } }
+    },
+    "/api/faults/detail": {
+      "get": { "tags": ["faults"], "operationId": "getFaultDetail", "parameters": [{ "$ref": "#/components/parameters/Id" }], "responses": { "200": { "description": "详情", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/FaultDetail" } } } }, "400": { "$ref": "#/components/responses/BadRequest" }, "404": { "$ref": "#/components/responses/NotFound" }, "500": { "$ref": "#/components/responses/ServerError" } } }
+    },
+    "/api/orders": {
+      "get": {
+        "tags": ["orders"], "operationId": "listOrders", "description": "分页订单查询。传 `all=true` 时转为最多 10,000 条的全量查询，忽略 page/pageSize。",
+        "parameters": [{ "$ref": "#/components/parameters/Page" }, { "$ref": "#/components/parameters/PageSize" }, { "$ref": "#/components/parameters/Keyword" }, { "$ref": "#/components/parameters/Source" }, { "$ref": "#/components/parameters/OrderScope" }, { "$ref": "#/components/parameters/GSTRSFrom" }, { "$ref": "#/components/parameters/GSTRSTo" }, { "$ref": "#/components/parameters/SalesOrder" }, { "$ref": "#/components/parameters/ProductionOrder" }, { "$ref": "#/components/parameters/SerialNumber" }, { "$ref": "#/components/parameters/ProductModel" }, { "$ref": "#/components/parameters/Customer" }, { "$ref": "#/components/parameters/Base" }, { "$ref": "#/components/parameters/DateFrom" }, { "$ref": "#/components/parameters/DateTo" }, { "$ref": "#/components/parameters/All" }],
+        "responses": { "200": { "$ref": "#/components/responses/OrderPage" }, "500": { "$ref": "#/components/responses/ServerError" }, "501": { "$ref": "#/components/responses/NotImplemented" } }
+      }
+    },
+    "/api/orders/all": {
+      "get": { "tags": ["orders"], "operationId": "listAllOrders", "description": "按筛选条件同步返回最多 10,000 条订单。", "parameters": [{ "$ref": "#/components/parameters/Keyword" }, { "$ref": "#/components/parameters/Source" }, { "$ref": "#/components/parameters/OrderScope" }, { "$ref": "#/components/parameters/GSTRSFrom" }, { "$ref": "#/components/parameters/GSTRSTo" }, { "$ref": "#/components/parameters/SalesOrder" }, { "$ref": "#/components/parameters/ProductionOrder" }, { "$ref": "#/components/parameters/SerialNumber" }, { "$ref": "#/components/parameters/ProductModel" }, { "$ref": "#/components/parameters/Customer" }, { "$ref": "#/components/parameters/Base" }, { "$ref": "#/components/parameters/DateFrom" }, { "$ref": "#/components/parameters/DateTo" }], "responses": { "200": { "$ref": "#/components/responses/OrderPage" }, "500": { "$ref": "#/components/responses/ServerError" }, "501": { "$ref": "#/components/responses/NotImplemented" } } }
+    },
+    "/api/orders/detail": {
+      "get": { "tags": ["orders"], "operationId": "getOrderDetail", "parameters": [{ "$ref": "#/components/parameters/Id" }], "responses": { "200": { "description": "详情", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/OrderDetail" } } } }, "400": { "$ref": "#/components/responses/BadRequest" }, "404": { "$ref": "#/components/responses/NotFound" }, "500": { "$ref": "#/components/responses/ServerError" } } }
+    },
+    "/api/orders/stats": {
+      "get": { "tags": ["orders"], "operationId": "getOrderStats", "parameters": [{ "$ref": "#/components/parameters/Keyword" }, { "$ref": "#/components/parameters/Source" }, { "$ref": "#/components/parameters/OrderScope" }, { "$ref": "#/components/parameters/GSTRSFrom" }, { "$ref": "#/components/parameters/GSTRSTo" }, { "$ref": "#/components/parameters/SalesOrder" }, { "$ref": "#/components/parameters/ProductionOrder" }, { "$ref": "#/components/parameters/SerialNumber" }, { "$ref": "#/components/parameters/ProductModel" }, { "$ref": "#/components/parameters/Customer" }, { "$ref": "#/components/parameters/Base" }, { "$ref": "#/components/parameters/DateFrom" }, { "$ref": "#/components/parameters/DateTo" }], "responses": { "200": { "description": "统计结果", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/OrderStats" } } } }, "500": { "$ref": "#/components/responses/ServerError" } } }
+    },
+    "/api/orders/models": {
+      "get": { "tags": ["orders"], "operationId": "listOrderModels", "parameters": [{ "$ref": "#/components/parameters/Keyword" }], "responses": { "200": { "description": "生产机型候选", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/OrderModels" } } } }, "500": { "$ref": "#/components/responses/ServerError" } } }
+    },
+    "/api/views/{viewID}": {
+      "get": { "tags": ["views"], "operationId": "listViewRecords", "description": "允许的 viewID：ZSGV_ZSD124、ZSGV_ZPP_SERNOLIST、Z_V_ZMES_T_001。pageSize 越界时使用 20。", "parameters": [{ "$ref": "#/components/parameters/ViewID" }, { "$ref": "#/components/parameters/Page" }, { "$ref": "#/components/parameters/PageSize" }, { "$ref": "#/components/parameters/Keyword" }, { "$ref": "#/components/parameters/From" }, { "$ref": "#/components/parameters/To" }, { "$ref": "#/components/parameters/DateFrom" }, { "$ref": "#/components/parameters/DateTo" }, { "$ref": "#/components/parameters/StationCode" }, { "$ref": "#/components/parameters/SN" }, { "$ref": "#/components/parameters/ProductionOrder" }, { "$ref": "#/components/parameters/SalesOrder" }, { "$ref": "#/components/parameters/Base" }, { "$ref": "#/components/parameters/ProductModel" }, { "$ref": "#/components/parameters/HeadOrder" }, { "$ref": "#/components/parameters/ItemOrder" }, { "$ref": "#/components/parameters/HeadSN" }, { "$ref": "#/components/parameters/ItemSN" }, { "$ref": "#/components/parameters/MaterialCode" }], "responses": { "200": { "$ref": "#/components/responses/ViewPage" }, "400": { "$ref": "#/components/responses/BadRequest" }, "501": { "$ref": "#/components/responses/NotImplemented" } } }
+    },
+    "/api/views/{viewID}/detail": {
+      "get": { "tags": ["views"], "operationId": "getViewDetail", "parameters": [{ "$ref": "#/components/parameters/ViewID" }, { "$ref": "#/components/parameters/Id" }], "responses": { "200": { "description": "视图详情", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ViewDetail" } } } }, "400": { "$ref": "#/components/responses/BadRequest" }, "404": { "$ref": "#/components/responses/NotFound" }, "501": { "$ref": "#/components/responses/NotImplemented" } } }
+    },
+    "/api/views/{viewID}/stats": {
+      "get": { "tags": ["views"], "operationId": "getViewStats", "parameters": [{ "$ref": "#/components/parameters/ViewID" }, { "$ref": "#/components/parameters/Keyword" }, { "$ref": "#/components/parameters/From" }, { "$ref": "#/components/parameters/To" }, { "$ref": "#/components/parameters/DateFrom" }, { "$ref": "#/components/parameters/DateTo" }, { "$ref": "#/components/parameters/StationCode" }, { "$ref": "#/components/parameters/SN" }, { "$ref": "#/components/parameters/ProductionOrder" }, { "$ref": "#/components/parameters/SalesOrder" }, { "$ref": "#/components/parameters/Base" }, { "$ref": "#/components/parameters/ProductModel" }, { "$ref": "#/components/parameters/HeadOrder" }, { "$ref": "#/components/parameters/ItemOrder" }, { "$ref": "#/components/parameters/HeadSN" }, { "$ref": "#/components/parameters/ItemSN" }, { "$ref": "#/components/parameters/MaterialCode" }], "responses": { "200": { "description": "统计结果", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ViewStats" } } } }, "400": { "$ref": "#/components/responses/BadRequest" }, "501": { "$ref": "#/components/responses/NotImplemented" } } }
+    },
+    "/api/sync/incremental": {
+      "post": { "tags": ["sync"], "operationId": "startIncrementalSync", "responses": { "202": { "description": "任务已启动", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SyncStatus" } } } }, "409": { "$ref": "#/components/responses/Conflict" }, "500": { "$ref": "#/components/responses/ServerError" } } }
+    },
+    "/api/sync/status": {
+      "get": { "tags": ["sync"], "operationId": "getSyncStatus", "responses": { "200": { "description": "同步状态", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SyncStatus" } } } } } }
+    },
+    "/api/data-status": {
+      "get": { "tags": ["sync"], "operationId": "getDataStatus", "responses": { "200": { "description": "各集合数据状态", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/DataStatus" } } } }, "500": { "$ref": "#/components/responses/ServerError" }, "501": { "$ref": "#/components/responses/NotImplemented" } } }
+    }
+  },
+  "components": {
+    "parameters": {
+      "Page": { "name": "page", "in": "query", "schema": { "type": "integer", "minimum": 1, "default": 1 }, "description": "页码；小于 1 或非数字时按 1 处理。" },
+      "PageSize": { "name": "pageSize", "in": "query", "schema": { "type": "integer", "minimum": 1, "maximum": 100, "default": 20 }, "description": "每页条数；超出 1-100 或非数字时按 20 处理。`/api/orders/all` 最多返回 10,000 条。" },
+      "Keyword": { "name": "keyword", "in": "query", "schema": { "type": "string" }, "description": "不区分大小写匹配；用户输入会转义，不支持正则语法。" },
+      "Id": { "name": "id", "in": "query", "required": true, "schema": { "type": "string", "minLength": 1 }, "description": "详情 ID。维修/视图优先使用列表返回的 id；订单通常为 source:AUFNR。" },
+      "ViewID": { "name": "viewID", "in": "path", "required": true, "schema": { "type": "string", "enum": ["ZSGV_ZSD124", "ZSGV_ZPP_SERNOLIST", "Z_V_ZMES_T_001"] } },
+      "HostBarcode": { "name": "hostBarcode", "in": "query", "schema": { "type": "string" } },
+      "DefectResponsibility": { "name": "defectResponsibility", "in": "query", "schema": { "type": "string" } },
+      "NGStation": { "name": "ngStation", "in": "query", "schema": { "type": "string" } },
+      "SalesOrder": { "name": "salesOrder", "in": "query", "schema": { "type": "string" }, "description": "精确匹配；可用逗号或中文逗号批量传值。SAP 订单号支持前导零兼容。" },
+      "ProductionOrder": { "name": "productionOrder", "in": "query", "schema": { "type": "string" }, "description": "精确匹配；SAP 订单号支持前导零兼容。" },
+      "SNS": { "name": "sns", "in": "query", "schema": { "type": "string" }, "description": "维修 SN 批量查询，逗号或中文逗号分隔。" },
+      "ProductionOrders": { "name": "productionOrders", "in": "query", "schema": { "type": "string" }, "description": "生产订单批量查询，逗号或中文逗号分隔。" },
+      "SalesOrders": { "name": "salesOrders", "in": "query", "schema": { "type": "string" }, "description": "销售订单批量查询，逗号或中文逗号分隔。" },
+      "DateFrom": { "name": "dateFrom", "in": "query", "schema": { "type": "string" }, "description": "日期下限；按接口数据集支持 YYYY-MM-DD 或 YYYYMMDD。包含边界。" },
+      "DateTo": { "name": "dateTo", "in": "query", "schema": { "type": "string" }, "description": "日期上限；包含边界。" },
+      "Station": { "name": "station", "in": "query", "schema": { "type": "string" } },
+      "ProductModel": { "name": "productModel", "in": "query", "schema": { "type": "string" } },
+      "Source": { "name": "source", "in": "query", "schema": { "type": "string" }, "description": "SAP 来源；当前数据源为 SG 或 KK。服务端按精确值过滤，未知值通常返回空结果。" },
+      "OrderScope": { "name": "orderScope", "in": "query", "schema": { "type": "string" }, "description": "source 的兼容别名；当前数据源为 SG 或 KK。若同时提供，两个条件都会生效。" },
+      "GSTRSFrom": { "name": "gstrsFrom", "in": "query", "schema": { "type": "string" }, "description": "订单计划开始日期下限；dateFrom 优先。" },
+      "GSTRSTo": { "name": "gstrsTo", "in": "query", "schema": { "type": "string" }, "description": "订单计划开始日期上限；dateTo 优先。" },
+      "SerialNumber": { "name": "serialNumber", "in": "query", "schema": { "type": "string" } },
+      "Customer": { "name": "customer", "in": "query", "schema": { "type": "string" } },
+      "Base": { "name": "base", "in": "query", "schema": { "type": "string" } },
+      "All": { "name": "all", "in": "query", "schema": { "type": "boolean", "default": false }, "description": "true、1、yes 或 y 时启用全量订单查询。" },
+      "From": { "name": "from", "in": "query", "schema": { "type": "string" }, "description": "视图日期下限；包含边界。" },
+      "To": { "name": "to", "in": "query", "schema": { "type": "string" }, "description": "视图日期上限；包含边界。" },
+      "StationCode": { "name": "stationCode", "in": "query", "schema": { "type": "string" } },
+      "SN": { "name": "sn", "in": "query", "schema": { "type": "string" } },
+      "HeadOrder": { "name": "headOrder", "in": "query", "schema": { "type": "string" } },
+      "ItemOrder": { "name": "itemOrder", "in": "query", "schema": { "type": "string" } },
+      "HeadSN": { "name": "headSn", "in": "query", "schema": { "type": "string" } },
+      "ItemSN": { "name": "itemSn", "in": "query", "schema": { "type": "string" } },
+      "MaterialCode": { "name": "materialCode", "in": "query", "schema": { "type": "string" } }
+    },
+    "responses": {
+      "BadRequest": { "description": "请求参数无效", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" }, "example": { "error": "id is required" } } } },
+      "NotFound": { "description": "记录不存在", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
+      "Conflict": { "description": "已有同步任务运行", "content": { "application/json": { "schema": { "allOf": [{ "$ref": "#/components/schemas/Error" }, { "type": "object", "properties": { "status": { "$ref": "#/components/schemas/SyncStatus" } } }] } } } },
+      "ServerError": { "description": "数据库或服务端错误", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
+      "ServiceUnavailable": { "description": "MongoDB 不可用", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/HealthUnhealthy" } } } },
+      "NotImplemented": { "description": "当前部署未提供可选能力", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
+      "FaultPage": { "description": "维修记录分页结果", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/FaultPage" } } } },
+      "OrderPage": { "description": "销售订单分页或全量结果", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/OrderPage" } } } },
+      "ViewPage": { "description": "视图分页结果", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ViewPage" } } } }
+    },
+    "schemas": {
+      "Error": { "type": "object", "required": ["error"], "properties": { "error": { "type": "string" } }, "additionalProperties": true },
+      "Health": { "type": "object", "required": ["status"], "properties": { "status": { "const": "ok" } } },
+      "HealthUnhealthy": { "type": "object", "required": ["status", "error"], "properties": { "status": { "const": "unhealthy" }, "error": { "type": "string" } } },
+      "Field": { "type": "object", "required": ["key", "label", "value"], "properties": { "key": { "type": "string" }, "label": { "type": "string" }, "value": { "type": "string" } } },
+      "Fault": { "type": "object", "required": ["id"], "properties": { "id": { "type": "string" }, "hostBarcode": { "type": "string" }, "serialNumber": { "type": "string" }, "errorCode": { "type": "string" }, "faultDescription": { "type": "string" }, "errorDescription": { "type": "string" }, "reviewProblem": { "type": "string" }, "defectResponsibility": { "type": "string" }, "repairAt": { "type": "string", "format": "date-time" }, "readBy": { "type": "string" }, "repairPerson": { "type": "string" }, "salesOrder": { "type": "string" }, "productionOrder": { "type": "string" }, "plannedStartDate": { "type": "string" }, "materialCode": { "type": "string" }, "materialDescription": { "type": "string" }, "ngStation": { "type": "string" }, "retestStation": { "type": "string" }, "repairRemarks": { "type": "string" }, "raw": { "type": "object", "additionalProperties": true } }, "additionalProperties": false },
+      "FaultPage": { "type": "object", "required": ["items", "page", "pageSize", "total"], "properties": { "items": { "type": "array", "items": { "$ref": "#/components/schemas/Fault" } }, "page": { "type": "integer" }, "pageSize": { "type": "integer" }, "total": { "type": "integer", "format": "int64" } } },
+      "FaultDetail": { "type": "object", "required": ["fault", "fields", "raw"], "properties": { "fault": { "$ref": "#/components/schemas/Fault" }, "fields": { "type": "array", "items": { "$ref": "#/components/schemas/Field" } }, "raw": { "type": "object", "additionalProperties": true } } },
+      "FaultStats": { "type": "object", "properties": { "total": { "type": "integer", "format": "int64" }, "withError": { "type": "integer", "format": "int64" }, "withRepairPerson": { "type": "integer", "format": "int64" }, "salesOrders": { "type": "integer", "format": "int64" }, "productionOrders": { "type": "integer", "format": "int64" }, "missingSalesOrder": { "type": "integer", "format": "int64" }, "missingProductionOrder": { "type": "integer", "format": "int64" }, "dataStartDate": { "type": "string" }, "dataEndDate": { "type": "string" }, "latestSyncedAt": { "type": "string" } } },
+      "Order": { "type": "object", "required": ["id", "source", "aufnr"], "properties": { "id": { "type": "string" }, "source": { "type": "string" }, "aufnr": { "type": "string" }, "salesOrder": { "type": "string" }, "customerId": { "type": "string" }, "finalUser": { "type": "string" }, "materialDescription": { "type": "string" }, "productionModel": { "type": "string" }, "inventoryLocation": { "type": "string" }, "plannedStartDate": { "type": "string" }, "orderQuantity": { "type": "number" }, "storageQuantity": { "type": "number" }, "recordCount": { "type": "integer" }, "raw": { "type": "object", "additionalProperties": true } }, "additionalProperties": false },
+      "OrderPage": { "type": "object", "required": ["items", "page", "pageSize", "total"], "properties": { "items": { "type": "array", "items": { "$ref": "#/components/schemas/Order" } }, "page": { "type": "integer" }, "pageSize": { "type": "integer" }, "total": { "type": "integer", "format": "int64" } } },
+      "OrderDetail": { "type": "object", "required": ["order", "fields", "raw"], "properties": { "order": { "$ref": "#/components/schemas/Order" }, "fields": { "type": "array", "items": { "$ref": "#/components/schemas/Field" } }, "raw": { "type": "object", "additionalProperties": true } } },
+      "OrderStats": { "type": "object", "properties": { "total": { "type": "integer", "format": "int64" }, "salesOrders": { "type": "integer", "format": "int64" }, "sg": { "type": "integer", "format": "int64" }, "kk": { "type": "integer", "format": "int64" }, "orderQuantity": { "type": "number" }, "machineQuantity": { "type": "number" }, "storageQuantity": { "type": "number" }, "dataStartDate": { "type": "string" }, "dataEndDate": { "type": "string" }, "latestSyncedAt": { "type": "string" } } },
+      "OrderModels": { "type": "object", "required": ["items"], "properties": { "items": { "type": "array", "items": { "type": "string" } } } },
+      "ViewPage": { "type": "object", "required": ["items", "page", "pageSize", "total"], "properties": { "items": { "type": "array", "items": { "type": "object", "additionalProperties": true } }, "page": { "type": "integer" }, "pageSize": { "type": "integer" }, "total": { "type": "integer", "format": "int64" } } },
+      "ViewDetail": { "type": "object", "required": ["item", "fields"], "properties": { "item": { "type": "object", "additionalProperties": true }, "fields": { "type": "array", "items": { "$ref": "#/components/schemas/Field" } } } },
+      "ViewStats": { "type": "object", "properties": { "total": { "type": "integer", "format": "int64" }, "missingSalesOrder": { "type": "integer", "format": "int64" }, "missingProductionOrder": { "type": "integer", "format": "int64" }, "dataStartDate": { "type": "string" }, "dataEndDate": { "type": "string" }, "latestSyncedAt": { "type": "string" } } },
+      "SyncStatus": { "type": "object", "required": ["state"], "properties": { "state": { "type": "string", "enum": ["idle", "running", "success", "failed"] }, "startedAt": { "type": "string", "format": "date-time" }, "finishedAt": { "type": "string", "format": "date-time" }, "message": { "type": "string" }, "summary": { "type": "object", "additionalProperties": true } } },
+      "DataStatus": { "type": "object", "properties": { "salesOrdersLastSyncedAt": { "type": "string" }, "faultsLastSyncedAt": { "type": "string" }, "stationRecordsLastSyncedAt": { "type": "string" }, "serialBindingsLastSyncedAt": { "type": "string" }, "bomPostingsLastSyncedAt": { "type": "string" }, "state": { "type": "string" }, "startedAt": { "type": "string" }, "finishedAt": { "type": "string" } } }
+    }
+  }
+}

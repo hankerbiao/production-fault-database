@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 
-import sync_sales_orders as sync
+from scripts.sources.sap_http import sync_sales_orders as sync
 
 
 def test_parse_date_and_prodh():
@@ -96,6 +96,13 @@ def test_repair_query_modes():
     checkpoint = {"watermark": {"ZDATE": "20260115", "ZTIME": "101010"}}
     _, params = sync.repair_query("incremental", checkpoint, date(2026, 1, 8), date(2026, 1, 31))
     assert params[:3] == ["20260115", "20260115", "101010"]
+
+
+def test_repair_sync_start_date_is_hard_limited():
+    assert sync.REPAIR_START_DATE == date(2026, 1, 1)
+    sql, params = sync.repair_query("full", None, sync.REPAIR_START_DATE, date(2026, 1, 31))
+    assert '"ZDATE" >= ?' in sql
+    assert params[0] == "20260101"
 
 
 class FakeCollection:
@@ -286,13 +293,13 @@ def test_sync_sales_full_cleans_old_source_documents_after_success(monkeypatch):
     assert {doc["_id"] for doc in FakeMongoClient.instances[-1].db["orders"].docs} == {"SG:new-sg", "KK:new-kk"}
 
 
-def test_sync_repair_filters_sales_orders_and_advances_watermark(monkeypatch):
+def test_sync_repair_filters_sales_orders_retains_empty_and_advances_watermark(monkeypatch):
     db = FakeDB()
     db["orders"].docs = [{"_id": "SG:1", "data": {"VBELN": "SO-1"}}]
     monkeypatch.setenv("TARGET_COLLECTION", "orders")
 
     values_by_row = []
-    for vbeln, ztime in [("SO-1", "010000"), ("SO-MISSING", "020000")]:
+    for vbeln, ztime in [("SO-1", "010000"), ("SO-MISSING", "020000"), ("", "030000")]:
         row = {field: "" for field in sync.REPAIR_COLUMNS}
         row.update({"MANDT": "800", "PCODE": "PC-1", "ZMCOD1": "SN-1", "ZDATE_WX": "20260102", "ZDATE": "20260102", "ZTIME": ztime, "VBELN": vbeln})
         values_by_row.append(tuple(row[field] for field in sync.REPAIR_COLUMNS))
@@ -323,10 +330,10 @@ def test_sync_repair_filters_sales_orders_and_advances_watermark(monkeypatch):
     monkeypatch.setattr(sync, "hana_connection", fake_hana_connection)
     result = sync.sync_repair(db, "repairs", "checkpoints", "incremental", date(2026, 1, 1), date(2026, 1, 2), 7, 1, False, "run-1")
     assert result["success"] is True
-    assert result["source_rows"] == 2 and result["matched_sales_orders"] == 1 and result["filtered_missing_sales_order"] == 1
-    assert len(db["repairs"].docs) == 1
+    assert result["source_rows"] == 3 and result["matched_sales_orders"] == 1 and result["empty_sales_orders_retained"] == 1 and result["filtered_missing_sales_order"] == 1
+    assert len(db["repairs"].docs) == 2
     checkpoint = db["checkpoints"].find_one({"_id": "repair_records"})
-    assert checkpoint["watermark"] == {"ZDATE": "20260102", "ZTIME": "020000"}
+    assert checkpoint["watermark"] == {"ZDATE": "20260102", "ZTIME": "030000"}
 
 
 @pytest.mark.parametrize(

@@ -1,6 +1,6 @@
 from types import SimpleNamespace
 
-import hana_view_sync as sync
+from scripts.sources.hana import hana_view_sync as sync
 
 
 def test_documented_view_specs_are_registered():
@@ -103,6 +103,7 @@ class FakeCollection:
     def __init__(self):
         self.documents = []
         self.updated = []
+        self.delete_queries = []
 
     def create_index(self, *_args, **_kwargs):
         return None
@@ -121,6 +122,7 @@ class FakeCollection:
         self.updated.append((query, update, upsert))
 
     def delete_many(self, query):
+        self.delete_queries.append(query)
         return SimpleNamespace(deleted_count=0)
 
     def delete_one(self, query):
@@ -175,3 +177,18 @@ def test_sync_view_closes_one_hana_session_cursor_and_mongo_client(monkeypatch):
     assert connection.closed is True
     assert connection.cursor_instance.closed is True
     assert FakeMongoClient.instance.closed is True
+
+
+def test_full_sync_defers_old_row_deletion_until_cleanup_commits(monkeypatch):
+    connection = FakeHanaConnection()
+    monkeypatch.setattr(sync, "MongoClient", FakeMongoClient)
+    monkeypatch.setitem(__import__("sys").modules, "hdbcli", SimpleNamespace(dbapi=SimpleNamespace(connect=lambda **_kwargs: connection)))
+    monkeypatch.setenv("MONGODB_HOSTS", "localhost:27017")
+    monkeypatch.setenv("MONGODB_DATABASE", "test")
+    monkeypatch.setenv("HANA_ADDRESS", "localhost")
+    monkeypatch.setenv("HANA_USER", "user")
+    monkeypatch.setenv("HANA_PASSWORD", "password")
+    spec = sync.VIEW_SPECS["ZSGV_ZPP_SERNOLIST"]
+    result = sync.sync_view(spec, mode="full", start_date=None, batch_size=10, lookback_days=7, dry_run=False, defer_finalize=True)
+    assert result["success"] is True and result["finalized"] is False
+    assert FakeMongoClient.instance.database[spec.collection].delete_queries == []

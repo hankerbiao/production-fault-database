@@ -59,10 +59,11 @@ func (m *syncManager) start() (syncStatus, error) {
 		for _, command := range commands {
 			result, err := runSyncCommand(python, command.path, command.args)
 			if result != nil {
-				summaries[filepath.Base(command.path)] = result
+				summaries[command.name] = result
 			}
 			if err != nil && runErr == nil {
 				runErr = err
+				break
 			}
 		}
 		finished := time.Now().UTC()
@@ -87,6 +88,7 @@ func (m *syncManager) start() (syncStatus, error) {
 }
 
 type syncCommand struct {
+	name string
 	path string
 	args []string
 }
@@ -114,40 +116,45 @@ func runSyncCommand(python, script string, args []string) (map[string]any, error
 	return summary, err
 }
 
-func syncScriptPath() (string, error) {
-	candidates := []string{}
-	if configured := os.Getenv("SYNC_SCRIPT_PATH"); configured != "" {
-		candidates = append(candidates, configured)
+func syncScriptDir() (string, error) {
+	if configured := os.Getenv("SYNC_SCRIPT_DIR"); configured != "" {
+		path, err := filepath.Abs(configured)
+		if err == nil {
+			if info, statErr := os.Stat(path); statErr == nil && info.IsDir() {
+				return path, nil
+			}
+		}
+		return "", fmt.Errorf("找不到同步脚本目录 %s", configured)
 	}
-	candidates = append(candidates, "../sync_sales_orders.py", "sync_sales_orders.py")
+	candidates := []string{"..", "."}
 	for _, candidate := range candidates {
 		path, err := filepath.Abs(candidate)
 		if err == nil {
-			if info, statErr := os.Stat(path); statErr == nil && !info.IsDir() {
+			if info, statErr := os.Stat(path); statErr == nil && info.IsDir() {
 				return path, nil
 			}
 		}
 	}
-	return "", fmt.Errorf("找不到同步脚本，请配置 SYNC_SCRIPT_PATH")
+	return "", fmt.Errorf("找不到同步脚本目录，请配置 SYNC_SCRIPT_DIR")
 }
 
 func syncCommands() ([]syncCommand, error) {
-	root, err := syncScriptPath()
+	root, err := syncScriptDir()
 	if err != nil {
 		return nil, err
 	}
-	commands := []syncCommand{{path: root, args: []string{"--dataset", "all"}}}
-	viewScripts := []string{"sync_zsgv_zsd124.py", "sync_zsgv_zpp_sernolist.py", "sync_z_v_zmes_t_001.py"}
-	viewDir := filepath.Dir(root)
-	if configured := os.Getenv("SYNC_VIEW_SCRIPT_DIR"); configured != "" {
-		viewDir = configured
+	commands := []syncCommand{
+		{name: "sales_orders", path: filepath.Join(root, "repair_records.py"), args: []string{"--sales-only", "--mode", "incremental", "--apply"}},
+		{name: "station_records", path: filepath.Join(root, "station_records.py"), args: []string{"--mode", "incremental", "--apply"}},
+		{name: "repair_records", path: filepath.Join(root, "repair_records.py"), args: []string{"--mode", "incremental", "--apply"}},
+		{name: "order_bom_postings", path: filepath.Join(root, "order_bom_postings.py"), args: []string{"--mode", "incremental", "--apply"}},
+		{name: "serial_bindings", path: filepath.Join(root, "serial_bindings.py"), args: []string{"--mode", "incremental", "--apply"}},
 	}
-	for _, name := range viewScripts {
-		path := filepath.Join(viewDir, name)
+	for _, command := range commands {
+		path := command.path
 		if _, statErr := os.Stat(path); statErr != nil {
-			return nil, fmt.Errorf("找不到视图同步脚本 %s，请将三个脚本放在 %s", name, viewDir)
+			return nil, fmt.Errorf("找不到同步脚本 %s，请检查 SYNC_SCRIPT_DIR", path)
 		}
-		commands = append(commands, syncCommand{path: path})
 	}
 	return commands, nil
 }

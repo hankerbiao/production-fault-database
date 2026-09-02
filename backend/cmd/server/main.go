@@ -30,6 +30,7 @@ type storeAPI interface {
 	Orders(context.Context, store.OrderFilters, int, int) (store.OrderListResult, error)
 	OrderDetail(context.Context, string) (store.OrderDetail, error)
 	OrderStats(context.Context, store.OrderFilters) (store.OrderStatsResult, error)
+	OrderModels(context.Context, string) (store.OrderModelsResult, error)
 }
 
 func main() {
@@ -52,16 +53,21 @@ func main() {
 	mux.HandleFunc("GET /", h.root)
 	mux.HandleFunc("GET /api/health", h.health)
 	mux.HandleFunc("GET /api/faults", h.faults)
+	mux.HandleFunc("GET /api/faults/by-sns", h.faultsBySNS)
+	mux.HandleFunc("GET /api/faults/by-orders", h.faultsByOrders)
 	mux.HandleFunc("GET /api/faults/detail", h.faultDetail)
 	mux.HandleFunc("GET /api/faults/stats", h.stats)
 	mux.HandleFunc("GET /api/orders", h.orders)
+	mux.HandleFunc("GET /api/orders/all", h.ordersAll)
 	mux.HandleFunc("GET /api/orders/detail", h.orderDetail)
 	mux.HandleFunc("GET /api/orders/stats", h.orderStats)
+	mux.HandleFunc("GET /api/orders/models", h.orderModels)
 	mux.HandleFunc("GET /api/views/{viewID}", h.viewList)
 	mux.HandleFunc("GET /api/views/{viewID}/detail", h.viewDetail)
 	mux.HandleFunc("GET /api/views/{viewID}/stats", h.viewStats)
 	mux.HandleFunc("POST /api/sync/incremental", h.startIncrementalSync)
 	mux.HandleFunc("GET /api/sync/status", h.syncStatus)
+	mux.HandleFunc("GET /api/data-status", h.dataStatus)
 
 	// Keep the default aligned with the Vite development proxy and README.
 	addr := getenv("PORT", "18080")
@@ -106,6 +112,9 @@ func (s *server) faults(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, result)
 }
 
+func (s *server) faultsBySNS(w http.ResponseWriter, r *http.Request)    { s.faults(w, r) }
+func (s *server) faultsByOrders(w http.ResponseWriter, r *http.Request) { s.faults(w, r) }
+
 func (s *server) stats(w http.ResponseWriter, r *http.Request) {
 	filters := repairFilters(r.URL.Query())
 	result, err := s.store.Stats(r.Context(), filters)
@@ -135,8 +144,28 @@ func (s *server) faultDetail(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) orders(w http.ResponseWriter, r *http.Request) {
+	if parseBool(r.URL.Query().Get("all")) {
+		s.ordersAll(w, r)
+		return
+	}
 	page, pageSize := pagination(r)
 	result, err := s.store.Orders(r.Context(), orderFilters(r.URL.Query()), page, pageSize)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+func (s *server) ordersAll(w http.ResponseWriter, r *http.Request) {
+	api, ok := s.store.(interface {
+		OrdersAll(context.Context, store.OrderFilters) (store.OrderListResult, error)
+	})
+	if !ok {
+		writeJSON(w, http.StatusNotImplemented, map[string]string{"error": "bulk order API unavailable"})
+		return
+	}
+	result, err := api.OrdersAll(r.Context(), orderFilters(r.URL.Query()))
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
@@ -171,6 +200,15 @@ func (s *server) orderStats(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, result)
 }
 
+func (s *server) orderModels(w http.ResponseWriter, r *http.Request) {
+	result, err := s.store.OrderModels(r.Context(), r.URL.Query().Get("keyword"))
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
 func (s *server) viewList(w http.ResponseWriter, r *http.Request) {
 	api, ok := s.store.(interface {
 		ViewList(context.Context, string, store.ViewFilters, int, int) (store.ViewListResult, error)
@@ -181,7 +219,7 @@ func (s *server) viewList(w http.ResponseWriter, r *http.Request) {
 	}
 	page, pageSize := pagination(r)
 	q := r.URL.Query()
-	result, err := api.ViewList(r.Context(), r.PathValue("viewID"), store.ViewFilters{Keyword: strings.TrimSpace(q.Get("keyword")), From: strings.TrimSpace(q.Get("from")), To: strings.TrimSpace(q.Get("to"))}, page, pageSize)
+	result, err := api.ViewList(r.Context(), r.PathValue("viewID"), viewFilters(q), page, pageSize)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
@@ -223,7 +261,7 @@ func (s *server) viewStats(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	q := r.URL.Query()
-	result, err := api.ViewStats(r.Context(), r.PathValue("viewID"), store.ViewFilters{Keyword: strings.TrimSpace(q.Get("keyword")), From: strings.TrimSpace(q.Get("from")), To: strings.TrimSpace(q.Get("to"))})
+	result, err := api.ViewStats(r.Context(), r.PathValue("viewID"), viewFilters(q))
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
@@ -244,6 +282,30 @@ func (s *server) syncStatus(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, s.sync.statusSnapshot())
 }
 
+func (s *server) dataStatus(w http.ResponseWriter, r *http.Request) {
+	api, ok := s.store.(interface {
+		DataStatus(context.Context) (store.DataStatus, error)
+	})
+	if !ok {
+		writeJSON(w, http.StatusNotImplemented, map[string]string{"error": "data status API unavailable"})
+		return
+	}
+	result, err := api.DataStatus(r.Context())
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	status := s.sync.statusSnapshot()
+	writeJSON(w, http.StatusOK, map[string]any{
+		"salesOrdersLastSyncedAt":    result.SalesOrdersLastSyncedAt,
+		"faultsLastSyncedAt":         result.FaultsLastSyncedAt,
+		"stationRecordsLastSyncedAt": result.StationRecordsLastSyncedAt,
+		"serialBindingsLastSyncedAt": result.SerialBindingsLastSyncedAt,
+		"bomPostingsLastSyncedAt":    result.BOMPostingsLastSyncedAt,
+		"state":                      status.State, "startedAt": status.StartedAt, "finishedAt": status.FinishedAt,
+	})
+}
+
 func pagination(r *http.Request) (int, int) {
 	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
 	if page < 1 {
@@ -257,11 +319,24 @@ func pagination(r *http.Request) (int, int) {
 }
 
 func repairFilters(q url.Values) store.Filters {
-	return store.Filters{Keyword: strings.TrimSpace(q.Get("keyword")), HostBarcode: strings.TrimSpace(q.Get("hostBarcode")), DefectResponsibility: strings.TrimSpace(q.Get("defectResponsibility")), NGStation: strings.TrimSpace(q.Get("ngStation")), SalesOrder: strings.TrimSpace(q.Get("salesOrder")), ProductionOrder: strings.TrimSpace(q.Get("productionOrder"))}
+	return store.Filters{Keyword: strings.TrimSpace(q.Get("keyword")), HostBarcode: strings.TrimSpace(q.Get("hostBarcode")), DefectResponsibility: strings.TrimSpace(q.Get("defectResponsibility")), NGStation: strings.TrimSpace(q.Get("ngStation")), SalesOrder: strings.TrimSpace(q.Get("salesOrder")), ProductionOrder: strings.TrimSpace(q.Get("productionOrder")), SNS: strings.TrimSpace(q.Get("sns")), ProductionOrders: strings.TrimSpace(q.Get("productionOrders")), SalesOrders: strings.TrimSpace(q.Get("salesOrders")), DateFrom: strings.TrimSpace(q.Get("dateFrom")), DateTo: strings.TrimSpace(q.Get("dateTo")), Station: strings.TrimSpace(q.Get("station")), ProductModel: strings.TrimSpace(q.Get("productModel"))}
 }
 
 func orderFilters(q url.Values) store.OrderFilters {
-	return store.OrderFilters{Keyword: strings.TrimSpace(q.Get("keyword")), Source: strings.TrimSpace(q.Get("source")), GSTRSFrom: strings.TrimSpace(q.Get("gstrsFrom")), GSTRSTo: strings.TrimSpace(q.Get("gstrsTo"))}
+	return store.OrderFilters{Keyword: strings.TrimSpace(q.Get("keyword")), Source: strings.TrimSpace(q.Get("source")), GSTRSFrom: strings.TrimSpace(q.Get("gstrsFrom")), GSTRSTo: strings.TrimSpace(q.Get("gstrsTo")), SalesOrder: strings.TrimSpace(q.Get("salesOrder")), ProductionOrder: strings.TrimSpace(q.Get("productionOrder")), SerialNumber: strings.TrimSpace(q.Get("serialNumber")), ProductModel: strings.TrimSpace(q.Get("productModel")), Customer: strings.TrimSpace(q.Get("customer")), Base: strings.TrimSpace(q.Get("base")), DateFrom: strings.TrimSpace(q.Get("dateFrom")), DateTo: strings.TrimSpace(q.Get("dateTo")), OrderScope: strings.TrimSpace(q.Get("orderScope"))}
+}
+
+func viewFilters(q url.Values) store.ViewFilters {
+	return store.ViewFilters{Keyword: strings.TrimSpace(q.Get("keyword")), From: strings.TrimSpace(q.Get("from")), To: strings.TrimSpace(q.Get("to")), DateFrom: strings.TrimSpace(q.Get("dateFrom")), DateTo: strings.TrimSpace(q.Get("dateTo")), StationCode: strings.TrimSpace(q.Get("stationCode")), SN: strings.TrimSpace(q.Get("sn")), ProductionOrder: strings.TrimSpace(q.Get("productionOrder")), SalesOrder: strings.TrimSpace(q.Get("salesOrder")), Base: strings.TrimSpace(q.Get("base")), ProductModel: strings.TrimSpace(q.Get("productModel")), HeadOrder: strings.TrimSpace(q.Get("headOrder")), ItemOrder: strings.TrimSpace(q.Get("itemOrder")), HeadSN: strings.TrimSpace(q.Get("headSn")), ItemSN: strings.TrimSpace(q.Get("itemSn")), MaterialCode: strings.TrimSpace(q.Get("materialCode"))}
+}
+
+func parseBool(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "1", "true", "yes", "y":
+		return true
+	default:
+		return false
+	}
 }
 
 func cors(next http.Handler) http.Handler {

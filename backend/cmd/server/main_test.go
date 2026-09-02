@@ -19,11 +19,13 @@ type fakeStore struct {
 	orders               store.OrderListResult
 	stats                store.StatsResult
 	ostats               store.OrderStatsResult
+	models               store.OrderModelsResult
 	err                  error
 	gotPage, gotPageSize int
 	gotFilters           store.Filters
 	gotOrderFilters      store.OrderFilters
 	gotID                string
+	gotAll               bool
 }
 
 func (f *fakeStore) Ping(context.Context) error { return f.pingErr }
@@ -55,6 +57,13 @@ func (f *fakeStore) Orders(_ context.Context, filters store.OrderFilters, page, 
 	}
 	return f.orders, nil
 }
+func (f *fakeStore) OrdersAll(_ context.Context, filters store.OrderFilters) (store.OrderListResult, error) {
+	f.gotOrderFilters, f.gotAll = filters, true
+	if f.err != nil {
+		return store.OrderListResult{}, f.err
+	}
+	return f.orders, nil
+}
 func (f *fakeStore) OrderDetail(_ context.Context, id string) (store.OrderDetail, error) {
 	f.gotID = id
 	if f.err != nil {
@@ -68,6 +77,12 @@ func (f *fakeStore) OrderStats(_ context.Context, filters store.OrderFilters) (s
 		return store.OrderStatsResult{}, f.err
 	}
 	return f.ostats, nil
+}
+func (f *fakeStore) OrderModels(_ context.Context, _ string) (store.OrderModelsResult, error) {
+	if f.err != nil {
+		return store.OrderModelsResult{}, f.err
+	}
+	return f.models, nil
 }
 
 func newTestServer(f *fakeStore) *server { return &server{store: f, sync: newSyncManager()} }
@@ -151,10 +166,50 @@ func TestOrdersAndCORS(t *testing.T) {
 	}
 }
 
+func TestOrdersAllUsesFiltersWithoutBoardPagination(t *testing.T) {
+	f := &fakeStore{orders: store.OrderListResult{Items: []store.Order{{AUFNR: "PO-ALL"}}, Total: 1}}
+	r := httptest.NewRecorder()
+	newTestServer(f).orders(r, httptest.NewRequest(http.MethodGet, "/api/orders?all=true&productionOrder=PO-ALL&source=SG&page=9&pageSize=20", nil))
+	if r.Code != http.StatusOK || !f.gotAll || f.gotOrderFilters.ProductionOrder != "PO-ALL" || f.gotOrderFilters.Source != "SG" {
+		t.Fatalf("status=%d all=%v filters=%+v", r.Code, f.gotAll, f.gotOrderFilters)
+	}
+}
+
+func TestOrderModels(t *testing.T) {
+	f := &fakeStore{models: store.OrderModelsResult{Items: []string{"M-1", "M-2"}}}
+	r := httptest.NewRecorder()
+	newTestServer(f).orderModels(r, httptest.NewRequest(http.MethodGet, "/api/orders/models?keyword=M", nil))
+	if r.Code != http.StatusOK {
+		t.Fatalf("status=%d", r.Code)
+	}
+	var result store.OrderModelsResult
+	if err := json.NewDecoder(r.Body).Decode(&result); err != nil || len(result.Items) != 2 {
+		t.Fatalf("result=%+v err=%v", result, err)
+	}
+}
+
 func TestFilterHelpers(t *testing.T) {
-	q := url.Values{"keyword": {" a "}, "source": {" SG "}}
+	q := url.Values{"keyword": {" a "}, "source": {" SG "}, "sns": {"SN1,SN2"}, "productionOrders": {"00012,13"}, "dateFrom": {"2026-01-01"}, "station": {"ST-1"}}
 	if repairFilters(q).Keyword != "a" || orderFilters(q).Source != "SG" {
 		t.Fatal("query values were not trimmed")
+	}
+	filters := repairFilters(q)
+	if filters.SNS != "SN1,SN2" || filters.ProductionOrders != "00012,13" || filters.DateFrom != "2026-01-01" || filters.Station != "ST-1" {
+		t.Fatalf("extended filters=%+v", filters)
+	}
+}
+
+func TestViewAndDataStatusRoutes(t *testing.T) {
+	f := &fakeStore{}
+	r := httptest.NewRecorder()
+	newTestServer(f).viewList(r, httptest.NewRequest(http.MethodGet, "/api/views/Z_V_ZMES_T_001?stationCode=LINE-1&sn=SN-1&dateFrom=2026-01-01", nil))
+	if r.Code != http.StatusNotImplemented {
+		t.Fatalf("view route status=%d", r.Code)
+	}
+	r = httptest.NewRecorder()
+	newTestServer(f).dataStatus(r, httptest.NewRequest(http.MethodGet, "/api/data-status", nil))
+	if r.Code != http.StatusNotImplemented {
+		t.Fatalf("data status=%d", r.Code)
 	}
 }
 

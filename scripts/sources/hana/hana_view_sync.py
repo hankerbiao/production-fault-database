@@ -8,6 +8,7 @@ import hashlib
 import json
 import os
 import signal
+import sys
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
@@ -16,6 +17,10 @@ from typing import Any, Iterator, Mapping, Sequence
 from urllib.parse import quote_plus
 from uuid import uuid4
 
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
+if str(PROJECT_ROOT) not in __import__("sys").path:
+    __import__("sys").path.insert(0, str(PROJECT_ROOT))
+
 try:
     from pymongo import ASCENDING, MongoClient, ReturnDocument, UpdateOne
     from pymongo.errors import DuplicateKeyError
@@ -23,7 +28,7 @@ except ImportError as exc:  # pragma: no cover - deployment error
     raise SystemExit(f"missing dependency: {exc.name}; install pymongo") from exc
 
 
-ROOT = Path(__file__).resolve().parent
+ROOT = PROJECT_ROOT
 DEFAULT_START_DATE = "2026-01-01"
 CHECKPOINT_PREFIX = "hana_views:"
 
@@ -33,6 +38,10 @@ def install_graceful_shutdown() -> None:
         raise RuntimeError(f"收到终止信号 {signum}，正在关闭数据库连接")
 
     signal.signal(signal.SIGTERM, handle_shutdown)
+
+
+def progress_log(message: str) -> None:
+    print(f"[{datetime.now().astimezone():%Y-%m-%d %H:%M:%S}] {message}", file=sys.stderr, flush=True)
 
 
 @dataclass(frozen=True)
@@ -319,7 +328,7 @@ def date_overlap(value: Any, days: int) -> Any:
     return value
 
 
-def build_query(spec: ViewSpec, checkpoint: Mapping[str, Any] | None, mode: str, start_date: str | None, lookback_days: int) -> tuple[str, list[Any]]:
+def build_query(spec: ViewSpec, checkpoint: Mapping[str, Any] | None, mode: str, start_date: str | None, lookback_days: int, end_date: str | None = None) -> tuple[str, list[Any]]:
     conditions: list[str] = []
     params: list[Any] = []
     watermark = checkpoint.get("watermark") if checkpoint else None
@@ -332,6 +341,12 @@ def build_query(spec: ViewSpec, checkpoint: Mapping[str, Any] | None, mode: str,
         if spec.start_date_field == "ACTUAL_START_TIME":
             value = f"{start_date[:4]}-{start_date[4:6]}-{start_date[6:]} 00:00:00"
         conditions.append(f'"{spec.start_date_field}" >= ?')
+        params.append(value)
+    if end_date and spec.start_date_field:
+        value = end_date.replace("-", "")
+        if spec.start_date_field == "ACTUAL_START_TIME":
+            value = f"{end_date.replace('-', '')[:4]}-{end_date.replace('-', '')[4:6]}-{end_date.replace('-', '')[6:8]} 23:59:59"
+        conditions.append(f'"{spec.start_date_field}" <= ?')
         params.append(value)
     selected = ", ".join(f'"{field}"' for field in spec.columns)
     order = ", ".join(f'"{field}"' for field in spec.order_by)
@@ -348,7 +363,17 @@ def max_watermark(spec: ViewSpec, current: Any, row: Mapping[str, Any]) -> Any:
     return value
 
 
-def sync_view(spec: ViewSpec, *, mode: str, start_date: str | None, batch_size: int, lookback_days: int, dry_run: bool) -> dict[str, Any]:
+def sync_view(
+    spec: ViewSpec,
+    *,
+    mode: str,
+    start_date: str | None,
+    batch_size: int,
+    lookback_days: int,
+    dry_run: bool,
+    defer_finalize: bool = False,
+    end_date: str | None = None,
+) -> dict[str, Any]:
     if batch_size < 1 or lookback_days < 0:
         raise ValueError("batch-size 必须大于 0，lookback-days 不能为负数")
     run_id = uuid4().hex
@@ -364,10 +389,12 @@ def sync_view(spec: ViewSpec, *, mode: str, start_date: str | None, batch_size: 
         "matched": 0,
         "modified": 0,
         "watermark": None,
+        "finalized": False,
     }
     mongo_client = None
     database = None
     try:
+        progress_log(f"[{spec.view_id}] 同步开始：mode={mode} batch_size={batch_size} dry_run={dry_run}")
         if not dry_run:
             client_options = mongo_client_options()
             stats["mongo_write_concern"] = mongo_write_concern_summary(client_options)
@@ -379,18 +406,20 @@ def sync_view(spec: ViewSpec, *, mode: str, start_date: str | None, batch_size: 
             collection = database[spec.collection]
             checkpoints = database[env("SYNC_CHECKPOINT_COLLECTION", "sync_checkpoints")]
             runs = database[env("SYNC_RUN_COLLECTION", "sync_runs")]
-            collection.create_index("_source_key", unique=True, name="source_key_unique")
+            # Serial bindings intentionally retain incomplete business keys.  Legacy
+            # duplicates must be scanned and removed by its cleanup stage before a
+            # unique source-key constraint could be safely introduced.
+            if spec.view_id != "ZSGV_ZPP_SERNOLIST":
+                collection.create_index("_source_key", unique=True, name="source_key_unique")
+            else:
+                collection.create_index("_source_key", name="source_key_lookup")
             for field in spec.index_fields:
                 collection.create_index(field, name=f"source_{field.lower()}")
             runs.insert_one({"_id": f"{run_id}:{spec.view_id}", "view_id": spec.view_id, "collection": spec.collection, "status": "running", "started_at": datetime.now(timezone.utc)})
             checkpoint = checkpoints.find_one({"_id": CHECKPOINT_PREFIX + spec.view_id}) if mode == "incremental" else None
-            if mode == "full":
-                deleted = collection.delete_many({"_source_view": spec.view_id})
-                stats["deleted_before_sync"] = deleted.deleted_count
-                checkpoints.delete_one({"_id": CHECKPOINT_PREFIX + spec.view_id})
         else:
             checkpoint = None
-        sql, params = build_query(spec, checkpoint, mode, start_date, lookback_days)
+        sql, params = build_query(spec, checkpoint, mode, start_date, lookback_days, end_date)
         watermark = None
         with hana_connection() as connection:
             cursor = connection.cursor()
@@ -413,14 +442,21 @@ def sync_view(spec: ViewSpec, *, mode: str, start_date: str | None, batch_size: 
                         stats["matched"] += getattr(result, "matched_count", 0)
                         stats["modified"] += getattr(result, "modified_count", 0)
                     stats["batches"] += 1
+                    if stats["batches"] == 1 or stats["batches"] % 100 == 0:
+                        progress_log(f"[{spec.view_id}] 同步进度：batches={stats['batches']:,} rows={stats['source_rows']:,}")
             finally:
                 cursor.close()
         stats["watermark"] = watermark
         stats["success"] = True
-        if not dry_run:
+        progress_log(f"[{spec.view_id}] 同步完成：rows={stats['source_rows']:,} batches={stats['batches']:,}")
+        if not dry_run and not defer_finalize:
             now = datetime.now(timezone.utc)
+            if mode == "full":
+                deleted = collection.delete_many({"_source_view": spec.view_id, "_sync_run_id": {"$ne": run_id}})
+                stats["deleted_out_of_scope"] = deleted.deleted_count
             checkpoints.update_one({"_id": CHECKPOINT_PREFIX + spec.view_id}, {"$set": {"view_id": spec.view_id, "collection": spec.collection, "watermark": bson_value(watermark), "run_id": run_id, "updated_at": now}}, upsert=True)
             runs.update_one({"_id": f"{run_id}:{spec.view_id}"}, {"$set": {"status": "success", "finished_at": now, "stats": stats}})
+            stats["finalized"] = True
         return stats
     except Exception as exc:
         stats["error"] = str(exc)
@@ -430,6 +466,33 @@ def sync_view(spec: ViewSpec, *, mode: str, start_date: str | None, batch_size: 
     finally:
         if mongo_client is not None:
             mongo_client.close()
+
+
+def finalize_view_run(spec: ViewSpec, sync_result: Mapping[str, Any]) -> dict[str, int]:
+    """Commit a staged view sync after its table cleanup has completed."""
+    if not sync_result.get("success"):
+        raise ValueError("不能提交失败的同步任务")
+    run_id = str(sync_result["run_id"])
+    client = MongoClient(mongo_uri(), **mongo_client_options())
+    try:
+        database = client[env("MONGODB_DATABASE")]
+        collection = database[spec.collection]
+        deleted = 0
+        if sync_result.get("mode") == "full":
+            deleted = collection.delete_many({"_source_view": spec.view_id, "_sync_run_id": {"$ne": run_id}}).deleted_count
+        now = datetime.now(timezone.utc)
+        database[env("SYNC_CHECKPOINT_COLLECTION", "sync_checkpoints")].update_one(
+            {"_id": CHECKPOINT_PREFIX + spec.view_id},
+            {"$set": {"view_id": spec.view_id, "collection": spec.collection, "watermark": bson_value(sync_result.get("watermark")), "run_id": run_id, "updated_at": now}},
+            upsert=True,
+        )
+        database[env("SYNC_RUN_COLLECTION", "sync_runs")].update_one(
+            {"_id": f"{run_id}:{spec.view_id}"},
+            {"$set": {"status": "success", "finished_at": now, "stats": dict(sync_result)}},
+        )
+        return {"deleted_out_of_scope": deleted}
+    finally:
+        client.close()
 
 
 def run_cli(spec: ViewSpec, argv: Sequence[str] | None = None) -> int:
@@ -442,11 +505,23 @@ def run_cli(spec: ViewSpec, argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--batch-size", type=int, default=int(env("SYNC_BATCH_SIZE", "1000")))
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args(argv)
+    lock_client = None
     try:
         with process_lock(env("SYNC_LOCK_PATH", "/tmp/line-fault-sales-orders-sync.lock")):
-            result = sync_view(spec, mode=args.mode, start_date=args.start_date, batch_size=args.batch_size, lookback_days=args.lookback_days, dry_run=args.dry_run)
+            if args.dry_run:
+                result = sync_view(spec, mode=args.mode, start_date=args.start_date, batch_size=args.batch_size, lookback_days=args.lookback_days, dry_run=True)
+            else:
+                lock_client = MongoClient(mongo_uri(), **mongo_client_options())
+                with mongo_lease_lock(
+                    lock_client[env("MONGODB_DATABASE")],
+                    env("SYNC_DISTRIBUTED_LOCK_NAME", "sales_repair_sync"),
+                ):
+                    result = sync_view(spec, mode=args.mode, start_date=args.start_date, batch_size=args.batch_size, lookback_days=args.lookback_days, dry_run=False)
         print(json.dumps(result, ensure_ascii=False, default=str, sort_keys=True))
         return 0
     except Exception as exc:
         print(json.dumps({"success": False, "view_id": spec.view_id, "error": str(exc)}, ensure_ascii=False, sort_keys=True))
         return 1
+    finally:
+        if lock_client is not None:
+            lock_client.close()

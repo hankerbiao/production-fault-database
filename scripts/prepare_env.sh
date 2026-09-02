@@ -145,8 +145,7 @@ else
   # Point sync commands at this checkout so the generated config works locally.
   sed -i.bak \
     -e "s#^SYNC_PYTHON=.*#SYNC_PYTHON=${VENV_DIR}/bin/python#" \
-    -e "s#^SYNC_SCRIPT_PATH=.*#SYNC_SCRIPT_PATH=${ROOT_DIR}/sync_sales_orders.py#" \
-    -e "s#^SYNC_VIEW_SCRIPT_DIR=.*#SYNC_VIEW_SCRIPT_DIR=${ROOT_DIR}#" \
+    -e "s#^SYNC_SCRIPT_DIR=.*#SYNC_SCRIPT_DIR=${ROOT_DIR}#" \
     -e 's#^PORT=.*#PORT=18080#' \
     "$ENV_FILE"
   rm -f "${ENV_FILE}.bak"

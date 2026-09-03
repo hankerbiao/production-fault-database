@@ -212,9 +212,13 @@ def export_workbook(
             text=True,
             env=environment,
         )
-    if not completed.stdout.strip():
+    stdout = completed.stdout.lstrip("\ufeff").strip()
+    if not stdout:
         raise RuntimeError(f"工作簿写入器未返回结果: {completed.stderr.strip() or '无标准错误输出'}")
-    return json.loads(completed.stdout)
+    try:
+        return json.loads(stdout.rsplit("\n", maxsplit=1)[-1])
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"工作簿写入器返回了无效结果: {stdout[:500]!r}") from exc
 
 
 def main() -> int:

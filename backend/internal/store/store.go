@@ -96,6 +96,7 @@ type StatsResult struct {
 	WithRepairPerson       int64  `json:"withRepairPerson"`
 	SalesOrders            int64  `json:"salesOrders"`
 	ProductionOrders       int64  `json:"productionOrders"`
+	HostBarcodes           int64  `json:"hostBarcodes"`
 	MissingSalesOrder      int64  `json:"missingSalesOrder"`
 	MissingProductionOrder int64  `json:"missingProductionOrder"`
 	DataStartDate          string `json:"dataStartDate"`
@@ -167,6 +168,8 @@ type ViewListResult struct {
 }
 type ViewStatsResult struct {
 	Total                  int64  `json:"total"`
+	SalesOrders            int64  `json:"salesOrders"`
+	ProductionOrders       int64  `json:"productionOrders"`
 	MissingSalesOrder      int64  `json:"missingSalesOrder"`
 	MissingProductionOrder int64  `json:"missingProductionOrder"`
 	DataStartDate          string `json:"dataStartDate"`
@@ -342,7 +345,7 @@ func (s *Store) Stats(ctx context.Context, f Filters) (StatsResult, error) {
 		return StatsResult{}, nil
 	}
 	row := rows[0]
-	return StatsResult{Total: int64(number(row["total"])), WithError: int64(number(row["withError"])), WithRepairPerson: int64(number(row["withRepairPerson"])), SalesOrders: int64(number(row["salesOrders"])), ProductionOrders: int64(number(row["productionOrders"])), MissingSalesOrder: int64(number(row["missingSalesOrder"])), MissingProductionOrder: int64(number(row["missingProductionOrder"])), DataStartDate: firstText(row, "dataStartDate"), DataEndDate: firstText(row, "dataEndDate"), LatestSyncedAt: firstText(row, "latestSyncedAt")}, nil
+	return StatsResult{Total: int64(number(row["total"])), WithError: int64(number(row["withError"])), WithRepairPerson: int64(number(row["withRepairPerson"])), SalesOrders: int64(number(row["salesOrders"])), ProductionOrders: int64(number(row["productionOrders"])), HostBarcodes: int64(number(row["hostBarcodes"])), MissingSalesOrder: int64(number(row["missingSalesOrder"])), MissingProductionOrder: int64(number(row["missingProductionOrder"])), DataStartDate: firstText(row, "dataStartDate"), DataEndDate: firstText(row, "dataEndDate"), LatestSyncedAt: firstText(row, "latestSyncedAt")}, nil
 }
 
 func (s *Store) OrderStats(ctx context.Context, f OrderFilters) (OrderStatsResult, error) {
@@ -770,13 +773,14 @@ func repairStatsPipeline(filter bson.M) mongo.Pipeline {
 			"withRepairPerson":       bson.M{"$sum": bson.M{"$cond": bson.A{nonEmpty("U_FIX"), 1, 0}}},
 			"missingSalesOrder":      bson.M{"$sum": bson.M{"$cond": bson.A{missing("VBELN"), 1, 0}}},
 			"missingProductionOrder": bson.M{"$sum": bson.M{"$cond": bson.A{missing("AUFNR"), 1, 0}}},
-			"salesOrderValues":       bson.M{"$addToSet": "$VBELN"}, "productionOrderValues": bson.M{"$addToSet": "$AUFNR"},
+			"salesOrderValues":       bson.M{"$addToSet": "$VBELN"}, "productionOrderValues": bson.M{"$addToSet": "$AUFNR"}, "hostBarcodeValues": bson.M{"$addToSet": "$PCODE"},
 			"dataStartDate": bson.M{"$min": "$ZDATE_WX"}, "dataEndDate": bson.M{"$max": "$ZDATE_WX"}, "latestSyncedAt": bson.M{"$max": "$_synced_at"},
 		}}},
 		{{Key: "$project", Value: bson.M{
 			"_id": 0, "total": 1, "withError": 1, "withRepairPerson": 1, "missingSalesOrder": 1, "missingProductionOrder": 1, "dataStartDate": 1, "dataEndDate": 1,
 			"salesOrders":      bson.M{"$size": bson.M{"$setDifference": bson.A{"$salesOrderValues", bson.A{"", nil}}}},
 			"productionOrders": bson.M{"$size": bson.M{"$setDifference": bson.A{"$productionOrderValues", bson.A{"", nil}}}},
+			"hostBarcodes":     bson.M{"$size": bson.M{"$setDifference": bson.A{"$hostBarcodeValues", bson.A{"", nil}}}},
 			"latestSyncedAt":   bson.M{"$dateToString": bson.M{"date": "$latestSyncedAt", "format": "%Y-%m-%dT%H:%M:%SZ", "timezone": "UTC"}},
 		}}},
 	}
@@ -1132,6 +1136,8 @@ func (s *Store) ViewStats(ctx context.Context, viewID string, f ViewFilters) (Vi
 	}
 	if len(rows) > 0 {
 		result.DataStartDate, result.DataEndDate = firstText(rows[0], "dataStartDate"), firstText(rows[0], "dataEndDate")
+		result.SalesOrders = int64(number(rows[0]["salesOrders"]))
+		result.ProductionOrders = int64(number(rows[0]["productionOrders"]))
 		result.MissingSalesOrder = int64(number(rows[0]["missingSalesOrder"]))
 		result.MissingProductionOrder = int64(number(rows[0]["missingProductionOrder"]))
 		if value, ok := rows[0]["latestSyncedAt"]; ok && value != nil {
@@ -1161,6 +1167,15 @@ func viewStatsPipeline(viewID string, filter bson.M, dateField string) mongo.Pip
 		group["missingProductionOrder"] = bson.M{"$sum": bson.M{"$cond": bson.A{emptyViewField("AUFNR"), 1, 0}}}
 		project["missingSalesOrder"] = 1
 		project["missingProductionOrder"] = 1
+	} else if viewID == "ZSGV_ZSD124" {
+		group["productionOrderValues"] = bson.M{"$addToSet": normalizedViewField("AUFNR_1")}
+		group["salesOrderValues"] = bson.M{"$addToSet": normalizedViewField("VBELN_EX")}
+		group["missingProductionOrder"] = bson.M{"$sum": bson.M{"$cond": bson.A{emptyViewField("AUFNR_1"), 1, 0}}}
+		group["missingSalesOrder"] = bson.M{"$sum": bson.M{"$cond": bson.A{emptyViewField("VBELN_EX"), 1, 0}}}
+		project["productionOrders"] = bson.M{"$size": bson.M{"$setDifference": bson.A{"$productionOrderValues", bson.A{""}}}}
+		project["salesOrders"] = bson.M{"$size": bson.M{"$setDifference": bson.A{"$salesOrderValues", bson.A{""}}}}
+		project["missingProductionOrder"] = 1
+		project["missingSalesOrder"] = 1
 	}
 	return mongo.Pipeline{
 		{{Key: "$match", Value: filter}},
@@ -1170,12 +1185,13 @@ func viewStatsPipeline(viewID string, filter bson.M, dateField string) mongo.Pip
 }
 
 func emptyViewField(field string) bson.M {
-	return bson.M{"$eq": bson.A{
-		bson.M{"$trim": bson.M{"input": bson.M{"$convert": bson.M{
-			"input": "$" + field, "to": "string", "onError": "", "onNull": "",
-		}}}},
-		"",
-	}}
+	return bson.M{"$eq": bson.A{normalizedViewField(field), ""}}
+}
+
+func normalizedViewField(field string) bson.M {
+	return bson.M{"$trim": bson.M{"input": bson.M{"$convert": bson.M{
+		"input": "$" + field, "to": "string", "onError": "", "onNull": "",
+	}}}}
 }
 
 func viewFilter(viewID string, f ViewFilters, searchFields []string, dateField string) bson.M {
@@ -1313,6 +1329,35 @@ var serialBindingFieldLabels = map[string]string{
 	"PRODH":      "产品层次（PRODH）",
 }
 
+var bomPostingFieldOrder = []string{
+	"MANDT", "WERKS", "MATNR", "BWART", "BUDAT_MKPF", "LGORT", "MENGE_A", "KUNNR_A", "MAKTX", "NAME1_A",
+	"TYPE", "VGBEL_A", "VGPOS_A", "MATNR_SC", "MATKX_SC2", "AUFNR_1", "POSNR_EX", "VBELN_EX", "KUNNR_EX", "NAME1_EX",
+	"AUART", "KUNNR_1", "NAME1_X", "MAKTX_CP", "MATNR_CP", "PSMNG", "MATKL", "CXFLG", "WGBEZ", "CPX",
+	"BU", "MATNR_BI", "ZSTAT", "MBLNR", "MJAHR", "ZEILE", "FDATU_O", "DATE_JH_O", "ETENR_O", "MAT_KDAUF",
+	"MAT_KDPOS", "VGBEL", "VGPOS", "KUNNR", "NAME1", "MENGE", "USNAM_MKPF", "VSNMR_V", "ZNAM",
+}
+
+var bomPostingFieldLabels = map[string]string{
+	"MANDT": "集团", "WERKS": "工厂", "MATNR": "物料号", "BWART": "移动类型", "BUDAT_MKPF": "过账日期",
+	"LGORT": "库存地点", "MENGE_A": "过账数量", "KUNNR_A": "关联客户编号", "MAKTX": "物料描述", "NAME1_A": "关联客户名称",
+	"TYPE": "业务类型", "VGBEL_A": "关联前序单据", "VGPOS_A": "关联前序单据行项目", "MATNR_SC": "子件物料号", "MATKX_SC2": "子件物料描述",
+	"AUFNR_1": "生产订单", "POSNR_EX": "销售订单行项目", "VBELN_EX": "销售订单", "KUNNR_EX": "销售订单客户编号", "NAME1_EX": "销售订单客户名称",
+	"AUART": "订单类型", "KUNNR_1": "客户编号", "NAME1_X": "客户名称", "MAKTX_CP": "成品物料描述", "MATNR_CP": "成品物料号",
+	"PSMNG": "需求数量", "MATKL": "物料组", "CXFLG": "冲销标识", "WGBEZ": "物料组描述", "CPX": "公司",
+	"BU": "事业部", "MATNR_BI": "BOM物料号", "ZSTAT": "状态", "MBLNR": "物料凭证号", "MJAHR": "物料凭证年度",
+	"ZEILE": "物料凭证行项目", "FDATU_O": "交货日期", "DATE_JH_O": "计划交货日期", "ETENR_O": "计划行", "MAT_KDAUF": "物料销售订单",
+	"MAT_KDPOS": "物料销售订单行项目", "VGBEL": "前序单据", "VGPOS": "前序单据行项目", "KUNNR": "客户编号", "NAME1": "客户名称",
+	"MENGE": "数量", "USNAM_MKPF": "过账用户", "VSNMR_V": "版本号", "ZNAM": "名称",
+}
+
+var viewMetadataFieldLabels = map[string]string{
+	"_source_key":   "源记录键",
+	"_source_view":  "源视图",
+	"_scope_run_id": "清理批次标识",
+	"_sync_run_id":  "同步批次标识",
+	"_synced_at":    "同步时间",
+}
+
 func viewDetailFields(viewID string, doc bson.M) []Field {
 	keys := make([]string, 0, len(doc))
 	seen := make(map[string]bool, len(doc))
@@ -1323,6 +1368,11 @@ func viewDetailFields(viewID string, doc bson.M) []Field {
 		}
 	} else if viewID == "ZSGV_ZPP_SERNOLIST" {
 		keys = append(keys, serialBindingFieldOrder...)
+		for _, key := range keys {
+			seen[key] = true
+		}
+	} else if viewID == "ZSGV_ZSD124" {
+		keys = append(keys, bomPostingFieldOrder...)
 		for _, key := range keys {
 			seen[key] = true
 		}
@@ -1340,12 +1390,19 @@ func viewDetailFields(viewID string, doc bson.M) []Field {
 		value := doc[key]
 		if value != nil {
 			label := "字段 / Field（" + key + "）"
+			if translated, ok := viewMetadataFieldLabels[key]; ok {
+				label = translated
+			}
 			if viewID == "Z_V_ZMES_T_001" {
 				if translated, ok := stationFieldLabels[key]; ok {
 					label = translated
 				}
 			} else if viewID == "ZSGV_ZPP_SERNOLIST" {
 				if translated, ok := serialBindingFieldLabels[key]; ok {
+					label = translated
+				}
+			} else if viewID == "ZSGV_ZSD124" {
+				if translated, ok := bomPostingFieldLabels[key]; ok {
 					label = translated
 				}
 			}

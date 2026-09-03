@@ -112,6 +112,33 @@ func TestStationViewStatsPipelineCountsMissingOrders(t *testing.T) {
 	}
 }
 
+func TestBOMViewStatsPipelineCountsDistinctOrders(t *testing.T) {
+	pipeline := viewStatsPipeline("ZSGV_ZSD124", bson.M{"MATNR": "MAT-1"}, "BUDAT_MKPF")
+	group := pipeline[1].Map()["$group"].(bson.M)
+	project := pipeline[2].Map()["$project"].(bson.M)
+	if _, ok := group["productionOrderValues"]; !ok {
+		t.Fatalf("group=%v", group)
+	}
+	if _, ok := group["salesOrderValues"]; !ok {
+		t.Fatalf("group=%v", group)
+	}
+	if _, ok := project["productionOrders"]; !ok {
+		t.Fatalf("project=%v", project)
+	}
+	if _, ok := project["salesOrders"]; !ok {
+		t.Fatalf("project=%v", project)
+	}
+	if _, ok := group["missingProductionOrder"]; !ok {
+		t.Fatalf("group=%v", group)
+	}
+	if _, ok := group["missingSalesOrder"]; !ok {
+		t.Fatalf("group=%v", group)
+	}
+	if project["missingProductionOrder"] != 1 || project["missingSalesOrder"] != 1 {
+		t.Fatalf("project=%v", project)
+	}
+}
+
 func TestOrderStatsPipelineExposesMachineQuantity(t *testing.T) {
 	pipeline := orderStatsPipeline(orderFilter(OrderFilters{Source: "SG"}))
 	project := pipeline[2].Map()["$project"].(bson.M)
@@ -180,5 +207,33 @@ func TestSerialBindingDetailFieldsUseBilingualLabelsAndOrder(t *testing.T) {
 	}
 	if fields[0].Label != "大刀/机头序列号（ZCODE_HEAD）" {
 		t.Fatalf("unexpected label=%q", fields[0].Label)
+	}
+}
+
+func TestBOMPostingDetailFieldsUseChineseLabelsAndOrder(t *testing.T) {
+	if len(bomPostingFieldOrder) != len(bomPostingFieldLabels) {
+		t.Fatalf("BOM field order and labels differ: %d != %d", len(bomPostingFieldOrder), len(bomPostingFieldLabels))
+	}
+	for _, key := range bomPostingFieldOrder {
+		if bomPostingFieldLabels[key] == "" {
+			t.Fatalf("missing Chinese label for BOM field %q", key)
+		}
+	}
+	doc := bson.M{
+		"VBELN_EX": "SO-1", "MENGE_A": "2", "MBLNR": "50000001", "MATNR": "MAT-1", "AUFNR_1": "PO-1",
+		"_source_key": "bom-1", "_synced_at": "2026-09-03T00:00:00Z", "_id": "ignored",
+	}
+	fields := viewDetailFields("ZSGV_ZSD124", doc)
+	if len(fields) != 7 {
+		t.Fatalf("fields=%+v", fields)
+	}
+	want := []struct{ key, label string }{
+		{"MATNR", "物料号"}, {"MENGE_A", "过账数量"}, {"AUFNR_1", "生产订单"}, {"VBELN_EX", "销售订单"},
+		{"MBLNR", "物料凭证号"}, {"_source_key", "源记录键"}, {"_synced_at", "同步时间"},
+	}
+	for index, expected := range want {
+		if fields[index].Key != expected.key || fields[index].Label != expected.label {
+			t.Fatalf("field %d=%+v, want %+v", index, fields[index], expected)
+		}
 	}
 }

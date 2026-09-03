@@ -179,6 +179,7 @@ GET /api/data-status
 | `withRepairPerson` | integer | `U_FIX` 非空的记录数 |
 | `salesOrders` | integer | 去重后的非空 `VBELN` 数 |
 | `productionOrders` | integer | 去重后的非空 `AUFNR` 数 |
+| `hostBarcodes` | integer | 去重后的非空主机条码 `PCODE` 数 |
 | `missingSalesOrder` | integer | `VBELN` 为空、null 或不存在的记录数 |
 | `missingProductionOrder` | integer | `AUFNR` 为空、null 或不存在的记录数 |
 | `dataStartDate` / `dataEndDate` | string | 当前结果的 `ZDATE_WX` 最小/最大值 |
@@ -238,6 +239,8 @@ GET /api/views/{viewID}/detail?id={id}
 ```json
 {
   "total": 1250,
+  "salesOrders": 80,
+  "productionOrders": 112,
   "missingSalesOrder": 23,
   "missingProductionOrder": 8,
   "dataStartDate": "20260101",
@@ -245,6 +248,8 @@ GET /api/views/{viewID}/detail?id={id}
   "latestSyncedAt": "2026-02-01T02:00:00Z"
 }
 ```
+
+对于 `ZSGV_ZSD124`，`salesOrders` 按非空 `VBELN_EX` 去重，`productionOrders` 按非空 `AUFNR_1` 去重；`missingSalesOrder` 和 `missingProductionOrder` 分别统计这两个字段为空、`null` 或不存在的 BOM 行。其他视图的订单去重统计返回 `0`。
 
 `missingSalesOrder` 与 `missingProductionOrder` 仅对工位记录 `Z_V_ZMES_T_001` 有效，分别统计 `KDAUF`、`AUFNR` 缺失、`null`、空字符串或仅空格的记录；其他视图返回 `0`。无日期字段的 `ZSGV_ZPP_SERNOLIST` 只返回 `total`，日期和同步时间为空字符串。
 
@@ -265,6 +270,8 @@ GET /api/views/{viewID}/detail?id={id}
 | `AUFNR_HEAD` | 大刀/机头生产订单号（Head production order） |
 | `AUFNR_ITEM` | 小刀/BOX生产订单号（Item/BOX production order） |
 | `PRODH` | 产品层次（Product hierarchy） |
+
+`ZSGV_ZSD124` 的 BOM 过账详情字段使用业务中文标签，例如 `MBLNR` 为“物料凭证号”、`MJAHR` 为“物料凭证年度”、`ZEILE` 为“物料凭证行项目”、`MATNR` 为“物料号”、`BWART` 为“移动类型”、`MENGE_A` 为“过账数量”、`AUFNR_1` 为“生产订单”、`VBELN_EX` 为“销售订单”、`BUDAT_MKPF` 为“过账日期”。同步审计字段也会显示为“源记录键”“源视图”“同步批次标识”“同步时间”等中文标签。
 
 其他未定义字段使用“字段 / Field（字段名）”格式。未知 `viewID` 返回 `400`，缺少 `id` 返回 `400`，记录不存在返回 `404`。
 

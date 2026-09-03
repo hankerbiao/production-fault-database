@@ -3,7 +3,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { App } from './main.jsx';
 
-const faultStats = { total: 1, withError: 1, withRepairPerson: 1, salesOrders: 1, productionOrders: 1, missingSalesOrder: 0, missingProductionOrder: 0, dataStartDate: '20260101', dataEndDate: '20260102', latestSyncedAt: '2026-01-02T03:04:05Z' };
+const faultStats = { total: 1, withError: 1, withRepairPerson: 1, salesOrders: 1, productionOrders: 1, hostBarcodes: 1, missingSalesOrder: 0, missingProductionOrder: 0, dataStartDate: '20260101', dataEndDate: '20260102', latestSyncedAt: '2026-01-02T03:04:05Z' };
 const orderStats = { total: 1, salesOrders: 1, sg: 1, kk: 0, orderQuantity: 3, machineQuantity: 3, storageQuantity: 2, dataStartDate: '20260101', dataEndDate: '20260102', latestSyncedAt: '2026-01-02T03:04:05Z' };
 
 function mockFetch({ fail = false } = {}) {
@@ -18,6 +18,8 @@ function mockFetch({ fail = false } = {}) {
     if (String(url).startsWith('/api/views/Z_V_ZMES_T_001?')) return { ok: true, json: async () => ({ items: [{ id: 'station-1', HISTROYID: 'H-1', PCODE: 'PC-1', OCODE: 'OC-1', AUFNR: 'PO-1', SPEC: 'OP-10', OPERATION: '装配', GSTRS: '20260102', ACTUAL_START_TIME: '2026-01-02 03:04:05', ACTUAL_END_TIME: '2026-01-02 03:05:05' }], total: 1 }) };
     if (String(url).startsWith('/api/views/Z_V_ZMES_T_001/stats')) return { ok: true, json: async () => ({ total: 1, missingSalesOrder: 3, missingProductionOrder: 2, dataStartDate: '20260102', dataEndDate: '20260102', latestSyncedAt: '2026-01-02T03:04:05Z' }) };
     if (String(url).startsWith('/api/views/Z_V_ZMES_T_001/detail')) return { ok: true, json: async () => ({ fields: [{ key: 'PCODE', label: '主机序列号', value: 'PC-1' }, { key: 'PRODH', label: '产品层次', value: '00100' }] }) };
+    if (String(url).startsWith('/api/views/ZSGV_ZSD124/stats')) return { ok: true, json: async () => ({ total: 2, salesOrders: 1, productionOrders: 2, missingSalesOrder: 3, missingProductionOrder: 4, dataStartDate: '20260102', dataEndDate: '20260102', latestSyncedAt: '2026-01-02T03:04:05Z' }) };
+    if (String(url).startsWith('/api/views/ZSGV_ZSD124/detail')) return { ok: true, json: async () => ({ fields: [{ key: 'MATNR', label: '物料号', value: 'MAT-1' }] }) };
     if (String(url).startsWith('/api/views/ZSGV_ZPP_SERNOLIST?')) return { ok: true, json: async () => ({ items: [{ id: 'serial-1', ZCODE_HEAD: 'HEAD-1', ZCODE_ITEM: 'ITEM-1', AUFNR_HEAD: 'PO-H', AUFNR_ITEM: 'PO-I', PRODH: '00100' }], total: 1 }) };
     if (String(url).startsWith('/api/views/ZSGV_ZPP_SERNOLIST/stats')) return { ok: true, json: async () => ({ total: 1, dataStartDate: '', dataEndDate: '', latestSyncedAt: '' }) };
     if (String(url).startsWith('/api/views/ZSGV_ZPP_SERNOLIST/detail')) return { ok: true, json: async () => ({ fields: [{ key: 'ZCODE_HEAD', label: '大刀/机头序列号（ZCODE_HEAD）', value: 'HEAD-1' }] }) };
@@ -34,6 +36,7 @@ describe('operations workbench', () => {
     expect(await screen.findByRole('heading', { name: '维修故障记录' })).toBeInTheDocument();
     expect(screen.getByText('SAP HANA 视图 ZSGV_ZZT_WLJL', { exact: false })).toBeInTheDocument();
     expect(screen.getByRole('columnheader', { name: '计划开始时间' })).toBeInTheDocument();
+    expect(screen.getByText('主机条码数量（去重）')).toBeInTheDocument();
     expect((await screen.findAllByText('PC-1')).length).toBeGreaterThan(0);
     fireEvent.click(screen.getAllByTitle('查看完整数据库字段')[0]);
     expect(await screen.findByText('SN-1')).toBeInTheDocument();
@@ -118,6 +121,17 @@ describe('operations workbench', () => {
     expect(screen.getByRole('columnheader', { name: '大刀/机头序列号（ZCODE_HEAD）' })).toBeInTheDocument();
     fireEvent.click(screen.getAllByTitle(/查看完整数据库字段/)[0]);
     expect(await screen.findByText('大刀/机头序列号（ZCODE_HEAD）')).toBeInTheDocument();
+  });
+
+  it('shows BOM production and sales order summaries', async () => {
+    vi.stubGlobal('fetch', mockFetch());
+    render(<App />);
+    fireEvent.click(screen.getByRole('button', { name: /订单过账/ }));
+    expect(await screen.findByRole('heading', { name: '订单 BOM 过账' })).toBeInTheDocument();
+    expect(screen.getByText('生产订单数量（去重）').parentElement).toHaveTextContent('2');
+    expect(screen.getByText('销售订单数量（去重）').parentElement).toHaveTextContent('1');
+    expect(screen.getByText('销售订单为空').parentElement).toHaveTextContent('3');
+    expect(screen.getByText('生产订单为空').parentElement).toHaveTextContent('4');
   });
 
   it('shows a loading state while a view is fetching', async () => {

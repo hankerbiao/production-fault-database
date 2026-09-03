@@ -111,6 +111,120 @@ python repair_records.py --mode incremental --dry-run
 python repair_records.py --mode incremental --apply
 ```
 
+### 工位记录回填维修订单
+
+`scripts/maintenance/增量同步和清洗维修故障记录.py` 是一个独立的回填脚本，不执行
+删除或其他清洗。它从工位记录表构建集合 A：仅保留
+`PCODE`、`AUFNR`、`KDAUF` 均非空且同一 `PCODE` 仅对应一个不同 `(AUFNR, KDAUF)`
+组合的数据。发生多订单冲突的序列号会在汇总中计数并跳过。随后脚本只处理维修表中
+`VBELN` 缺失、`null`、空串或仅空白的记录，并同时回填 `AUFNR` 和 `VBELN`。
+
+默认是只读预览，JSON 摘要会包含进度统计和最多 20 条回填样本：
+
+```bash
+.venv/bin/python scripts/maintenance/增量同步和清洗维修故障记录.py --dry-run
+```
+
+确认预览后执行回填：
+
+```bash
+.venv/bin/python scripts/maintenance/增量同步和清洗维修故障记录.py --apply
+```
+
+可使用 `--preview-limit 50` 调整样本数、`--batch-size 1000` 调整批大小、
+`--no-progress` 关闭终端进度条。脚本会输出集合 A 大小、冲突 SN 数、维修候选数、
+预期更新数、实际更新数和样本明细。
+
+对于工位表未命中的 SN，可额外启用维修表内部回填：脚本会从维修表中已有完整
+`AUFNR + VBELN` 的记录构建集合 B，并仅在同一 PCODE 只有一个订单组合时，用它回填
+同一 PCODE 的空销售订单记录。集合 A 始终优先，集合 B 中存在多个不同订单组合的 PCODE
+会跳过。先预览：
+
+```bash
+.venv/bin/python scripts/maintenance/增量同步和清洗维修故障记录.py --dry-run --repair-pcode-fallback
+```
+
+确认后执行：
+
+```bash
+.venv/bin/python scripts/maintenance/增量同步和清洗维修故障记录.py --apply --repair-pcode-fallback
+```
+
+对于集合 A/B 都没有命中且 `AUFNR` 为空的维修记录，可启用 SAP SN 查询作为第三级来源。
+脚本固定使用 `ZSIMS_CL_INBOUND_SN_INFO`，优先查询 KK（client 600），仅对未命中的
+PCODE 查询 SG（client 800）。该模式只回填当前为空的 AUFNR，始终保留原有 VBELN（包括空值）；
+不会因 SAP 查询覆盖已有生产订单或写入推断出的销售订单。先预览：
+
+```bash
+.venv/bin/python scripts/maintenance/增量同步和清洗维修故障记录.py --dry-run --sap-pcode-fallback
+```
+
+确认后执行：
+
+```bash
+.venv/bin/python scripts/maintenance/增量同步和清洗维修故障记录.py --apply --sap-pcode-fallback
+```
+
+在 SAP 查询补齐生产订单后，可再加 `--sales-order-fallback`。脚本会从已同步的
+`sales_orders_sap` 销售订单明细中建立唯一 `AUFNR -> VBELN` 索引：已有 `AUFNR` 的维修记录
+直接补销售订单；本次 SAP 查得 `AUFNR` 的记录先反查销售订单，反查不到时仅写入 AUFNR。
+同一生产订单对应多个不同销售订单时不会写入。执行前应先完成销售订单明细同步，推荐完整预览：
+
+```bash
+.venv/bin/python scripts/maintenance/增量同步和清洗维修故障记录.py \
+  --dry-run --repair-pcode-fallback --sap-pcode-fallback --sales-order-fallback
+```
+
+确认 JSON 中的 `sales_order_detail_matches`、`sap_sales_order_detail_matches`、
+`sales_detail_ambiguous_production_orders` 后执行实际写入：
+
+```bash
+.venv/bin/python scripts/maintenance/增量同步和清洗维修故障记录.py \
+  --apply --repair-pcode-fallback --sap-pcode-fallback --sales-order-fallback
+```
+
+#### 一键订单修复
+
+作为完整的维修故障记录订单修复流程，依赖表必须先于维修表最终回填完成同步：先更新
+`sales_orders_sap` 和 `station_records_sap`。本脚本可通过 `--sync-repair-hana` 增量同步
+HANA 维修故障记录，随后才读取依赖表并回填 `repair_records_sap`。它不触发销售订单或工位表同步，
+也不会删除维修记录。
+
+`--one-click` 会按以下顺序启用全部确定性来源：工位集合 A、维修记录集合 B、SAP SN 批量查询、
+销售订单明细 `AUFNR -> VBELN` 反查。实际写入默认将每一条变更写入
+`repair_order_backfill_audit`（可通过环境变量 `REPAIR_ORDER_BACKFILL_AUDIT_COLLECTION` 修改），
+审计记录按 `run_id:repair_id` 唯一保存变更前后值和来源。
+
+先预览：
+
+```bash
+.venv/bin/python scripts/maintenance/增量同步和清洗维修故障记录.py \
+  --dry-run --one-click --preview-limit 50
+```
+
+确认后一次执行回填：
+
+```bash
+.venv/bin/python scripts/maintenance/增量同步和清洗维修故障记录.py \
+  --apply --one-click
+```
+
+需要在同一条命令内先增量同步 HANA 维修故障记录、再回填订单字段时，使用：
+
+```bash
+.venv/bin/python scripts/maintenance/增量同步和清洗维修故障记录.py \
+  --apply --sync-repair-hana --one-click
+```
+
+该模式的顺序固定为：HANA 增量写入维修表、构建订单来源并回填空字段、提交 HANA 维修水位线。
+订单回填或 SAP 查询失败时不会提交 HANA 水位线，下一次会在回看窗口内重新同步；全程仅新增或更新
+维修记录和审计记录，不执行删除。可用 `--sync-end-date YYYY-MM-DD` 和
+`--sync-lookback-days 7` 控制 HANA 增量范围。
+
+保护规则：已有 `AUFNR` 与工位/维修表来源不一致时不会覆盖；同一 AUFNR 对应多个 VBELN 时不会写入；
+SAP SN 存在任一失败批次时，`--apply` 会在写入前停止。只有明确接受部分 SAP 结果时才使用
+`--allow-partial-sap`。
+
 全量同步必须传入 `--start-date`。全量数据先按本次 `run_id` 写入，清洗成功后才删除未出现在本次
 运行中的旧数据并提交水位线；同步或清洗失败时不会删除旧数据，也不会推进水位线。增量清洗只处理
 本次同步写入的数据。每个命令输出含 `sync`、`cleanup`、`run_id` 和执行统计的 JSON 报告。

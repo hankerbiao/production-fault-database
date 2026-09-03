@@ -21,6 +21,23 @@ func TestRepairFilterEscapesRegexAndCombinesConditions(t *testing.T) {
 	}
 }
 
+func TestRepairPlannedDateRangeFilterSupportsISOAndSAPDates(t *testing.T) {
+	filter := repairFilter(Filters{TimeField: "planned", DateFrom: "2026-08-04", DateTo: "20260902"})
+	conditions := filter["$and"].(primitive.A)
+	branches := conditions[0].(bson.M)["$or"].(primitive.A)
+	if len(branches) != 2 {
+		t.Fatalf("date branches=%v", branches)
+	}
+	iso := branches[0].(bson.M)["GSTRS"].(bson.M)
+	if iso["$gte"] != "2026-08-04" || iso["$lte"] != "2026-09-02" {
+		t.Fatalf("ISO date range=%v", iso)
+	}
+	compact := branches[1].(bson.M)["GSTRS"].(bson.M)
+	if compact["$gte"] != "20260804" || compact["$lte"] != "20260902" {
+		t.Fatalf("compact date range=%v", compact)
+	}
+}
+
 func TestOrderFilterAndMissingField(t *testing.T) {
 	filter := orderFilter(OrderFilters{Source: "SG", GSTRSFrom: "2026-01-01", GSTRSTo: "2026-01-31", Keyword: "SO"})
 	if len(filter["$and"].(primitive.A)) != 3 {
@@ -77,9 +94,21 @@ func TestViewFilterIncludesEndDateForStationDatetimes(t *testing.T) {
 	}
 }
 
+func TestBOMViewFilterIncludesEmptySalesOrders(t *testing.T) {
+	filter := viewFilter("ZSGV_ZSD124", ViewFilters{MissingSalesOrder: true}, nil, "BUDAT_MKPF")
+	conditions := filter["$and"].(primitive.A)
+	if len(conditions) != 1 {
+		t.Fatalf("filter=%v", filter)
+	}
+	expr, ok := conditions[0].(bson.M)["$expr"].(bson.M)
+	if !ok || expr["$eq"] == nil {
+		t.Fatalf("empty sales order condition=%v", conditions[0])
+	}
+}
+
 func TestStatsUseSingleAggregationPipeline(t *testing.T) {
 	for name, pipeline := range map[string]mongo.Pipeline{
-		"repairs": repairStatsPipeline(repairFilter(Filters{HostBarcode: "PC-1"})),
+		"repairs": repairStatsPipeline(repairFilter(Filters{HostBarcode: "PC-1"}), "repair"),
 		"orders":  orderStatsPipeline(orderFilter(OrderFilters{Source: "SG"})),
 	} {
 		if len(pipeline) != 3 {
@@ -131,8 +160,14 @@ func TestBOMViewStatsPipelineCountsDistinctOrders(t *testing.T) {
 	if _, ok := group["missingProductionOrder"]; !ok {
 		t.Fatalf("group=%v", group)
 	}
+	if _, ok := group["missingProductionOrderValues"]; !ok {
+		t.Fatalf("group=%v", group)
+	}
 	if _, ok := group["missingSalesOrder"]; !ok {
 		t.Fatalf("group=%v", group)
+	}
+	if _, ok := project["missingProductionOrderDistinct"]; !ok {
+		t.Fatalf("project=%v", project)
 	}
 	if project["missingProductionOrder"] != 1 || project["missingSalesOrder"] != 1 {
 		t.Fatalf("project=%v", project)

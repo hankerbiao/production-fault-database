@@ -4,7 +4,7 @@ from datetime import date
 
 import pytest
 
-from scripts.maintenance import 增量同步和清洗维修故障记录 as backfill
+from scripts.sync import 增量同步和清洗维修故障记录 as backfill
 
 
 class Result:
@@ -36,8 +36,10 @@ class Collection:
         self.bulk_calls += 1
         changed = 0
         for operation in operations:
-            target = next(document for document in self.documents if document["_id"] == operation._filter["_id"])
-            if not backfill.text(target.get("VBELN")):
+            filters = operation._filter.get("$and", [operation._filter])
+            identity = next(item for item in filters if "_id" in item)
+            target = next(document for document in self.documents if document["_id"] == identity["_id"])
+            if any(not backfill.text(target.get(field)) for field in operation._doc["$set"]):
                 target.update(operation._doc["$set"])
                 changed += 1
         return Result(changed)
@@ -47,7 +49,17 @@ class Collection:
             return [dict(document) for document in self.documents]
         if "$or" not in query:
             raise AssertionError(f"Unexpected query: {query}")
-        return [dict(document) for document in self.documents if not backfill.text(document.get("VBELN"))]
+        missing_fields = set()
+
+        def collect_fields(condition):
+            if "$or" in condition:
+                for item in condition["$or"]:
+                    collect_fields(item)
+            else:
+                missing_fields.update(condition)
+
+        collect_fields(query)
+        return [dict(document) for document in self.documents if any(not backfill.text(document.get(field)) for field in missing_fields)]
 
 
 class AuditCollection:
@@ -85,6 +97,7 @@ def args(apply=False):
         repair_pcode_fallback=False,
         sap_pcode_fallback=False,
         sales_order_fallback=False,
+        planned_start_fallback=False,
         sales_order_collection="orders",
         one_click=False,
         allow_partial_sap=False,
@@ -121,7 +134,7 @@ def test_dry_run_builds_unique_collection_a_and_does_not_write():
 
     assert result["collection_a_size"] == 1
     assert result["station_ambiguous_sns"] == 1
-    assert result["repair_candidates"] == 4
+    assert result["repair_candidates"] == 5
     assert result["would_update"] == 1
     assert result["updated"] == 0
     assert result["preview"] == [{
@@ -129,6 +142,7 @@ def test_dry_run_builds_unique_collection_a_and_does_not_write():
         "source": "station",
         "AUFNR": {"before": "", "after": "P-1"},
         "VBELN": {"before": "", "after": "S-1"},
+        "GSTRS": {"before": "", "after": ""},
     }]
     assert db["repairs"].bulk_calls == 0
 
@@ -234,6 +248,46 @@ def test_sales_order_fallback_fills_sales_order_for_an_existing_production_order
     ]
 
 
+def test_planned_start_fallback_fills_empty_gstrs_from_sales_order_detail():
+    db = DB(
+        [],
+        [{"_id": "repair", "PCODE": "SN-1", "AUFNR": "000123", "VBELN": "S-123", "GSTRS": ""}],
+        [{"_id": "order", "aufnr": "123", "data": {"AUFNR": "123", "VBELN": "S-123", "GSTRS": "2026-09-01"}}],
+    )
+    workflow_args = args(apply=True)
+    workflow_args.planned_start_fallback = True
+
+    result = backfill.run_workflow(db, workflow_args)
+
+    assert result["planned_start_unique_production_orders"] == 1
+    assert result["planned_start_candidates"] == 1
+    assert result["planned_start_matches"] == 1
+    assert result["updated"] == 1
+    assert db["repairs"].documents == [
+        {"_id": "repair", "PCODE": "SN-1", "AUFNR": "000123", "VBELN": "S-123", "GSTRS": "2026-09-01"},
+    ]
+
+
+def test_planned_start_fallback_skips_ambiguous_sales_order_dates():
+    db = DB(
+        [],
+        [{"_id": "repair", "PCODE": "SN-1", "AUFNR": "123", "VBELN": "S-123", "GSTRS": ""}],
+        [
+            {"_id": "order-1", "aufnr": "123", "data": {"AUFNR": "123", "VBELN": "S-123", "GSTRS": "2026-09-01"}},
+            {"_id": "order-2", "aufnr": "123", "data": {"AUFNR": "123", "VBELN": "S-123", "GSTRS": "2026-09-02"}},
+        ],
+    )
+    workflow_args = args(apply=True)
+    workflow_args.planned_start_fallback = True
+
+    result = backfill.run_workflow(db, workflow_args)
+
+    assert result["planned_start_ambiguous_production_orders"] == 1
+    assert result["planned_start_matches"] == 0
+    assert result["updated"] == 0
+    assert db["repairs"].documents[0]["GSTRS"] == ""
+
+
 def test_sales_order_fallback_combines_sap_production_order_with_sales_detail():
     db = DB(
         [],
@@ -311,6 +365,17 @@ def test_one_click_enables_every_backfill_source():
     assert result["station_matches"] == 1
 
 
+def test_main_parser_defaults_to_hana_sync_and_complete_backfill():
+    parsed = backfill.build_parser().parse_args([])
+
+    assert parsed.sync_repair_hana is True
+    assert parsed.one_click is True
+
+    basic = backfill.build_parser().parse_args(["--skip-hana-sync", "--basic-backfill"])
+    assert basic.sync_repair_hana is False
+    assert basic.one_click is False
+
+
 def test_apply_stops_before_writing_when_sap_queries_fail():
     db = DB([], [{"_id": "repair", "PCODE": "SN-1", "AUFNR": "", "VBELN": ""}])
     workflow_args = args(apply=True)
@@ -352,8 +417,8 @@ def test_apply_persists_an_audit_record_for_each_repair_write():
         "repair_id": "repair",
         "PCODE": "SN-1",
         "source": "station",
-        "before": {"AUFNR": "", "VBELN": ""},
-        "after": {"AUFNR": "P-1", "VBELN": "S-1"},
+        "before": {"AUFNR": "", "VBELN": "", "GSTRS": ""},
+        "after": {"AUFNR": "P-1", "VBELN": "S-1", "GSTRS": ""},
         "fields": {"AUFNR": "P-1", "VBELN": "S-1"},
         "write_status": "attempted",
         "updated_at": ANY,

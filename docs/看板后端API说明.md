@@ -68,7 +68,7 @@ GET /api/faults/by-orders?productionOrders=PO001,PO002
 
 ### BOM 过账原始数据 `GET /api/views/ZSGV_ZSD124`
 
-支持 `productionOrder`、`salesOrder`、`productModel`、`materialCode`、`dateFrom`、`dateTo` 和分页参数，分别过滤 `AUFNR_1`、`VBELN_EX`、`MATNR`、`BUDAT_MKPF`。其中 `productModel` 在该视图按 `MATNR` 匹配。返回原始 BOM 行，包含 `MBLNR`、`MJAHR`、`ZEILE`、`MATNR`、`WERKS`、`BWART`、`MENGE_A`、`AUFNR_1`、`VBELN_EX`、`BUDAT_MKPF`；由调用方决定 LRR 或复合机型关联规则。
+支持 `productionOrder`、`salesOrder`、`productModel`、`materialCode`、`dateFrom`、`dateTo`、`missingSalesOrder` 和分页参数，分别过滤 `AUFNR_1`、`VBELN_EX`、`MATNR`、`BUDAT_MKPF`。`missingSalesOrder=true` 仅适用于 BOM 过账，匹配空白、`null` 或缺失的 `VBELN_EX`。其中 `productModel` 在该视图按 `MATNR` 匹配。返回原始 BOM 行，包含 `MBLNR`、`MJAHR`、`ZEILE`、`MATNR`、`WERKS`、`BWART`、`MENGE_A`、`AUFNR_1`、`VBELN_EX`、`BUDAT_MKPF`；由调用方决定 LRR 或复合机型关联规则。
 
 ### 详情与数据状态
 
@@ -118,7 +118,7 @@ GET /api/data-status
 
 #### `GET /api/faults`
 
-分页查询维修记录。数据按 `ZDATE_WX`、`ZTIME` 倒序排列。
+分页查询维修记录。`timeField=planned` 时按计划生产时间 `GSTRS` 倒序并优先展示已填计划时间的记录；`timeField=repair` 或未传时按 `ZDATE_WX`、`ZTIME` 倒序排列。
 
 查询参数：
 
@@ -132,6 +132,7 @@ GET /api/data-status
 | `ngStation` | string | 精确匹配 NG 工站 `ZNGGZ` |
 | `salesOrder` | string | 精确匹配销售订单 `VBELN` |
 | `productionOrder` | string | 精确匹配生产订单 `AUFNR` |
+| `timeField` | string | 时间筛选和排序字段：`planned` 为计划生产时间 `GSTRS`，`repair` 为维修时间 `ZDATE_WX`；未传时为 `repair` |
 
 响应示例：
 
@@ -243,13 +244,14 @@ GET /api/views/{viewID}/detail?id={id}
   "productionOrders": 112,
   "missingSalesOrder": 23,
   "missingProductionOrder": 8,
+  "missingProductionOrderDistinct": 6,
   "dataStartDate": "20260101",
   "dataEndDate": "20260131",
   "latestSyncedAt": "2026-02-01T02:00:00Z"
 }
 ```
 
-对于 `ZSGV_ZSD124`，`salesOrders` 按非空 `VBELN_EX` 去重，`productionOrders` 按非空 `AUFNR_1` 去重；`missingSalesOrder` 和 `missingProductionOrder` 分别统计这两个字段为空、`null` 或不存在的 BOM 行。其他视图的订单去重统计返回 `0`。
+对于 `ZSGV_ZSD124`，`salesOrders` 按非空 `VBELN_EX` 去重，`productionOrders` 按非空 `AUFNR_1` 去重；`missingSalesOrder` 和 `missingProductionOrder` 分别统计这两个字段为空、`null` 或不存在的 BOM 行；`missingProductionOrderDistinct` 统计生产订单为空的 BOM 行按非空销售订单 `VBELN_EX` 去重后的数量，销售订单也为空时按 `_source_key` 计数。其他视图的订单去重统计返回 `0`。
 
 `missingSalesOrder` 与 `missingProductionOrder` 仅对工位记录 `Z_V_ZMES_T_001` 有效，分别统计 `KDAUF`、`AUFNR` 缺失、`null`、空字符串或仅空格的记录；其他视图返回 `0`。无日期字段的 `ZSGV_ZPP_SERNOLIST` 只返回 `total`，日期和同步时间为空字符串。
 

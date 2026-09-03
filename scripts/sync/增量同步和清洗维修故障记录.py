@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Backfill repair AUFNR/VBELN from unambiguous station-record PCODE mappings."""
+"""Incrementally synchronize and clean repair records through one workflow."""
 from __future__ import annotations
 
 import argparse
@@ -29,7 +29,7 @@ from scripts.sources.hana.hana_view_sync import (
     mongo_write_concern_summary,
     process_lock,
 )
-from scripts.sources.sap_http import sync_sales_orders
+from scripts.sync import sync_sales_orders
 
 
 LOGGER = logging.getLogger("增量同步和清洗维修故障记录")
@@ -198,18 +198,21 @@ def build_repair_pcode_pairs(collection: Any, progress: Progress) -> tuple[dict[
     return pairs, stats
 
 
-def build_sales_order_pairs(collection: Any, progress: Progress) -> tuple[dict[str, str], dict[str, int]]:
-    """Build an unambiguous normalized AUFNR -> VBELN index from SAP sales details."""
+def build_sales_order_pairs(collection: Any, progress: Progress) -> tuple[dict[str, str], dict[str, str], dict[str, int]]:
+    """Build unambiguous AUFNR -> VBELN and AUFNR -> GSTRS indexes from sales details."""
     total = collection.count_documents({})
-    candidates: dict[str, set[str]] = {}
+    sales_candidates: dict[str, set[str]] = {}
+    planned_start_candidates: dict[str, set[str]] = {}
     stats = {
         "sales_detail_rows_scanned": 0,
         "sales_detail_rows_skipped_missing_fields": 0,
         "sales_detail_unique_production_orders": 0,
         "sales_detail_ambiguous_production_orders": 0,
         "sales_detail_pair_count": 0,
+        "planned_start_unique_production_orders": 0,
+        "planned_start_ambiguous_production_orders": 0,
     }
-    cursor = collection.find({}, {"aufnr": 1, "data.AUFNR": 1, "data.VBELN": 1})
+    cursor = collection.find({}, {"aufnr": 1, "gstrs_date": 1, "data.AUFNR": 1, "data.VBELN": 1, "data.GSTRS": 1})
     try:
         for document in cursor:
             stats["sales_detail_rows_scanned"] += 1
@@ -217,23 +220,34 @@ def build_sales_order_pairs(collection: Any, progress: Progress) -> tuple[dict[s
             data = document.get("data") if isinstance(document.get("data"), dict) else {}
             production = normalized_order(data.get("AUFNR") or document.get("aufnr"))
             sales = text(data.get("VBELN"))
-            if not production or not sales:
+            planned_start = text(data.get("GSTRS") or document.get("gstrs_date"))
+            if not production:
                 stats["sales_detail_rows_skipped_missing_fields"] += 1
                 continue
-            candidates.setdefault(production, set()).add(sales)
+            if sales:
+                sales_candidates.setdefault(production, set()).add(sales)
+            if planned_start:
+                planned_start_candidates.setdefault(production, set()).add(planned_start)
     finally:
         if hasattr(cursor, "close"):
             cursor.close()
-    stats["sales_detail_unique_production_orders"] = len(candidates)
-    pairs = {production: next(iter(values)) for production, values in candidates.items() if len(values) == 1}
-    stats["sales_detail_ambiguous_production_orders"] = len(candidates) - len(pairs)
+    stats["sales_detail_unique_production_orders"] = len(sales_candidates)
+    pairs = {production: next(iter(values)) for production, values in sales_candidates.items() if len(values) == 1}
+    planned_starts = {
+        production: next(iter(values))
+        for production, values in planned_start_candidates.items()
+        if len(values) == 1
+    }
+    stats["sales_detail_ambiguous_production_orders"] = len(sales_candidates) - len(pairs)
     stats["sales_detail_pair_count"] = len(pairs)
+    stats["planned_start_unique_production_orders"] = len(planned_starts)
+    stats["planned_start_ambiguous_production_orders"] = len(planned_start_candidates) - len(planned_starts)
     LOGGER.info(
         "销售订单明细索引完成: scanned=%d usable=%d ambiguous=%d skipped_missing=%d",
         stats["sales_detail_rows_scanned"], stats["sales_detail_pair_count"],
         stats["sales_detail_ambiguous_production_orders"], stats["sales_detail_rows_skipped_missing_fields"],
     )
-    return pairs, stats
+    return pairs, planned_starts, stats
 
 
 def sap_rows(body: Any) -> list[dict[str, Any]]:
@@ -350,6 +364,7 @@ def backfill_repairs(
     repair_pcode_pairs: dict[str, tuple[str, str]],
     sap_pcode_orders: dict[str, str],
     sales_order_pairs: dict[str, str],
+    planned_starts: dict[str, str],
     audit_collection: Any | None,
     run_id: str,
     batch_size: int,
@@ -357,10 +372,15 @@ def backfill_repairs(
     preview_limit: int,
     progress: Progress,
 ) -> dict[str, Any]:
-    repair_filter = missing_text_filter("VBELN")
+    repair_filter = {"$or": [missing_text_filter("VBELN"), missing_text_filter("GSTRS")]}
     total = collection.count_documents(repair_filter)
     summary: dict[str, Any] = {
         "repair_candidates": total,
+        "repair_order_candidates": 0,
+        "planned_start_candidates": 0,
+        "planned_start_matches": 0,
+        "planned_start_missing_production_order": 0,
+        "planned_start_unmatched_production_order": 0,
         "repair_missing_pcode": 0,
         "repair_unmatched_pcode": 0,
         "repair_existing_aufnr_differs": 0,
@@ -377,7 +397,7 @@ def backfill_repairs(
         "audit_records": 0,
         "preview": [],
     }
-    cursor = collection.find(repair_filter, {"_id": 1, "PCODE": 1, "AUFNR": 1, "VBELN": 1})
+    cursor = collection.find(repair_filter, {"_id": 1, "PCODE": 1, "AUFNR": 1, "VBELN": 1, "GSTRS": 1})
     operations: list[UpdateOne] = []
     audit_operations: list[UpdateOne] = []
     scanned = 0
@@ -398,57 +418,89 @@ def backfill_repairs(
         for document in cursor:
             scanned += 1
             progress.update("匹配并回填维修记录", scanned, total)
-            sn = text(document.get("PCODE"))
-            if not sn:
-                summary["repair_missing_pcode"] += 1
-                continue
-            pair = collection_a.get(sn)
-            source = "station"
-            if pair is None:
-                pair = repair_pcode_pairs.get(sn)
-                source = "repair_pcode"
             old_production = text(document.get("AUFNR"))
-            if pair is not None and old_production:
-                mapped_production, mapped_sales = pair
-                if normalized_order(old_production) == normalized_order(mapped_production):
-                    pair = (old_production, mapped_sales)
+            old_sales = text(document.get("VBELN"))
+            old_planned_start = text(document.get("GSTRS"))
+            production = old_production
+            fields: dict[str, str] = {}
+            sources: list[str] = []
+
+            if not old_sales:
+                summary["repair_order_candidates"] += 1
+                sn = text(document.get("PCODE"))
+                pair = None
+                source = ""
+                if not sn:
+                    summary["repair_missing_pcode"] += 1
                 else:
-                    summary["repair_existing_aufnr_differs"] += 1
-                    summary[f"{source}_skipped_existing_aufnr_conflict"] += 1
-                    pair = None
-            if pair is None:
-                production = old_production
-                production_from_sap = False
-                if not production:
-                    production = sap_pcode_orders.get(sn, "")
-                    production_from_sap = bool(production)
-                sales = sales_order_pairs.get(normalized_order(production), "")
-                if production and sales:
-                    pair = (production, sales)
-                    source = "sap_sales_order_detail" if production_from_sap else "sales_order_detail"
-                elif production_from_sap:
-                    # The SAP SN interface authoritatively supplies AUFNR but not VBELN.
-                    pair = (production, None)
-                    source = "sap_pcode"
-            if pair is None:
-                summary["repair_unmatched_pcode"] += 1
+                    pair = collection_a.get(sn)
+                    source = "station"
+                    if pair is None:
+                        pair = repair_pcode_pairs.get(sn)
+                        source = "repair_pcode"
+                    if pair is not None and old_production:
+                        mapped_production, mapped_sales = pair
+                        if normalized_order(old_production) == normalized_order(mapped_production):
+                            pair = (old_production, mapped_sales)
+                        else:
+                            summary["repair_existing_aufnr_differs"] += 1
+                            summary[f"{source}_skipped_existing_aufnr_conflict"] += 1
+                            pair = None
+                    if pair is None:
+                        production_from_sap = False
+                        if not production:
+                            production = sap_pcode_orders.get(sn, "")
+                            production_from_sap = bool(production)
+                        sales = sales_order_pairs.get(normalized_order(production), "")
+                        if production and sales:
+                            pair = (production, sales)
+                            source = "sap_sales_order_detail" if production_from_sap else "sales_order_detail"
+                        elif production_from_sap:
+                            # The SAP SN interface authoritatively supplies AUFNR but not VBELN.
+                            pair = (production, None)
+                            source = "sap_pcode"
+                if pair is None:
+                    summary["repair_unmatched_pcode"] += 1
+                else:
+                    summary[f"{source}_matches"] += 1
+                    production, sales = pair
+                    fields["AUFNR"] = production
+                    if sales is not None:
+                        fields["VBELN"] = sales
+                    sources.append(source)
+
+            if not old_planned_start:
+                summary["planned_start_candidates"] += 1
+                planned_start = planned_starts.get(normalized_order(production), "")
+                if planned_start:
+                    fields["GSTRS"] = planned_start
+                    sources.append("sales_order_planned_start")
+                    summary["planned_start_matches"] += 1
+                elif not production:
+                    summary["planned_start_missing_production_order"] += 1
+                else:
+                    summary["planned_start_unmatched_production_order"] += 1
+
+            if not fields:
                 continue
-            summary[f"{source}_matches"] += 1
-            production, sales = pair
             summary["would_update"] += 1
+            source = "+".join(sources)
             if len(summary["preview"]) < preview_limit:
                 summary["preview"].append({
                     "id": str(document["_id"]),
-                    "PCODE": sn,
+                    "PCODE": text(document.get("PCODE")),
                     "source": source,
                     "AUFNR": {"before": old_production, "after": production},
-                    "VBELN": {"before": text(document.get("VBELN")), "after": text(document.get("VBELN")) if sales is None else sales},
+                    "VBELN": {"before": old_sales, "after": fields.get("VBELN", old_sales)},
+                    "GSTRS": {"before": old_planned_start, "after": fields.get("GSTRS", old_planned_start)},
                 })
-            fields = {"AUFNR": production}
-            if sales is not None:
-                fields["VBELN"] = sales
+            write_conditions = [{"_id": document["_id"]}]
+            if "AUFNR" in fields or "VBELN" in fields:
+                write_conditions.append(missing_text_filter("VBELN"))
+            if "GSTRS" in fields:
+                write_conditions.append(missing_text_filter("GSTRS"))
             operations.append(UpdateOne(
-                {"_id": document["_id"], **missing_text_filter("VBELN")},
+                {"$and": write_conditions},
                 {"$set": fields},
             ))
             if audit_collection is not None:
@@ -458,10 +510,10 @@ def backfill_repairs(
                         "$set": {
                             "run_id": run_id,
                             "repair_id": document["_id"],
-                            "PCODE": sn,
+                            "PCODE": text(document.get("PCODE")),
                             "source": source,
-                            "before": {"AUFNR": old_production, "VBELN": text(document.get("VBELN"))},
-                            "after": {"AUFNR": production, "VBELN": text(document.get("VBELN")) if sales is None else sales},
+                            "before": {"AUFNR": old_production, "VBELN": old_sales, "GSTRS": old_planned_start},
+                            "after": {"AUFNR": fields.get("AUFNR", old_production), "VBELN": fields.get("VBELN", old_sales), "GSTRS": fields.get("GSTRS", old_planned_start)},
                             "fields": fields,
                             "write_status": "attempted",
                             "updated_at": datetime.now(timezone.utc),
@@ -485,12 +537,12 @@ def backfill_repairs(
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="用工位记录的唯一 PCODE/AUFNR/KDAUF 映射回填维修记录")
+    parser = argparse.ArgumentParser(description="增量同步 HANA 维修故障记录，并回填缺失订单和计划生产时间")
     parser.add_argument("--batch-size", type=int, default=int(env("SYNC_BATCH_SIZE", "1000")), help="MongoDB 批量写入大小")
     parser.add_argument("--preview-limit", type=int, default=20, help="JSON 摘要中展示的回填样本数量")
     parser.add_argument(
-        "--sync-repair-hana", action="store_true",
-        help="先从 HANA 增量同步维修故障记录；同步成功后再执行订单回填",
+        "--skip-hana-sync", dest="sync_repair_hana", action="store_false",
+        help="仅执行现有维修记录的回填，不从 HANA 增量同步",
     )
     parser.add_argument(
         "--sync-end-date", type=parse_date, default=date.today(),
@@ -500,9 +552,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--sync-lookback-days", type=int, default=int(env("SYNC_LOOKBACK_DAYS", "7")),
         help="HANA 维修增量同步水位线回看天数",
     )
-    parser.add_argument(
-        "--one-click", action="store_true",
-        help="启用工位、维修表、SAP SN 和销售订单明细四级回填来源",
+    backfill_mode = parser.add_mutually_exclusive_group()
+    backfill_mode.add_argument(
+        "--one-click", dest="one_click", action="store_true",
+        help="启用工位、维修表、SAP SN 和销售订单明细四级回填来源（默认）",
+    )
+    backfill_mode.add_argument(
+        "--basic-backfill", dest="one_click", action="store_false",
+        help="仅使用工位记录集合 A 回填订单字段",
     )
     parser.add_argument(
         "--repair-pcode-fallback", action="store_true",
@@ -515,6 +572,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--sales-order-fallback", action="store_true",
         help="通过已同步的 SAP 销售订单明细按 AUFNR 反查唯一 VBELN 并回填",
+    )
+    parser.add_argument(
+        "--planned-start-fallback", action="store_true",
+        help="通过已同步的 SAP 销售订单明细按 AUFNR 反查唯一 GSTRS 并回填",
     )
     parser.add_argument(
         "--allow-partial-sap", action="store_true",
@@ -535,6 +596,8 @@ def build_parser() -> argparse.ArgumentParser:
         station_collection=env("STATION_COLLECTION", "station_records_sap"),
         sales_order_collection=env("TARGET_COLLECTION", "sales_orders_sap"),
         audit_collection=env("REPAIR_ORDER_BACKFILL_AUDIT_COLLECTION", "repair_order_backfill_audit"),
+        sync_repair_hana=True,
+        one_click=True,
     )
     return parser
 
@@ -545,6 +608,7 @@ def resolve_sources(args: argparse.Namespace) -> None:
         args.repair_pcode_fallback = True
         args.sap_pcode_fallback = True
         args.sales_order_fallback = True
+        args.planned_start_fallback = True
 
 
 def run_workflow(
@@ -557,7 +621,7 @@ def run_workflow(
     hana_sync: dict[str, Any] = {}
     hana_sync_commit: dict[str, Any] = {}
     try:
-        if getattr(args, "sync_repair_hana", False):
+        if getattr(args, "sync_repair_hana", True):
             progress.update("同步 HANA 维修故障记录", 0, 1)
             hana_sync = sync_sales_orders.sync_repair(
                 db,
@@ -593,19 +657,20 @@ def run_workflow(
                     "请修复 SAP 连接后重试，或显式使用 --allow-partial-sap"
                 )
         sales_order_pairs: dict[str, str] = {}
+        planned_starts: dict[str, str] = {}
         sales_detail_stats: dict[str, Any] = {}
-        if args.sales_order_fallback:
-            sales_order_pairs, sales_detail_stats = build_sales_order_pairs(
+        if args.sales_order_fallback or getattr(args, "planned_start_fallback", False):
+            sales_order_pairs, planned_starts, sales_detail_stats = build_sales_order_pairs(
                 db[args.sales_order_collection], progress,
             )
         repair_stats = backfill_repairs(
-            db[args.repair_collection], collection_a, repair_pcode_pairs, sap_pcode_orders, sales_order_pairs,
+            db[args.repair_collection], collection_a, repair_pcode_pairs, sap_pcode_orders, sales_order_pairs, planned_starts,
             db[args.audit_collection] if args.apply and getattr(args, "audit_collection", "") else None,
             run_id,
             args.batch_size, args.apply,
             args.preview_limit, progress,
         )
-        if getattr(args, "sync_repair_hana", False) and args.apply:
+        if getattr(args, "sync_repair_hana", True) and args.apply:
             hana_sync_commit = sync_sales_orders.finalize_repair_run(
                 db,
                 args.repair_collection,
@@ -624,8 +689,9 @@ def run_workflow(
         "repair_pcode_fallback": args.repair_pcode_fallback,
         "sap_pcode_fallback": args.sap_pcode_fallback,
         "sales_order_fallback": args.sales_order_fallback,
+        "planned_start_fallback": getattr(args, "planned_start_fallback", False),
         "one_click": getattr(args, "one_click", False),
-        "sync_repair_hana": getattr(args, "sync_repair_hana", False),
+        "sync_repair_hana": getattr(args, "sync_repair_hana", True),
         "hana_sync": hana_sync,
         "hana_sync_commit": hana_sync_commit,
         "audit_collection": getattr(args, "audit_collection", ""),

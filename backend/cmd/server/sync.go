@@ -143,12 +143,14 @@ func syncCommands() ([]syncCommand, error) {
 	if err != nil {
 		return nil, err
 	}
+	salesOrdersScript := filepath.Join(root, "scripts", "sync", "sync_sales_orders.py")
+	repairRecordsScript := filepath.Join(root, "scripts", "sync", "增量同步和清洗维修故障记录.py")
 	commands := []syncCommand{
-		{name: "sales_orders", path: filepath.Join(root, "repair_records.py"), args: []string{"--sales-only", "--mode", "incremental", "--apply"}},
-		{name: "station_records", path: filepath.Join(root, "station_records.py"), args: []string{"--mode", "incremental", "--apply"}},
-		{name: "repair_records", path: filepath.Join(root, "repair_records.py"), args: []string{"--mode", "incremental", "--apply"}},
-		{name: "order_bom_postings", path: filepath.Join(root, "order_bom_postings.py"), args: []string{"--mode", "incremental", "--apply"}},
-		{name: "serial_bindings", path: filepath.Join(root, "serial_bindings.py"), args: []string{"--mode", "incremental", "--apply"}},
+		{name: "sales_orders", path: salesOrdersScript},
+		{name: "station_records", path: filepath.Join(root, "scripts", "sync", "station_records.py"), args: []string{"--mode", "incremental", "--apply"}},
+		{name: "repair_records", path: repairRecordsScript, args: []string{"--apply", "--no-progress", "--log-level", "ERROR"}},
+		{name: "order_bom_postings", path: filepath.Join(root, "scripts", "sync", "order_bom_postings.py"), args: []string{"--mode", "incremental", "--apply"}},
+		{name: "serial_bindings", path: filepath.Join(root, "scripts", "sync", "serial_bindings.py"), args: []string{"--mode", "incremental", "--apply"}},
 	}
 	for _, command := range commands {
 		path := command.path

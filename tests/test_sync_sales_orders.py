@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from scripts.sources.sap_http import sync_sales_orders as sync
+from scripts.sync import sync_sales_orders as sync
 
 
 def test_parse_date_and_prodh():
@@ -242,7 +242,7 @@ def test_sync_sales_full_run_advances_only_successful_sources(monkeypatch):
         "http://kk": [FakeResponse({}, "KK unavailable")],
     })
     monkeypatch.setattr(sync.httpx, "Client", lambda **_kwargs: http)
-    args = SimpleNamespace(dataset="sales", full=True, start_date=date(2026, 1, 1), end_date=date(2026, 1, 2), lookback_days=0, dry_run=False, all_prodh=True, prodh_list=None)
+    args = SimpleNamespace(full=True, start_date=date(2026, 1, 1), end_date=date(2026, 1, 2), lookback_days=0, dry_run=False, all_prodh=True, prodh_list=None)
     result = sync.sync_sales(args)
     assert result["success"] is False and result["sources"]["SG"]["success"] is True
     assert result["sources"]["KK"]["success"] is False
@@ -261,7 +261,7 @@ def test_sync_sales_dry_run_does_not_write(monkeypatch):
     monkeypatch.setattr(sync, "SOURCES", {"SG": "http://sg", "KK": "http://kk"})
     http = FakeHTTPClient({"http://sg": [FakeResponse({"DATA": [{"AUFNR": "1"}]})], "http://kk": [FakeResponse({"DATA": []})]})
     monkeypatch.setattr(sync.httpx, "Client", lambda **_kwargs: http)
-    args = SimpleNamespace(dataset="sales", full=True, start_date=date(2026, 1, 1), end_date=date(2026, 1, 1), lookback_days=0, dry_run=True, all_prodh=False, prodh_list=None)
+    args = SimpleNamespace(full=True, start_date=date(2026, 1, 1), end_date=date(2026, 1, 1), lookback_days=0, dry_run=True, all_prodh=False, prodh_list=None)
     result = sync.sync_sales(args)
     assert result["success"] is True
     db = FakeMongoClient.instances[0].db
@@ -280,7 +280,7 @@ def test_sync_sales_full_cleans_old_source_documents_after_success(monkeypatch):
         "http://kk": [FakeResponse({"DATA": [{"AUFNR": "new-kk"}]})],
     })
     monkeypatch.setattr(sync.httpx, "Client", lambda **_kwargs: http)
-    args = SimpleNamespace(dataset="sales", full=True, start_date=date(2026, 1, 1), end_date=date(2026, 1, 1), lookback_days=0, dry_run=False, all_prodh=False, prodh_list=None)
+    args = SimpleNamespace(full=True, start_date=date(2026, 1, 1), end_date=date(2026, 1, 1), lookback_days=0, dry_run=False, all_prodh=False, prodh_list=None)
     # Seed a stale order after the client is created by sync_sales via a patched constructor.
     original_client = sync.MongoClient
     def seeded_client(*args, **kwargs):
@@ -347,7 +347,7 @@ def test_sync_repair_filters_sales_orders_retains_empty_and_advances_watermark(m
 )
 def test_sync_sales_rejects_invalid_arguments(monkeypatch, overrides):
     monkeypatch.setenv("MONGODB_DATABASE", "test")
-    args = SimpleNamespace(dataset="sales", full=False, start_date=None, end_date=date(2026, 1, 2), lookback_days=0, dry_run=True, all_prodh=False, prodh_list=None)
+    args = SimpleNamespace(full=False, start_date=None, end_date=date(2026, 1, 2), lookback_days=0, dry_run=True, all_prodh=False, prodh_list=None)
     for key, value in overrides.items():
         setattr(args, key, value)
     with pytest.raises((ValueError, RuntimeError)):

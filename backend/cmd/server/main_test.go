@@ -4,11 +4,17 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
+	"runtime"
+	"strings"
 	"testing"
 
+	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
 	"production-fault-gateway/internal/store"
 )
@@ -84,8 +90,91 @@ func (f *fakeStore) OrderModels(_ context.Context, _ string) (store.OrderModelsR
 	}
 	return f.models, nil
 }
+func (f *fakeStore) DataStatus(context.Context) (store.DataStatus, error) {
+	return store.DataStatus{}, f.err
+}
+func (f *fakeStore) FaultSNs(context.Context, store.Filters) ([]store.FaultSN, error) {
+	return nil, f.err
+}
+func (f *fakeStore) FaultRowsBySNS(context.Context, []string, string, string, string) ([]bson.M, error) {
+	return nil, f.err
+}
+func (f *fakeStore) ViewList(context.Context, string, store.ViewFilters, int, int) (store.ViewListResult, error) {
+	return store.ViewListResult{}, f.err
+}
+func (f *fakeStore) ViewListAll(context.Context, string, store.ViewFilters) (store.ViewListResult, error) {
+	return store.ViewListResult{}, f.err
+}
+func (f *fakeStore) ViewBOMStream(context.Context, store.ViewFilters, io.Writer) error { return f.err }
+func (f *fakeStore) ViewStationStream(context.Context, store.ViewFilters, io.Writer) error {
+	return f.err
+}
+func (f *fakeStore) ViewDetail(context.Context, string, string) (store.ViewDetailResult, error) {
+	return store.ViewDetailResult{}, f.err
+}
+func (f *fakeStore) ViewStats(context.Context, string, store.ViewFilters) (store.ViewStatsResult, error) {
+	return store.ViewStatsResult{}, f.err
+}
 
 func newTestServer(f *fakeStore) *server { return &server{store: f, sync: newSyncManager()} }
+
+func TestAPIDocumentEndpoints(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "openapi.json"), []byte(`{"openapi":"3.0.3"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "agent-guide.md"), []byte("# Agent"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("API_DOCS_DIR", dir)
+	s := newTestServer(&fakeStore{})
+	for _, tc := range []struct{ path, contentType, body string }{{"/api/openapi.json", "application/json; charset=utf-8", `{"openapi":"3.0.3"}`}, {"/api/agent-guide.md", "text/markdown; charset=utf-8", "# Agent"}} {
+		r := httptest.NewRecorder()
+		s.apiDocument(r, httptest.NewRequest(http.MethodGet, tc.path, nil))
+		if r.Code != http.StatusOK || r.Header().Get("Content-Type") != tc.contentType || strings.TrimSpace(r.Body.String()) != tc.body {
+			t.Fatalf("%s: status=%d type=%q body=%q", tc.path, r.Code, r.Header().Get("Content-Type"), r.Body.String())
+		}
+	}
+	r := httptest.NewRecorder()
+	s.apiDocument(r, httptest.NewRequest(http.MethodGet, "/api/secret.txt", nil))
+	if r.Code != http.StatusNotFound {
+		t.Fatalf("unsupported status=%d", r.Code)
+	}
+	t.Setenv("API_DOCS_DIR", filepath.Join(dir, "missing"))
+	r = httptest.NewRecorder()
+	s.apiDocument(r, httptest.NewRequest(http.MethodGet, "/api/openapi.json", nil))
+	if r.Code != http.StatusNotFound {
+		t.Fatalf("missing status=%d", r.Code)
+	}
+}
+
+func TestOpenAPICoversRegisteredAPIRoutes(t *testing.T) {
+	_, file, _, _ := runtime.Caller(0)
+	data, err := os.ReadFile(filepath.Join(filepath.Dir(file), "..", "..", "..", "docs", "openapi.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var spec struct {
+		Paths map[string]map[string]json.RawMessage `json:"paths"`
+	}
+	if err := json.Unmarshal(data, &spec); err != nil {
+		t.Fatal(err)
+	}
+	expected := map[string][]string{
+		"/api/health": {"get"}, "/api/faults": {"get"}, "/api/faults/lookup": {"post"}, "/api/faults/by-sns": {"get", "post"},
+		"/api/faults/by-orders": {"get"}, "/api/faults/detail": {"get"}, "/api/faults/stats": {"get"}, "/api/orders": {"get"},
+		"/api/orders/all": {"get"}, "/api/orders/detail": {"get"}, "/api/orders/stats": {"get"}, "/api/orders/models": {"get"},
+		"/api/views/{viewID}": {"get"}, "/api/views/{viewID}/all": {"get"}, "/api/views/{viewID}/stream": {"get"}, "/api/views/{viewID}/detail": {"get"}, "/api/views/{viewID}/stats": {"get"},
+		"/api/sync/incremental": {"post"}, "/api/sync/status": {"get"}, "/api/data-status": {"get"},
+	}
+	for path, methods := range expected {
+		for _, method := range methods {
+			if _, ok := spec.Paths[path][method]; !ok {
+				t.Errorf("missing OpenAPI operation %s %s", method, path)
+			}
+		}
+	}
+}
 
 func TestHealthAndJSONErrors(t *testing.T) {
 	t.Run("healthy", func(t *testing.T) {
@@ -189,13 +278,16 @@ func TestOrderModels(t *testing.T) {
 }
 
 func TestFilterHelpers(t *testing.T) {
-	q := url.Values{"keyword": {" a "}, "source": {" SG "}, "sns": {"SN1,SN2"}, "productionOrders": {"00012,13"}, "dateFrom": {"2026-01-01"}, "station": {"ST-1"}}
+	q := url.Values{"keyword": {" a "}, "source": {" SG "}, "sns": {"SN1,SN2"}, "productionOrders": {"00012,13"}, "dateFrom": {"2026-01-01"}, "station": {"ST-1"}, "timeField": {" planned "}}
 	if repairFilters(q).Keyword != "a" || orderFilters(q).Source != "SG" {
 		t.Fatal("query values were not trimmed")
 	}
 	filters := repairFilters(q)
-	if filters.SNS != "SN1,SN2" || filters.ProductionOrders != "00012,13" || filters.DateFrom != "2026-01-01" || filters.Station != "ST-1" {
+	if filters.SNS != "SN1,SN2" || filters.ProductionOrders != "00012,13" || filters.DateFrom != "2026-01-01" || filters.Station != "ST-1" || filters.TimeField != "planned" {
 		t.Fatalf("extended filters=%+v", filters)
+	}
+	if !viewFilters(url.Values{"missingSalesOrder": {" true "}}).MissingSalesOrder {
+		t.Fatal("missingSalesOrder was not parsed")
 	}
 }
 
@@ -203,12 +295,12 @@ func TestViewAndDataStatusRoutes(t *testing.T) {
 	f := &fakeStore{}
 	r := httptest.NewRecorder()
 	newTestServer(f).viewList(r, httptest.NewRequest(http.MethodGet, "/api/views/Z_V_ZMES_T_001?stationCode=LINE-1&sn=SN-1&dateFrom=2026-01-01", nil))
-	if r.Code != http.StatusNotImplemented {
+	if r.Code != http.StatusOK {
 		t.Fatalf("view route status=%d", r.Code)
 	}
 	r = httptest.NewRecorder()
 	newTestServer(f).dataStatus(r, httptest.NewRequest(http.MethodGet, "/api/data-status", nil))
-	if r.Code != http.StatusNotImplemented {
+	if r.Code != http.StatusOK {
 		t.Fatalf("data status=%d", r.Code)
 	}
 }
@@ -217,5 +309,26 @@ func TestDefaultServerPortMatchesDevelopmentProxy(t *testing.T) {
 	t.Setenv("PORT", "")
 	if port := getenv("PORT", "18080"); port != "18080" {
 		t.Fatalf("default port=%q, want 18080", port)
+	}
+}
+
+func TestRegisterRoutesKeepsDocumentedPaths(t *testing.T) {
+	h := newTestServer(&fakeStore{})
+	mux := registerRoutes(h)
+	paths := []struct{ method, path string }{
+		{http.MethodGet, "/api/faults/by-sns"}, {http.MethodGet, "/api/faults/by-orders"},
+		{http.MethodGet, "/api/orders/all"}, {http.MethodGet, "/api/views/ZSGV_ZSD124"},
+		{http.MethodGet, "/api/views/ZSGV_ZSD124/detail?id=x"}, {http.MethodGet, "/api/views/ZSGV_ZSD124/stats"},
+		{http.MethodPost, "/api/sync/incremental"}, {http.MethodGet, "/api/sync/status"},
+	}
+	for _, route := range paths {
+		t.Run(route.method+route.path, func(t *testing.T) {
+			req := httptest.NewRequest(route.method, route.path, nil)
+			rr := httptest.NewRecorder()
+			mux.ServeHTTP(rr, req)
+			if rr.Code == http.StatusNotFound {
+				t.Fatalf("route %s %s returned 404", route.method, route.path)
+			}
+		})
 	}
 }

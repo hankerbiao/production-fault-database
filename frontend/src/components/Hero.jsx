@@ -1,0 +1,1 @@
+export function Hero({ title, detail, meta = [] }) { return <section className="hero"><div><p className="eyebrow">OPERATIONS / MONGODB DATA</p><h1>{title}</h1><p className="intro">{detail}</p></div><div className="hero-meta">{meta.map(item => <div key={item.label}><span>{item.label}</span><strong>{item.value}</strong></div>)}</div></section>; }

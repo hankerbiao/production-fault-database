@@ -10,6 +10,8 @@ function mockFetch({ fail = false } = {}) {
   return vi.fn(async (url, options = {}) => {
     if (fail) return { ok: false, status: 503, json: async () => ({ error: 'down' }) };
     if (url === '/api/sync/status') return { ok: true, json: async () => ({ state: 'idle', message: '等待同步' }) };
+    if (url === '/api/openapi.json') return { ok: true, json: async () => ({ openapi: '3.0.3', info: { version: '1.0.0' }, servers: [{ url: '/api' }], paths: { '/api/health': { get: { tags: ['health'], operationId: 'health', summary: '健康检查', responses: { '200': { description: '正常' } } } }, '/api/faults': { get: { tags: ['faults'], operationId: 'listFaults', summary: '查询维修故障', parameters: [{ name: 'page', in: 'query', required: false, description: '页码' }], responses: { '200': { description: '分页结果' } } } }, '/api/sync/incremental': { post: { tags: ['sync'], operationId: 'sync', summary: '增量同步', responses: { '202': { description: '已启动' } } } } } }) };
+    if (url === '/api/agent-guide.md') return { ok: true, text: async () => '# Agent Guide' };
     if (String(url).startsWith('/api/orders/models')) return { ok: true, json: async () => ({ items: ['Model-A', 'Model-B'] }) };
     if (String(url).startsWith('/api/faults?')) return { ok: true, json: async () => ({ items: [{ id: 'r1', hostBarcode: 'PC-1', salesOrder: 'SO-1', productionOrder: 'PO-1', plannedStartDate: '20260101', materialDescription: '物料', faultDescription: '故障', ngStation: '站点' }], total: 1 }) };
     if (String(url).startsWith('/api/faults/stats')) return { ok: true, json: async () => faultStats };
@@ -18,7 +20,7 @@ function mockFetch({ fail = false } = {}) {
     if (String(url).startsWith('/api/views/Z_V_ZMES_T_001?')) return { ok: true, json: async () => ({ items: [{ id: 'station-1', HISTROYID: 'H-1', PCODE: 'PC-1', OCODE: 'OC-1', AUFNR: 'PO-1', SPEC: 'OP-10', OPERATION: '装配', GSTRS: '20260102', ACTUAL_START_TIME: '2026-01-02 03:04:05', ACTUAL_END_TIME: '2026-01-02 03:05:05' }], total: 1 }) };
     if (String(url).startsWith('/api/views/Z_V_ZMES_T_001/stats')) return { ok: true, json: async () => ({ total: 1, missingSalesOrder: 3, missingProductionOrder: 2, dataStartDate: '20260102', dataEndDate: '20260102', latestSyncedAt: '2026-01-02T03:04:05Z' }) };
     if (String(url).startsWith('/api/views/Z_V_ZMES_T_001/detail')) return { ok: true, json: async () => ({ fields: [{ key: 'PCODE', label: '主机序列号', value: 'PC-1' }, { key: 'PRODH', label: '产品层次', value: '00100' }] }) };
-    if (String(url).startsWith('/api/views/ZSGV_ZSD124/stats')) return { ok: true, json: async () => ({ total: 2, salesOrders: 1, productionOrders: 2, missingSalesOrder: 3, missingProductionOrder: 4, dataStartDate: '20260102', dataEndDate: '20260102', latestSyncedAt: '2026-01-02T03:04:05Z' }) };
+    if (String(url).startsWith('/api/views/ZSGV_ZSD124/stats')) return { ok: true, json: async () => ({ total: 2, salesOrders: 1, productionOrders: 2, missingSalesOrder: 3, missingProductionOrder: 4, missingProductionOrderDistinct: 2, dataStartDate: '20260102', dataEndDate: '20260102', latestSyncedAt: '2026-01-02T03:04:05Z' }) };
     if (String(url).startsWith('/api/views/ZSGV_ZSD124/detail')) return { ok: true, json: async () => ({ fields: [{ key: 'MATNR', label: '物料号', value: 'MAT-1' }] }) };
     if (String(url).startsWith('/api/views/ZSGV_ZPP_SERNOLIST?')) return { ok: true, json: async () => ({ items: [{ id: 'serial-1', ZCODE_HEAD: 'HEAD-1', ZCODE_ITEM: 'ITEM-1', AUFNR_HEAD: 'PO-H', AUFNR_ITEM: 'PO-I', PRODH: '00100' }], total: 1 }) };
     if (String(url).startsWith('/api/views/ZSGV_ZPP_SERNOLIST/stats')) return { ok: true, json: async () => ({ total: 1, dataStartDate: '', dataEndDate: '', latestSyncedAt: '' }) };
@@ -30,12 +32,27 @@ function mockFetch({ fail = false } = {}) {
 }
 
 describe('operations workbench', () => {
+  it('opens API docs, searches, expands and copies an operation', async () => {
+    vi.stubGlobal('fetch', mockFetch());
+    Object.assign(navigator, { clipboard: { writeText: vi.fn().mockResolvedValue(undefined) } });
+    render(<App />);
+    fireEvent.click(screen.getByRole('button', { name: 'API 文档' }));
+    expect(await screen.findByRole('heading', { name: 'API 文档中心' })).toBeInTheDocument();
+    expect(screen.getByText('需人工确认')).toBeInTheDocument();
+    fireEvent.change(screen.getByRole('textbox', { name: '搜索接口' }), { target: { value: '维修' } });
+    expect(screen.getByText('/api/faults')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /GET.*api\/faults/ }));
+    expect(await screen.findByText('页码')).toBeInTheDocument();
+    fireEvent.click(screen.getByTitle('复制 curl'));
+    expect(navigator.clipboard.writeText).toHaveBeenCalled();
+  });
+
   it('loads repair records and opens detail drawer', async () => {
     vi.stubGlobal('fetch', mockFetch());
     render(<App />);
     expect(await screen.findByRole('heading', { name: '维修故障记录' })).toBeInTheDocument();
     expect(screen.getByText('SAP HANA 视图 ZSGV_ZZT_WLJL', { exact: false })).toBeInTheDocument();
-    expect(screen.getByRole('columnheader', { name: '计划开始时间' })).toBeInTheDocument();
+    expect(screen.getByRole('columnheader', { name: '计划生产时间' })).toBeInTheDocument();
     expect(screen.getByText('主机条码数量（去重）')).toBeInTheDocument();
     expect((await screen.findAllByText('PC-1')).length).toBeGreaterThan(0);
     fireEvent.click(screen.getAllByTitle('查看完整数据库字段')[0]);
@@ -44,16 +61,21 @@ describe('operations workbench', () => {
     await waitFor(() => expect(screen.queryByText('SN-1')).not.toBeInTheDocument());
   });
 
-  it('uses one period control for custom repair date ranges', async () => {
+  it('filters repair records by planned or repair time', async () => {
     const fetchMock = mockFetch();
     vi.stubGlobal('fetch', fetchMock);
     render(<App />);
     await screen.findByRole('heading', { name: '维修故障记录' });
-    fireEvent.click(screen.getByRole('button', { name: /维修时间周期/ }));
+    expect(screen.getByRole('button', { name: /计划生产时间周期/ })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /计划生产时间周期/ }));
     fireEvent.change(screen.getByLabelText('开始日期'), { target: { value: '2026-03-01' } });
     fireEvent.change(screen.getByLabelText('结束日期'), { target: { value: '2026-03-31' } });
     fireEvent.click(screen.getByRole('button', { name: /筛选/ }));
-    await waitFor(() => expect(fetchMock.mock.calls.some(([url]) => String(url).includes('dateFrom=2026-03-01') && String(url).includes('dateTo=2026-03-31'))).toBe(true));
+    await waitFor(() => expect(fetchMock.mock.calls.some(([url]) => String(url).includes('timeField=planned') && String(url).includes('dateFrom=2026-03-01') && String(url).includes('dateTo=2026-03-31'))).toBe(true));
+    fireEvent.click(screen.getByRole('button', { name: '维修时间' }));
+    expect(screen.getByRole('button', { name: /维修时间周期/ })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /筛选/ }));
+    await waitFor(() => expect(fetchMock.mock.calls.some(([url]) => String(url).includes('timeField=repair'))).toBe(true));
   });
 
   it('offers searchable model options from the order model list', async () => {
@@ -132,6 +154,26 @@ describe('operations workbench', () => {
     expect(screen.getByText('销售订单数量（去重）').parentElement).toHaveTextContent('1');
     expect(screen.getByText('销售订单为空').parentElement).toHaveTextContent('3');
     expect(screen.getByText('生产订单为空').parentElement).toHaveTextContent('4');
+    expect(screen.getByText('生产订单为空（去重）').parentElement).toHaveTextContent('2');
+  });
+
+  it('exports BOM rows with an empty sales order', async () => {
+    const fetchMock = mockFetch();
+    vi.stubGlobal('fetch', fetchMock);
+    const createObjectURL = vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:bom');
+    const revokeObjectURL = vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {});
+    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+    render(<App />);
+    fireEvent.click(screen.getByRole('button', { name: /订单过账/ }));
+    await screen.findByRole('heading', { name: '订单 BOM 过账' });
+    fireEvent.click(screen.getByRole('button', { name: '导出销售订单为空' }));
+    await waitFor(() => expect(fetchMock.mock.calls.some(([url]) => String(url).includes('/api/views/ZSGV_ZSD124?') && String(url).includes('missingSalesOrder=true'))).toBe(true));
+    expect(createObjectURL).toHaveBeenCalled();
+    expect(click).toHaveBeenCalled();
+    expect(revokeObjectURL).toHaveBeenCalledWith('blob:bom');
+    createObjectURL.mockRestore();
+    revokeObjectURL.mockRestore();
+    click.mockRestore();
   });
 
   it('shows a loading state while a view is fetching', async () => {

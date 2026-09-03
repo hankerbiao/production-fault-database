@@ -14,8 +14,12 @@ func TestSyncManagerStartsAndPreventsConcurrentRuns(t *testing.T) {
 		_ = os.Setenv("SYNC_SCRIPT_DIR", old)
 	})
 	dir := t.TempDir()
-	for _, name := range []string{"repair_records.py", "station_records.py", "order_bom_postings.py", "serial_bindings.py"} {
-		if err := os.WriteFile(filepath.Join(dir, name), []byte("import time; time.sleep(0.04); print('{\"success\": true}')"), 0o600); err != nil {
+	for _, name := range []string{"scripts/sync/sync_sales_orders.py", "scripts/sync/增量同步和清洗维修故障记录.py", "scripts/sync/station_records.py", "scripts/sync/order_bom_postings.py", "scripts/sync/serial_bindings.py"} {
+		path := filepath.Join(dir, name)
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("import time; time.sleep(0.04); print('{\"success\": true}')"), 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -58,13 +62,18 @@ func TestSyncManagerStopsAfterFailedStage(t *testing.T) {
 	t.Cleanup(func() { _ = os.Setenv("SYNC_SCRIPT_DIR", old) })
 	dir := t.TempDir()
 	scripts := map[string]string{
-		"repair_records.py":      "import sys; print('{\"success\": true}')",
-		"station_records.py":     "import sys; print('{\"success\": false}'); sys.exit(1)",
-		"order_bom_postings.py":  "print('{\"success\": true}')",
-		"serial_bindings.py":     "print('{\"success\": true}')",
+		"scripts/sync/sync_sales_orders.py":  "import sys; print('{\"success\": true}')",
+		"scripts/sync/增量同步和清洗维修故障记录.py":      "print('{\"success\": true}')",
+		"scripts/sync/station_records.py":    "import sys; print('{\"success\": false}'); sys.exit(1)",
+		"scripts/sync/order_bom_postings.py": "print('{\"success\": true}')",
+		"scripts/sync/serial_bindings.py":    "print('{\"success\": true}')",
 	}
 	for name, content := range scripts {
-		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o600); err != nil {
+		path := filepath.Join(dir, name)
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -89,4 +98,28 @@ func TestSyncManagerStopsAfterFailedStage(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 	}
 	t.Fatal("sync manager did not finish")
+}
+
+func TestSyncCommandsUseTheSingleRepairWorkflow(t *testing.T) {
+	root := t.TempDir()
+	for _, name := range []string{"scripts/sync/sync_sales_orders.py", "scripts/sync/增量同步和清洗维修故障记录.py", "scripts/sync/station_records.py", "scripts/sync/order_bom_postings.py", "scripts/sync/serial_bindings.py"} {
+		path := filepath.Join(root, name)
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("SYNC_SCRIPT_DIR", root)
+	commands, err := syncCommands()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if commands[0].path != filepath.Join(root, "scripts", "sync", "sync_sales_orders.py") || len(commands[0].args) != 0 {
+		t.Fatalf("sales command=%+v", commands[0])
+	}
+	if commands[2].path != filepath.Join(root, "scripts", "sync", "增量同步和清洗维修故障记录.py") || len(commands[2].args) != 4 || commands[2].args[0] != "--apply" || commands[2].args[1] != "--no-progress" || commands[2].args[2] != "--log-level" || commands[2].args[3] != "ERROR" {
+		t.Fatalf("repair command=%+v", commands[2])
+	}
 }

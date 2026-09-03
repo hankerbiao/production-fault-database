@@ -1,0 +1,2 @@
+import { Download } from 'lucide-react';
+export function ExportButton({ exporting, onClick, bilingual = false, label, title }) { return <button className="export-btn" type="button" onClick={onClick} disabled={exporting} title={title || (bilingual ? '导出筛选结果 / Export filtered results' : '导出筛选结果')}><Download size={16} />{exporting ? (bilingual ? '导出中 / Exporting' : '导出中') : (label || (bilingual ? '导出 / Export' : '导出数据'))}</button>; }

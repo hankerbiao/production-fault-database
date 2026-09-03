@@ -3,7 +3,7 @@
 
 The default mode is incremental.  Each SAP source has its own date watermark;
 the watermark is advanced only after that source has fetched and written
-successfully.  Use ``--full --start-date YYYY-MM-DD`` for the initial load.
+successfully. Use ``--full --start-date YYYY-MM-DD`` for the initial load.
 """
 from __future__ import annotations
 
@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Any, Iterator, Mapping
 from urllib.parse import quote_plus
 
-PROJECT_ROOT = Path(__file__).resolve().parents[3]
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in __import__("sys").path:
     __import__("sys").path.insert(0, str(PROJECT_ROOT))
 
@@ -325,7 +325,6 @@ def finalize_repair_run(db: Any, collection: str, checkpoint_collection: str, sy
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="SAP SG/KK 销售订单同步到独立 MongoDB")
-    parser.add_argument("--dataset", choices=("sales", "repair", "all"), default=env("SYNC_DATASET", "all"), help="同步数据集，默认 all")
     parser.add_argument("--full", action="store_true", help="执行全量日期范围同步；必须同时提供 --start-date")
     parser.add_argument("--start-date", type=parse_date, help="全量起始日期 YYYY-MM-DD")
     parser.add_argument("--end-date", type=parse_date, default=date.today(), help="结束日期，默认今天")
@@ -493,27 +492,19 @@ def sync_sales(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def run(args: argparse.Namespace) -> dict[str, Any]:
-    mode = "full" if args.full else "incremental"
-    if args.dataset == "repair":
-        database_name = env("MONGODB_DATABASE")
-        if not database_name:
-            raise RuntimeError("MONGODB_DATABASE 未配置")
-        client_options = mongo_client_options()
-        client = MongoClient(mongo_uri(), **client_options)
-        try:
-            db = client[database_name]
-            run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
-            result = sync_repair(db, env("REPAIR_COLLECTION", "repair_records_sap"), env("SYNC_CHECKPOINT_COLLECTION", "sync_checkpoints"), mode, args.start_date, args.end_date, args.lookback_days, int(env("SYNC_BATCH_SIZE", "1000")), args.dry_run, run_id)
-            result.update({"run_id": run_id, "dataset": "repair", "mode": mode, "dry_run": args.dry_run, "mongo_write_concern": mongo_write_concern_summary(client_options)})
-            if not args.dry_run:
-                db[env("SYNC_RUN_COLLECTION", "sync_runs")].insert_one({**result, "created_at": datetime.now(timezone.utc)})
-            return result
-        finally:
-            client.close()
-    if args.dataset == "sales":
-        return sync_sales(args)
+    return sync_sales(args)
 
-    sales_result = sync_sales(args)
-    repair_result = run(argparse.Namespace(**{**vars(args), "dataset": "repair"}))
-    return {"success": sales_result.get("success", False) and repair_result.get("success", False), "run_id": sales_result.get("run_id"), "dataset": "all", "sales": sales_result, "repair": repair_result}
 
+def main() -> int:
+    load_dotenv(PROJECT_ROOT / ".env")
+    args = build_parser().parse_args()
+    try:
+        print(json.dumps(run(args), ensure_ascii=False, default=str, sort_keys=True))
+        return 0
+    except Exception as exc:
+        print(json.dumps({"success": False, "error": str(exc)}, ensure_ascii=False), file=sys.stdout)
+        return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -30,8 +30,8 @@ MongoDB 数据库网关 + Vite/React 查询工作台。后端直接读取项目�
 `pymongo`、`httpx`、`hdbcli`、`python-dotenv` 和测试依赖；后续执行同步或清理时使用：
 
 ```bash
-.venv/bin/python repair_records.py --mode incremental --dry-run
-.venv/bin/python station_records.py --mode incremental --dry-run
+.venv/bin/python scripts/sync/增量同步和清洗维修故障记录.py --dry-run
+.venv/bin/python scripts/sync/station_records.py --mode incremental --dry-run
 ```
 
 ## 启动后端
@@ -80,41 +80,11 @@ npm run dev
 
 ### 四表同步与清洗
 
-系统只保留四个可执行脚本：`repair_records.py`、`station_records.py`、
-`order_bom_postings.py` 和 `serial_bindings.py`。它们均支持
-`--mode full|incremental`、`--start-date`、`--end-date`、`--lookback-days`、
-`--batch-size`、`--dry-run`、`--apply`。默认只预览；传入 `--apply` 后，同步完成会自动执行
-字段补全和清理，无需额外确认字符串。
+每个数据源只保留一个可执行同步和清洗入口，统一位于 [`scripts/sync/`](scripts/sync/README.md)。
 
-维修故障明细会先刷新销售订单参考数据，再扫描 `repair_records_sap` 中 `_source_view=ZSGV_ZZT_WLJL` 的记录。对缺失 `AUFNR`
-或 `VBELN` 的记录，脚本首先以共同的主机序列号 `PCODE` 查询 `station_records_sap`
-（`_source_view=Z_V_ZMES_T_001`）：同一 SN 的 `AUFNR` 或 `KDAUF` 只有唯一值时，分别回填维修
-记录的 `AUFNR` 或 `VBELN`；存在多个不同值时不自动写入。仅当工位表不能提供生产订单时，才使用
-`PCODE` 查询 SAP，先查 KK 生产、再查 SG 生产；之后按来源优先级查询销售订单看板
-`data.AUFNR/data.VBELN` 补充仍缺失的销售订单。两边都查不到的记录保留；已得到生产订单但销售
-订单看板不存在的记录列为非 5000 订单，可在 apply 模式删除；看板中存在生产订单但销售订单仍为空
-的记录保留并跳过。对于已确定生产订单且 `GSTRS` 为空的维修记录，脚本从销售订单表回填计划开始
-时间；同一生产订单存在多个计划开始时间时不写入，并计入冲突统计。生产订单和销售订单均非空但生产
-订单不在看板中的记录也会列为删除候选。汇总中的 `filled_production_from_station`、
-`filled_sales_from_station`、`planned_start_candidates`、`skipped_ambiguous_planned_start` 和
-`station_ambiguous_*_sns` 用于核对回填与冲突情况。
+### 维修故障主同步与清洗
 
-维修明细默认只预览，不写入或删除：
-
-```bash
-python repair_records.py --mode incremental --dry-run
-```
-
-确认统计无误后执行同步、回填和删除：
-
-```bash
-python repair_records.py --mode incremental --apply
-```
-
-### 工位记录回填维修订单
-
-`scripts/maintenance/增量同步和清洗维修故障记录.py` 是一个独立的回填脚本，不执行
-删除或其他清洗。它从工位记录表构建集合 A：仅保留
+`scripts/sync/增量同步和清洗维修故障记录.py` 是维修故障记录唯一的同步和清洗脚本：默认先从 HANA 增量同步 `repair_records_sap`，再回填订单和计划生产时间；不会删除维修记录。它从工位记录表构建集合 A：仅保留
 `PCODE`、`AUFNR`、`KDAUF` 均非空且同一 `PCODE` 仅对应一个不同 `(AUFNR, KDAUF)`
 组合的数据。发生多订单冲突的序列号会在汇总中计数并跳过。随后脚本只处理维修表中
 `VBELN` 缺失、`null`、空串或仅空白的记录，并同时回填 `AUFNR` 和 `VBELN`。
@@ -122,13 +92,13 @@ python repair_records.py --mode incremental --apply
 默认是只读预览，JSON 摘要会包含进度统计和最多 20 条回填样本：
 
 ```bash
-.venv/bin/python scripts/maintenance/增量同步和清洗维修故障记录.py --dry-run
+.venv/bin/python scripts/sync/增量同步和清洗维修故障记录.py --dry-run
 ```
 
 确认预览后执行回填：
 
 ```bash
-.venv/bin/python scripts/maintenance/增量同步和清洗维修故障记录.py --apply
+.venv/bin/python scripts/sync/增量同步和清洗维修故障记录.py --apply
 ```
 
 可使用 `--preview-limit 50` 调整样本数、`--batch-size 1000` 调整批大小、
@@ -141,13 +111,13 @@ python repair_records.py --mode incremental --apply
 会跳过。先预览：
 
 ```bash
-.venv/bin/python scripts/maintenance/增量同步和清洗维修故障记录.py --dry-run --repair-pcode-fallback
+.venv/bin/python scripts/sync/增量同步和清洗维修故障记录.py --dry-run --repair-pcode-fallback
 ```
 
 确认后执行：
 
 ```bash
-.venv/bin/python scripts/maintenance/增量同步和清洗维修故障记录.py --apply --repair-pcode-fallback
+.venv/bin/python scripts/sync/增量同步和清洗维修故障记录.py --apply --repair-pcode-fallback
 ```
 
 对于集合 A/B 都没有命中且 `AUFNR` 为空的维修记录，可启用 SAP SN 查询作为第三级来源。
@@ -156,13 +126,13 @@ PCODE 查询 SG（client 800）。该模式只回填当前为空的 AUFNR，始�
 不会因 SAP 查询覆盖已有生产订单或写入推断出的销售订单。先预览：
 
 ```bash
-.venv/bin/python scripts/maintenance/增量同步和清洗维修故障记录.py --dry-run --sap-pcode-fallback
+.venv/bin/python scripts/sync/增量同步和清洗维修故障记录.py --dry-run --sap-pcode-fallback
 ```
 
 确认后执行：
 
 ```bash
-.venv/bin/python scripts/maintenance/增量同步和清洗维修故障记录.py --apply --sap-pcode-fallback
+.venv/bin/python scripts/sync/增量同步和清洗维修故障记录.py --apply --sap-pcode-fallback
 ```
 
 在 SAP 查询补齐生产订单后，可再加 `--sales-order-fallback`。脚本会从已同步的
@@ -171,7 +141,7 @@ PCODE 查询 SG（client 800）。该模式只回填当前为空的 AUFNR，始�
 同一生产订单对应多个不同销售订单时不会写入。执行前应先完成销售订单明细同步，推荐完整预览：
 
 ```bash
-.venv/bin/python scripts/maintenance/增量同步和清洗维修故障记录.py \
+.venv/bin/python scripts/sync/增量同步和清洗维修故障记录.py \
   --dry-run --repair-pcode-fallback --sap-pcode-fallback --sales-order-fallback
 ```
 
@@ -179,44 +149,52 @@ PCODE 查询 SG（client 800）。该模式只回填当前为空的 AUFNR，始�
 `sales_detail_ambiguous_production_orders` 后执行实际写入：
 
 ```bash
-.venv/bin/python scripts/maintenance/增量同步和清洗维修故障记录.py \
+.venv/bin/python scripts/sync/增量同步和清洗维修故障记录.py \
   --apply --repair-pcode-fallback --sap-pcode-fallback --sales-order-fallback
+```
+
+使用 `--planned-start-fallback` 可从 `sales_orders_sap.data.GSTRS`（或标准化字段
+`gstrs_date`）按生产订单回填维修记录的空 `GSTRS` 计划生产时间。只有同一 AUFNR 对应唯一
+非空计划时间时才写入；多个不同计划时间会在汇总的
+`planned_start_ambiguous_production_orders` 中计数并跳过。可单独执行：
+
+```bash
+.venv/bin/python scripts/sync/增量同步和清洗维修故障记录.py \
+  --apply --planned-start-fallback
 ```
 
 #### 一键订单修复
 
-作为完整的维修故障记录订单修复流程，依赖表必须先于维修表最终回填完成同步：先更新
-`sales_orders_sap` 和 `station_records_sap`。本脚本可通过 `--sync-repair-hana` 增量同步
-HANA 维修故障记录，随后才读取依赖表并回填 `repair_records_sap`。它不触发销售订单或工位表同步，
-也不会删除维修记录。
+作为完整的维修故障记录同步和修复流程，依赖表必须先于维修表最终回填完成同步：先更新
+`sales_orders_sap` 和 `station_records_sap`。本脚本默认增量同步 HANA 维修故障记录，随后读取依赖表并回填 `repair_records_sap`。
 
-`--one-click` 会按以下顺序启用全部确定性来源：工位集合 A、维修记录集合 B、SAP SN 批量查询、
-销售订单明细 `AUFNR -> VBELN` 反查。实际写入默认将每一条变更写入
+默认会按以下顺序启用全部确定性来源：工位集合 A、维修记录集合 B、SAP SN 批量查询、
+销售订单明细 `AUFNR -> VBELN` 和 `AUFNR -> GSTRS` 反查。实际写入默认将每一条变更写入
 `repair_order_backfill_audit`（可通过环境变量 `REPAIR_ORDER_BACKFILL_AUDIT_COLLECTION` 修改），
 审计记录按 `run_id:repair_id` 唯一保存变更前后值和来源。
 
 先预览：
 
 ```bash
-.venv/bin/python scripts/maintenance/增量同步和清洗维修故障记录.py \
-  --dry-run --one-click --preview-limit 50
+.venv/bin/python scripts/sync/增量同步和清洗维修故障记录.py \
+  --dry-run --preview-limit 50
 ```
 
 确认后一次执行回填：
 
 ```bash
-.venv/bin/python scripts/maintenance/增量同步和清洗维修故障记录.py \
-  --apply --one-click
+.venv/bin/python scripts/sync/增量同步和清洗维修故障记录.py \
+  --apply
 ```
 
-需要在同一条命令内先增量同步 HANA 维修故障记录、再回填订单字段时，使用：
+需要只对已同步维修数据重新执行回填而不访问 HANA 时，使用：
 
 ```bash
-.venv/bin/python scripts/maintenance/增量同步和清洗维修故障记录.py \
-  --apply --sync-repair-hana --one-click
+.venv/bin/python scripts/sync/增量同步和清洗维修故障记录.py \
+  --apply --skip-hana-sync
 ```
 
-该模式的顺序固定为：HANA 增量写入维修表、构建订单来源并回填空字段、提交 HANA 维修水位线。
+默认模式的顺序固定为：HANA 增量写入维修表、构建订单来源并回填空字段、提交 HANA 维修水位线。
 订单回填或 SAP 查询失败时不会提交 HANA 水位线，下一次会在回看窗口内重新同步；全程仅新增或更新
 维修记录和审计记录，不执行删除。可用 `--sync-end-date YYYY-MM-DD` 和
 `--sync-lookback-days 7` 控制 HANA 增量范围。
@@ -290,25 +268,23 @@ RECORD01REPAIRM SLOT AUFNR VBELN POSNR U_FIND U_RMA_NAME RMA_RESULT RMA_TYPE2
 
 | 脚本 | 目标集合 | 同步后自动处理 |
 |---|---|---|
-| `repair_records.py` | `repair_records_sap` | 销售订单预同步、工位优先回填、SAP 兜底、销售订单和 `GSTRS` 补全、异常记录清理 |
-| `station_records.py` | `station_records_sap` | 销售订单/生产订单字段补全和无效销售订单清理 |
-| `order_bom_postings.py` | `order_bom_postings_sap` | 仅保留 `CPX=5000公司` |
-| `serial_bindings.py` | `serial_bindings_sap` | 仅删除完整业务键的精确重复记录，保留并统计不完整键 |
+| `scripts/sync/增量同步和清洗维修故障记录.py` | `repair_records_sap` | HANA 增量同步、工位优先回填、SAP 兜底、销售订单和 `GSTRS` 补全；不删除维修记录 |
+| `scripts/sync/station_records.py` | `station_records_sap` | 销售订单/生产订单字段补全和无效销售订单清理 |
+| `scripts/sync/order_bom_postings.py` | `order_bom_postings_sap` | 仅保留 `CPX=5000公司` |
+| `scripts/sync/serial_bindings.py` | `serial_bindings_sap` | 仅删除完整业务键的精确重复记录，保留并统计不完整键 |
 
 日常增量预览和执行：
 
 ```bash
-python repair_records.py --sales-only --mode incremental --apply
-python station_records.py --mode incremental --apply
-python repair_records.py --mode incremental --apply
-python order_bom_postings.py --mode incremental --apply
-python serial_bindings.py --mode incremental --apply
+python scripts/sync/sync_sales_orders.py
+python scripts/sync/station_records.py --mode incremental --apply
+python scripts/sync/增量同步和清洗维修故障记录.py --apply
+python scripts/sync/order_bom_postings.py --mode incremental --apply
+python scripts/sync/serial_bindings.py --mode incremental --apply
 ```
 
-全量重建时，将上述命令的 `--mode incremental` 换为
-`--mode full --start-date 2026-01-01`。后端“立即同步”按相同顺序自动执行；所有阶段使用文件锁和
-MongoDB 租约锁防止并发运行。`SYNC_PYTHON` 指定 Python 解释器，`SYNC_SCRIPT_DIR` 指向包含这四个
-脚本的项目根目录。
+销售订单、工位、BOM 和序列号绑定全量重建时使用各自的 `--mode full --start-date 2026-01-01`（销售订单使用 `--full --start-date 2026-01-01`）。维修主脚本只执行增量同步。后端“立即同步”按相同顺序自动执行；所有阶段使用文件锁和
+MongoDB 租约锁防止并发运行。`SYNC_PYTHON` 指定 Python 解释器，`SYNC_SCRIPT_DIR` 指向项目根目录。
 
 前端顶栏提供两个数据操作：
 
@@ -325,6 +301,9 @@ MongoDB 租约锁防止并发运行。`SYNC_PYTHON` 指定 Python 解释器，`S
 `GET /api/views/{viewID}/detail?id=...`，只允许 docs 中登记的三个视图 ID，刷新只访问
 MongoDB，不会重新访问 HANA。
 
+订单 BOM 过账看板提供“导出销售订单为空”按钮。该导出保留当前的生产订单、物料和日期筛选，且只导出
+`VBELN_EX` 为空、空白、`null` 或缺失的 BOM 行。
+
 序列号绑定看板的表头、筛选提示、统计、分页、详情和操作按钮均采用中文/英文对照；字段标签遵循
 `ZSGV_ZPP_SERNOLIST` 文档定义，例如“大刀/机头序列号（ZCODE_HEAD）”。
 
@@ -337,24 +316,24 @@ SYNC_SCRIPT_DIR=/absolute/path/to/产线故障数据库
 ```
 
 网页按钮和定时任务应按上述五个阶段执行；销售订单作为维修和工位清洗的内部参考数据，由
-`repair_records.py --sales-only` 预同步。
+`scripts/sync/sync_sales_orders.py` 预同步。
 `SYNC_LOCK_PATH` 防止命令行、定时任务和网页按钮并发执行。同步输出会保存在
 `GET /api/sync/status` 的 `summary` 中；任一来源失败时任务标记失败，该来源水位线不会推进。
 
 首次全量同步：
 
 ```bash
-python repair_records.py --sales-only --mode full --start-date 2026-01-01 --apply
-python station_records.py --mode full --start-date 2026-01-01 --apply
-python repair_records.py --mode full --start-date 2026-01-01 --apply
-python order_bom_postings.py --mode full --start-date 2026-01-01 --apply
-python serial_bindings.py --mode full --start-date 2026-01-01 --apply
+python scripts/sync/sync_sales_orders.py --full --start-date 2026-01-01
+python scripts/sync/station_records.py --mode full --start-date 2026-01-01 --apply
+python scripts/sync/增量同步和清洗维修故障记录.py --apply
+python scripts/sync/order_bom_postings.py --mode full --start-date 2026-01-01 --apply
+python scripts/sync/serial_bindings.py --mode full --start-date 2026-01-01 --apply
 ```
 
 日常增量同步：
 
 ```bash
-python repair_records.py --sales-only --mode incremental --apply
+python scripts/sync/sync_sales_orders.py
 ```
 
 建议 crontab 每日执行增量任务。`--dry-run` 只请求和统计，不写入订单、维修记录或
@@ -362,14 +341,11 @@ python repair_records.py --sales-only --mode incremental --apply
 MongoDB 的 `sync_locks` 租约锁跨主机协调；租约时长由 `SYNC_MONGO_LOCK_TTL_SECONDS`
 配置，必须大于一次任务的最长运行时间。
 
-清理孤立维修记录时，`empty_sales_order` 仅统计空 `VBELN`，
-`unmatched_sales_order` 仅统计非空但不在销售订单表中的值；删除前会重新加载销售订单
-白名单，并同时匹配维修记录的 `_id` 与原始 `VBELN`，避免并发修改导致误删。
 
 ### 4. 表结构变更同步要求
 
 - 销售订单接口新增字段会自动保存在 `data` 和 `records` 中，无需改 MongoDB schema；若新增字段参与唯一键、数量或筛选逻辑，必须同步修改 `sync_sales_orders.py` 并补充 README。
 - 维修 HANA 视图新增字段时，必须将字段加入脚本的 `REPAIR_COLUMNS`，同时更新本节字段清单；否则脚本不会读取该列。
-- 新增同步表时，沿用同一脚本的 `--dataset` 分支、检查点、运行摘要、批量 upsert 和索引初始化模式，并在 README 增加来源、主键、日期范围、准入规则和水位线说明。
+- 新增同步表时，为该数据源创建唯一的同步和清洗入口，并复用检查点、运行摘要、批量 upsert 和索引初始化模式；同时在 README 增加来源、主键、日期范围、准入规则和水位线说明。
 - 源字段重命名、业务键变化或目标集合改名属于迁移操作：先备份目标集合，再更新脚本和索引，最后用 `--full --start-date` 重建，禁止直接覆盖旧集合造成混合数据。
 - 每次表或字段变更后先运行 `--dry-run`，确认返回行数、过滤数、唯一键和水位线，再执行正式同步。

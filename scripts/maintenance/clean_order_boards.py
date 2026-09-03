@@ -28,7 +28,7 @@ from scripts.sources.hana.hana_view_sync import (  # noqa: E402
     mongo_write_concern_summary,
     process_lock,
 )
-from scripts.sources.sap_http.sync_sales_orders import env, load_dotenv  # noqa: E402
+from scripts.sync.sync_sales_orders import env, load_dotenv  # noqa: E402
 
 
 CONFIRMATION = "DELETE-ORDER-BOARD-INVALID"
@@ -414,4 +414,3 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         except Exception:
             pass
         client.close()
-

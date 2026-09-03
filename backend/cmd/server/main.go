@@ -1,8 +1,10 @@
 package main
 
 import (
+	"compress/gzip"
 	"context"
 	"encoding/json"
+	"io"
 	"log"
 	"net/http"
 	"net/url"
@@ -12,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
 	"production-fault-gateway/internal/store"
 )
@@ -53,6 +56,8 @@ func main() {
 	mux.HandleFunc("GET /", h.root)
 	mux.HandleFunc("GET /api/health", h.health)
 	mux.HandleFunc("GET /api/faults", h.faults)
+	mux.HandleFunc("POST /api/faults/lookup", h.faultLookup)
+	mux.HandleFunc("POST /api/faults/by-sns", h.faultRowsBySNS)
 	mux.HandleFunc("GET /api/faults/by-sns", h.faultsBySNS)
 	mux.HandleFunc("GET /api/faults/by-orders", h.faultsByOrders)
 	mux.HandleFunc("GET /api/faults/detail", h.faultDetail)
@@ -63,6 +68,8 @@ func main() {
 	mux.HandleFunc("GET /api/orders/stats", h.orderStats)
 	mux.HandleFunc("GET /api/orders/models", h.orderModels)
 	mux.HandleFunc("GET /api/views/{viewID}", h.viewList)
+	mux.HandleFunc("GET /api/views/{viewID}/all", h.viewListAll)
+	mux.HandleFunc("GET /api/views/{viewID}/stream", h.viewStream)
 	mux.HandleFunc("GET /api/views/{viewID}/detail", h.viewDetail)
 	mux.HandleFunc("GET /api/views/{viewID}/stats", h.viewStats)
 	mux.HandleFunc("POST /api/sync/incremental", h.startIncrementalSync)
@@ -72,7 +79,7 @@ func main() {
 	// Keep the default aligned with the Vite development proxy and README.
 	addr := getenv("PORT", "18080")
 	log.Printf("fault gateway listening on :%s", addr)
-	log.Fatal(http.ListenAndServe(":"+addr, cors(mux)))
+	log.Fatal(http.ListenAndServe(":"+addr, gzipJSON(cors(mux))))
 }
 
 func (s *server) root(w http.ResponseWriter, r *http.Request) {
@@ -110,6 +117,71 @@ func (s *server) faults(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, result)
+}
+
+func (s *server) faultLookup(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		ProductionOrders []string `json:"productionOrders"`
+		SalesOrders      []string `json:"salesOrders"`
+		DateFrom         string   `json:"dateFrom"`
+		DateTo           string   `json:"dateTo"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON body"})
+		return
+	}
+	if len(body.ProductionOrders) == 0 && len(body.SalesOrders) == 0 {
+		writeJSON(w, http.StatusOK, map[string]any{"items": []store.FaultSN{}})
+		return
+	}
+	lookup, ok := s.store.(interface {
+		FaultSNs(context.Context, store.Filters) ([]store.FaultSN, error)
+	})
+	if !ok {
+		writeJSON(w, http.StatusNotImplemented, map[string]string{"error": "fault lookup API unavailable"})
+		return
+	}
+	items, err := lookup.FaultSNs(r.Context(), store.Filters{
+		ProductionOrders: strings.Join(body.ProductionOrders, ","),
+		SalesOrders:      strings.Join(body.SalesOrders, ","),
+		DateFrom:         body.DateFrom,
+		DateTo:           body.DateTo,
+	})
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
+func (s *server) faultRowsBySNS(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		SNS      []string `json:"sns"`
+		DateFrom string   `json:"dateFrom"`
+		DateTo   string   `json:"dateTo"`
+		Station  string   `json:"station"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON body"})
+		return
+	}
+	if len(body.SNS) > 10000 {
+		writeJSON(w, http.StatusRequestEntityTooLarge, map[string]string{"error": "too many SN values"})
+		return
+	}
+	api, ok := s.store.(interface {
+		FaultRowsBySNS(context.Context, []string, string, string, string) ([]bson.M, error)
+	})
+	if !ok {
+		writeJSON(w, http.StatusNotImplemented, map[string]string{"error": "fault SN rows API unavailable"})
+		return
+	}
+	items, err := api.FaultRowsBySNS(r.Context(), body.SNS, body.DateFrom, body.DateTo, body.Station)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": items})
 }
 
 func (s *server) faultsBySNS(w http.ResponseWriter, r *http.Request)    { s.faults(w, r) }
@@ -225,6 +297,63 @@ func (s *server) viewList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, result)
+}
+
+func (s *server) viewListAll(w http.ResponseWriter, r *http.Request) {
+	api, ok := s.store.(interface {
+		ViewListAll(context.Context, string, store.ViewFilters) (store.ViewListResult, error)
+	})
+	if !ok {
+		writeJSON(w, http.StatusNotImplemented, map[string]string{"error": "view bulk API unavailable"})
+		return
+	}
+	result, err := api.ViewListAll(r.Context(), r.PathValue("viewID"), viewFilters(r.URL.Query()))
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+func (s *server) viewStream(w http.ResponseWriter, r *http.Request) {
+	viewID := r.PathValue("viewID")
+	if viewID == "Z_V_ZMES_T_001" {
+		s.viewStationStream(w, r)
+		return
+	}
+	if viewID != "ZSGV_ZSD124" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "stream is only available for ZSGV_ZSD124"})
+		return
+	}
+	api, ok := s.store.(interface {
+		ViewBOMStream(context.Context, store.ViewFilters, io.Writer) error
+	})
+	if !ok {
+		writeJSON(w, http.StatusNotImplemented, map[string]string{"error": "view stream API unavailable"})
+		return
+	}
+	w.Header().Set("Content-Type", "text/tab-separated-values; charset=utf-8")
+	w.Header().Set("Content-Disposition", `attachment; filename="bom.tsv"`)
+	if err := api.ViewBOMStream(r.Context(), viewFilters(r.URL.Query()), w); err != nil {
+		// The stream may already have emitted rows; at that point the only safe
+		// action is to close the response rather than append invalid JSON.
+		return
+	}
+}
+
+func (s *server) viewStationStream(w http.ResponseWriter, r *http.Request) {
+	api, ok := s.store.(interface {
+		ViewStationStream(context.Context, store.ViewFilters, io.Writer) error
+	})
+	if !ok {
+		writeJSON(w, http.StatusNotImplemented, map[string]string{"error": "station stream API unavailable"})
+		return
+	}
+	w.Header().Set("Content-Type", "text/tab-separated-values; charset=utf-8")
+	w.Header().Set("Content-Disposition", `attachment; filename="station.tsv"`)
+	if err := api.ViewStationStream(r.Context(), viewFilters(r.URL.Query()), w); err != nil {
+		return
+	}
 }
 
 func (s *server) viewDetail(w http.ResponseWriter, r *http.Request) {
@@ -350,6 +479,39 @@ func cors(next http.Handler) http.Handler {
 		next.ServeHTTP(w, r)
 	})
 }
+
+// gzipJSON keeps large raw dashboard responses cheap to move between the
+// gateway and quality backend without changing the data contract.
+func gzipJSON(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.Contains(r.Header.Get("Accept-Encoding"), "gzip") {
+			next.ServeHTTP(w, r)
+			return
+		}
+		w.Header().Set("Content-Encoding", "gzip")
+		w.Header().Add("Vary", "Accept-Encoding")
+		// Raw dashboard views can be hundreds of MB before compression. The
+		// gateway is latency-sensitive and runs on a private network, so use the
+		// fastest gzip level rather than spending seconds on ratio optimization.
+		gz, err := gzip.NewWriterLevel(w, gzip.BestSpeed)
+		if err != nil {
+			next.ServeHTTP(w, r)
+			return
+		}
+		defer gz.Close()
+		next.ServeHTTP(&gzipResponseWriter{ResponseWriter: w, Writer: gz}, r)
+	})
+}
+
+type gzipResponseWriter struct {
+	http.ResponseWriter
+	io.Writer
+}
+
+func (w *gzipResponseWriter) Write(p []byte) (int, error) {
+	return w.Writer.Write(p)
+}
+
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(status)

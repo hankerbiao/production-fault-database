@@ -1,10 +1,14 @@
 package store
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -16,10 +20,21 @@ import (
 )
 
 type Store struct {
-	client  *mongo.Client
-	repairs *mongo.Collection
-	orders  *mongo.Collection
-	views   map[string]*mongo.Collection
+	client          *mongo.Client
+	repairs         *mongo.Collection
+	orders          *mongo.Collection
+	views           map[string]*mongo.Collection
+	bomCacheMu      sync.RWMutex
+	bomCache        map[string]bomStreamCacheEntry
+	bomWarmDone     chan struct{}
+	stationCacheMu  sync.RWMutex
+	stationCache    map[string]bomStreamCacheEntry
+	stationWarmDone chan struct{}
+}
+
+type bomStreamCacheEntry struct {
+	data      []byte
+	expiresAt time.Time
 }
 
 type Filters struct {
@@ -52,6 +67,11 @@ type Fault struct {
 	RetestStation        string    `json:"retestStation"`
 	RepairRemarks        string    `json:"repairRemarks"`
 	Raw                  bson.M    `json:"raw,omitempty"`
+}
+
+type FaultSN struct {
+	ProductionOrder string `json:"productionOrder"`
+	SerialNumber    string `json:"serialNumber"`
 }
 
 type Field struct {
@@ -111,7 +131,12 @@ type OrderListResult struct {
 	Total    int64   `json:"total"`
 }
 
-const MaxOrderQueryRows = 10000
+const MaxOrderQueryRows = 1000000
+const MaxViewQueryRows = 1000000
+
+var bomStreamFields = []string{"id", "AUFNR_1", "VBELN_EX", "MENGE_A", "MATNR", "LGORT", "BUDAT_MKPF"}
+var stationStreamFields = []string{"id", "PCODE", "AUFNR", "KDAUF", "SPEC", "SPEC_DESC", "OPERATION", "ACTUAL_START_TIME", "ACTUAL_END_TIME", "MAKTX_TH", "LGORT", "LINE_CODE"}
+var tsvSanitizer = strings.NewReplacer("\t", " ", "\r", " ", "\n", " ")
 
 type OrderStatsResult struct {
 	Total           int64   `json:"total"`
@@ -171,7 +196,23 @@ var documentedViews = map[string]struct {
 	"Z_V_ZMES_T_001":     {"station_records_sap", "ACTUAL_START_TIME", []string{"HISTROYID", "PCODE", "OCODE", "AUFNR", "SPEC", "OPERATION", "GSTRS", "ACTUAL_START_TIME", "ACTUAL_END_TIME"}, []string{"ACTUAL_START_TIME", "HISTROYID", "SPEC_TIME"}},
 }
 
+var viewAllProjections = map[string]bson.M{
+	"ZSGV_ZSD124": {
+		"_id": 1, "_source_key": 1, "AUFNR_1": 1, "VBELN_EX": 1, "MENGE_A": 1,
+		"MATNR": 1, "LGORT": 1, "WERKS": 1, "BUDAT_MKPF": 1, "KUNNR": 1, "NAME1": 1,
+	},
+	"Z_V_ZMES_T_001": {
+		"_id": 1, "_source_key": 1, "PCODE": 1, "AUFNR": 1, "KDAUF": 1,
+		"SPEC": 1, "SPEC_DESC": 1, "OPERATION": 1, "ACTUAL_START_TIME": 1,
+		"ACTUAL_END_TIME": 1, "MAKTX_TH": 1, "LGORT": 1, "LINE_CODE": 1,
+	},
+}
+
 const viewListIndexName = "api_view_list_order"
+const bomStreamCacheTTL = 60 * time.Second
+const bomStreamCacheMaxBytes = 64 << 20
+const stationStreamCacheTTL = 60 * time.Second
+const stationStreamCacheMaxBytes = 96 << 20
 
 // Legacy projections are retained for callers that import these definitions; raw-data
 // list endpoints intentionally read the complete source document.
@@ -183,6 +224,8 @@ var repairListProjection = bson.M{
 var orderListProjection = bson.M{
 	"source": 1, "aufnr": 1, "record_count": 1, "order_quantity": 1, "storage_quantity": 1,
 	"data.VBELN": 1, "data.KID": 1, "data.NAME1_ZU": 1, "data.MAKTX": 1, "data.MAKTX_TH": 1, "data.LGORT": 1, "data.GSTRS": 1, "data.GAMNG": 1, "data.WMENG": 1,
+	"data.IF_L6": 1, "data.ZSTAT": 1, "data.AUART": 1,
+	"data.出厂日期": 1, "data.生产日期": 1, "data.FACTORY_DATE": 1, "data.保修结束日期": 1, "data.质保到期日": 1, "data.WARRANTY_END_DATE": 1,
 	"records.GAMNG": 1, "records.WMENG": 1,
 }
 
@@ -196,6 +239,28 @@ func New(ctx context.Context, uri, database, repairCollection, orderCollection s
 		return nil, err
 	}
 	db := client.Database(database)
+	// RTY joins orders to repairs by production order and date. Build the
+	// supporting indexes asynchronously so startup remains fast while large
+	// collections become queryable without full scans.
+	go func() {
+		indexCtx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+		defer cancel()
+		_, _ = db.Collection(repairCollection).Indexes().CreateMany(indexCtx, []mongo.IndexModel{
+			{Keys: bson.D{{Key: "AUFNR", Value: 1}, {Key: "ZDATE_WX", Value: 1}}},
+			{Keys: bson.D{{Key: "PCODE", Value: 1}}},
+			{Keys: bson.D{{Key: "VBELN", Value: 1}}},
+		})
+		_, _ = db.Collection(orderCollection).Indexes().CreateMany(indexCtx, []mongo.IndexModel{
+			{Keys: bson.D{{Key: "gstrs_date", Value: 1}, {Key: "data.IF_L6", Value: 1}}},
+			{Keys: bson.D{{Key: "data.VBELN", Value: 1}}},
+			{Keys: bson.D{{Key: "aufnr", Value: 1}}},
+		})
+		_, _ = db.Collection("order_bom_postings_sap").Indexes().CreateMany(indexCtx, []mongo.IndexModel{
+			{Keys: bson.D{{Key: "BUDAT_MKPF", Value: 1}}},
+			{Keys: bson.D{{Key: "AUFNR_1", Value: 1}, {Key: "BUDAT_MKPF", Value: 1}}},
+			{Keys: bson.D{{Key: "VBELN_EX", Value: 1}, {Key: "BUDAT_MKPF", Value: 1}}},
+		})
+	}()
 	views := make(map[string]*mongo.Collection, len(documentedViews))
 	for id, config := range documentedViews {
 		collection := db.Collection(config.collection)
@@ -212,7 +277,16 @@ func New(ctx context.Context, uri, database, repairCollection, orderCollection s
 			_, _ = collection.Indexes().CreateOne(indexCtx, mongo.IndexModel{Keys: keys, Options: options.Index().SetName(viewListIndexName)})
 		}(collection, keys)
 	}
-	return &Store{client: client, repairs: db.Collection(repairCollection), orders: db.Collection(orderCollection), views: views}, nil
+	result := &Store{
+		client: client, repairs: db.Collection(repairCollection), orders: db.Collection(orderCollection), views: views,
+		bomCache: make(map[string]bomStreamCacheEntry), bomWarmDone: make(chan struct{}),
+		stationCache: make(map[string]bomStreamCacheEntry), stationWarmDone: make(chan struct{}),
+	}
+	// Warm the broad LRR raw snapshot after startup so the first dashboard read
+	// does not pay the full Mongo scan latency.
+	go result.prewarmBOMStream()
+	go result.prewarmStationStream()
+	return result, nil
 }
 
 func (s *Store) Close(ctx context.Context) error { return s.client.Disconnect(ctx) }
@@ -332,7 +406,7 @@ func (s *Store) List(ctx context.Context, f Filters, page, pageSize int) (ListRe
 		return ListResult{}, err
 	}
 	defer cur.Close(ctx)
-	var docs []bson.M
+	docs := make([]bson.M, 0)
 	if err = cur.All(ctx, &docs); err != nil {
 		return ListResult{}, err
 	}
@@ -341,6 +415,133 @@ func (s *Store) List(ctx context.Context, f Filters, page, pageSize int) (ListRe
 		items = append(items, normalizeFault(doc))
 	}
 	return ListResult{Items: items, Page: page, PageSize: pageSize, Total: total}, nil
+}
+
+// FaultSNs returns only the order/SN relationship needed by RTY joins.
+// Keeping this projection at the gateway avoids transferring full repair rows.
+func (s *Store) FaultSNs(ctx context.Context, f Filters) ([]FaultSN, error) {
+	filter := faultLookupFilter(f)
+	cur, err := s.repairs.Find(ctx, filter, options.Find().SetProjection(bson.M{"AUFNR": 1, "PCODE": 1}).SetLimit(500000))
+	if err != nil {
+		return nil, err
+	}
+	defer cur.Close(ctx)
+	seen := make(map[string]struct{})
+	result := make([]FaultSN, 0)
+	for cur.Next(ctx) {
+		var row struct {
+			AUFNR string `bson:"AUFNR"`
+			PCODE string `bson:"PCODE"`
+		}
+		if err := cur.Decode(&row); err != nil {
+			return nil, err
+		}
+		if row.AUFNR == "" || row.PCODE == "" {
+			continue
+		}
+		key := row.AUFNR + "\x00" + row.PCODE
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		result = append(result, FaultSN{ProductionOrder: row.AUFNR, SerialNumber: row.PCODE})
+	}
+	if err := cur.Err(); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+// FaultRowsBySNS returns the projected repair rows needed by station RTY.
+// A POST body avoids the URL-size limit of the generic list endpoint.
+func (s *Store) FaultRowsBySNS(ctx context.Context, sns []string, dateFrom, dateTo, station string) ([]bson.M, error) {
+	values := make([]string, 0, len(sns))
+	seen := make(map[string]struct{}, len(sns))
+	for _, value := range sns {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		values = append(values, value)
+	}
+	if len(values) == 0 {
+		return []bson.M{}, nil
+	}
+	filter := bson.M{"PCODE": bson.M{"$in": values}}
+	dateBounds := bson.M{}
+	if dateFrom != "" {
+		dateBounds["$gte"] = strings.ReplaceAll(dateFrom, "-", "")
+	}
+	if dateTo != "" {
+		dateBounds["$lte"] = strings.ReplaceAll(dateTo, "-", "")
+	}
+	if len(dateBounds) > 0 {
+		filter["ZDATE_WX"] = dateBounds
+	}
+	if strings.TrimSpace(station) != "" {
+		filter["ZNGGZ"] = strings.TrimSpace(station)
+	}
+	cur, err := s.repairs.Find(ctx, filter, options.Find().SetProjection(repairListProjection).SetLimit(500000).SetBatchSize(10000))
+	if err != nil {
+		return nil, err
+	}
+	defer cur.Close(ctx)
+	rows := make([]bson.M, 0)
+	if err := cur.All(ctx, &rows); err != nil {
+		return nil, err
+	}
+	return rows, nil
+}
+
+// faultLookupFilter is optimized for RTY's batch join. SAP production orders
+// are commonly stored as 12-digit zero-padded strings while the order gateway
+// returns the trimmed value, so the candidate set includes both forms.
+func faultLookupFilter(f Filters) bson.M {
+	conditions := make(bson.A, 0, 3)
+	if f.ProductionOrders != "" {
+		values := make([]string, 0)
+		seen := make(map[string]struct{})
+		for _, value := range splitValues(f.ProductionOrders) {
+			trimmed := strings.TrimLeft(value, "0")
+			if trimmed == "" {
+				trimmed = "0"
+			}
+			padded := strings.Repeat("0", max(0, 12-len(trimmed))) + trimmed
+			for _, candidate := range []string{value, trimmed, padded} {
+				if _, ok := seen[candidate]; !ok {
+					seen[candidate] = struct{}{}
+					values = append(values, candidate)
+				}
+			}
+		}
+		if len(values) > 0 {
+			conditions = append(conditions, bson.M{"AUFNR": bson.M{"$in": values}})
+		}
+	}
+	if f.SalesOrders != "" {
+		values := splitValues(f.SalesOrders)
+		if len(values) > 0 {
+			conditions = append(conditions, bson.M{"VBELN": bson.M{"$in": values}})
+		}
+	}
+	if f.DateFrom != "" || f.DateTo != "" {
+		bounds := bson.M{}
+		if f.DateFrom != "" {
+			bounds["$gte"] = strings.ReplaceAll(f.DateFrom, "-", "")
+		}
+		if f.DateTo != "" {
+			bounds["$lte"] = strings.ReplaceAll(f.DateTo, "-", "")
+		}
+		conditions = append(conditions, bson.M{"ZDATE_WX": bounds})
+	}
+	if len(conditions) == 0 {
+		return bson.M{"_id": bson.M{"$exists": false}}
+	}
+	return bson.M{"$and": conditions}
 }
 
 func (s *Store) FaultDetail(ctx context.Context, id string) (FaultDetail, error) {
@@ -432,12 +633,12 @@ func (s *Store) Orders(ctx context.Context, f OrderFilters, page, pageSize int) 
 	if err != nil {
 		return OrderListResult{}, err
 	}
-	cur, err := s.orders.Find(ctx, filter, options.Find().SetSort(bson.D{{Key: "data.GSTRS", Value: -1}, {Key: "last_synced_at", Value: -1}}).SetSkip(int64((page-1)*pageSize)).SetLimit(int64(pageSize)))
+	cur, err := s.orders.Find(ctx, filter, options.Find().SetProjection(orderListProjection).SetSort(bson.D{{Key: "data.GSTRS", Value: -1}, {Key: "last_synced_at", Value: -1}}).SetSkip(int64((page-1)*pageSize)).SetLimit(int64(pageSize)).SetBatchSize(10000))
 	if err != nil {
 		return OrderListResult{}, err
 	}
 	defer cur.Close(ctx)
-	var docs []bson.M
+	docs := make([]bson.M, 0)
 	if err = cur.All(ctx, &docs); err != nil {
 		return OrderListResult{}, err
 	}
@@ -616,7 +817,7 @@ func (s *Store) ViewList(ctx context.Context, viewID string, f ViewFilters, page
 	// them together removes one full network/database round-trip from the
 	// request latency, which matters for the unfiltered large station view.
 	var total int64
-	var docs []bson.M
+	docs := make([]bson.M, 0)
 	var countErr, findErr error
 	var wg sync.WaitGroup
 	wg.Add(2)
@@ -646,6 +847,251 @@ func (s *Store) ViewList(ctx context.Context, viewID string, f ViewFilters, page
 		normalizeViewID(doc)
 	}
 	return ViewListResult{Items: docs, Page: page, PageSize: pageSize, Total: total}, nil
+}
+
+// ViewListAll is intended for server-side calculations such as LRR. It uses
+// a narrow projection and a hard row bound instead of forcing thousands of
+// small HTTP pages across the gateway boundary.
+func (s *Store) ViewListAll(ctx context.Context, viewID string, f ViewFilters) (ViewListResult, error) {
+	config, ok := documentedViews[viewID]
+	if !ok {
+		return ViewListResult{}, fmt.Errorf("unknown view: %s", viewID)
+	}
+	filter := viewFilter(viewID, f, config.searchFields, config.dateField)
+	projection := viewAllProjections[viewID]
+	findOptions := options.Find().SetLimit(MaxViewQueryRows).SetBatchSize(10000)
+	if projection != nil {
+		findOptions.SetProjection(projection)
+	}
+	cur, err := s.views[viewID].Find(ctx, filter, findOptions)
+	if err != nil {
+		return ViewListResult{}, err
+	}
+	defer cur.Close(ctx)
+	docs := make([]bson.M, 0)
+	if err := cur.All(ctx, &docs); err != nil {
+		return ViewListResult{}, err
+	}
+	return ViewListResult{Items: docs, Page: 1, PageSize: len(docs), Total: int64(len(docs))}, nil
+}
+
+// ViewBOMStream writes source BOM fields as CSV without JSON map reflection.
+// It deliberately exposes raw rows only; LRR grouping and rates stay in the
+// quality-monitoring service.
+func (s *Store) ViewBOMStream(ctx context.Context, f ViewFilters, out io.Writer) error {
+	if isEmptyBOMFilter(f) && s.bomWarmDone != nil {
+		select {
+		case <-s.bomWarmDone:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	return s.viewBOMStream(ctx, f, out)
+}
+
+func (s *Store) prewarmBOMStream() {
+	defer close(s.bomWarmDone)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
+	defer cancel()
+	_ = s.viewBOMStream(ctx, ViewFilters{}, io.Discard)
+}
+
+func (s *Store) viewBOMStream(ctx context.Context, f ViewFilters, out io.Writer) error {
+	config, ok := documentedViews["ZSGV_ZSD124"]
+	if !ok {
+		return fmt.Errorf("unknown view: ZSGV_ZSD124")
+	}
+	filter := viewFilter("ZSGV_ZSD124", f, config.searchFields, config.dateField)
+	cacheKey := bomStreamCacheKey(f)
+	now := time.Now()
+	s.bomCacheMu.RLock()
+	cached, ok := s.bomCache[cacheKey]
+	s.bomCacheMu.RUnlock()
+	if ok {
+		if cached.expiresAt.After(now) {
+			_, err := out.Write(cached.data)
+			return err
+		}
+		s.bomCacheMu.Lock()
+		delete(s.bomCache, cacheKey)
+		s.bomCacheMu.Unlock()
+	}
+	projection := bson.M{"_id": 0, "_source_key": 1}
+	for _, field := range bomStreamFields[1:] {
+		projection[field] = 1
+	}
+	cur, err := s.views["ZSGV_ZSD124"].Find(ctx, filter, options.Find().SetProjection(projection).SetLimit(MaxViewQueryRows).SetBatchSize(10000))
+	if err != nil {
+		return err
+	}
+	defer cur.Close(ctx)
+	// Tee the raw stream into a bounded in-memory snapshot. The first request
+	// still streams rows to the caller; subsequent identical reads avoid a
+	// repeated Mongo scan while the source remains unchanged for this short TTL.
+	var snapshot bytes.Buffer
+	w := bufio.NewWriterSize(io.MultiWriter(out, &snapshot), 1<<20)
+	if _, err := io.WriteString(w, strings.Join(bomStreamFields, "\t")+"\n"); err != nil {
+		return err
+	}
+	for cur.Next(ctx) {
+		var doc bson.M
+		if err := cur.Decode(&doc); err != nil {
+			return err
+		}
+		row := []string{csvValue(doc["_source_key"]), csvValue(doc["AUFNR_1"]), csvValue(doc["VBELN_EX"]), csvValue(doc["MENGE_A"]), csvValue(doc["MATNR"]), csvValue(doc["LGORT"]), csvValue(doc["BUDAT_MKPF"])}
+		for i := range row {
+			row[i] = tsvSanitizer.Replace(row[i])
+		}
+		if _, err := io.WriteString(w, strings.Join(row, "\t")+"\n"); err != nil {
+			return err
+		}
+	}
+	if err := cur.Err(); err != nil {
+		return err
+	}
+	if err := w.Flush(); err != nil {
+		return err
+	}
+	if snapshot.Len() <= bomStreamCacheMaxBytes {
+		s.bomCacheMu.Lock()
+		s.bomCache[cacheKey] = bomStreamCacheEntry{data: snapshot.Bytes(), expiresAt: time.Now().Add(bomStreamCacheTTL)}
+		s.bomCacheMu.Unlock()
+	}
+	return nil
+}
+
+// ViewStationStream exposes the narrow station projection used by station RTY.
+// It avoids JSON map reflection for the large raw station result set.
+func (s *Store) ViewStationStream(ctx context.Context, f ViewFilters, out io.Writer) error {
+	if f == defaultStationStreamFilters() && s.stationWarmDone != nil {
+		select {
+		case <-s.stationWarmDone:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	return s.viewStationStream(ctx, f, out)
+}
+
+func defaultStationStreamFilters() ViewFilters {
+	end := time.Now()
+	return ViewFilters{DateFrom: end.AddDate(0, 0, -29).Format("2006-01-02"), DateTo: end.Format("2006-01-02")}
+}
+
+func (s *Store) prewarmStationStream() {
+	defer close(s.stationWarmDone)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
+	defer cancel()
+	_ = s.viewStationStream(ctx, defaultStationStreamFilters(), io.Discard)
+}
+
+func (s *Store) viewStationStream(ctx context.Context, f ViewFilters, out io.Writer) error {
+	config, ok := documentedViews["Z_V_ZMES_T_001"]
+	if !ok {
+		return fmt.Errorf("unknown view: Z_V_ZMES_T_001")
+	}
+	filter := viewFilter("Z_V_ZMES_T_001", f, config.searchFields, config.dateField)
+	cacheKey := stationStreamCacheKey(f)
+	now := time.Now()
+	s.stationCacheMu.RLock()
+	cached, ok := s.stationCache[cacheKey]
+	s.stationCacheMu.RUnlock()
+	if ok {
+		if cached.expiresAt.After(now) {
+			_, err := out.Write(cached.data)
+			return err
+		}
+		s.stationCacheMu.Lock()
+		delete(s.stationCache, cacheKey)
+		s.stationCacheMu.Unlock()
+	}
+	projection := bson.M{"_id": 0, "_source_key": 1}
+	for _, field := range stationStreamFields[1:] {
+		projection[field] = 1
+	}
+	cur, err := s.views["Z_V_ZMES_T_001"].Find(ctx, filter, options.Find().SetProjection(projection).SetLimit(MaxViewQueryRows).SetBatchSize(10000))
+	if err != nil {
+		return err
+	}
+	defer cur.Close(ctx)
+	var snapshot bytes.Buffer
+	w := bufio.NewWriterSize(io.MultiWriter(out, &snapshot), 1<<20)
+	if _, err := io.WriteString(w, strings.Join(stationStreamFields, "\t")+"\n"); err != nil {
+		return err
+	}
+	for cur.Next(ctx) {
+		var doc bson.M
+		if err := cur.Decode(&doc); err != nil {
+			return err
+		}
+		row := make([]string, 0, len(stationStreamFields))
+		row = append(row, csvValue(doc["_source_key"]))
+		for _, field := range stationStreamFields[1:] {
+			row = append(row, csvValue(doc[field]))
+		}
+		for i := range row {
+			row[i] = tsvSanitizer.Replace(row[i])
+		}
+		if _, err := io.WriteString(w, strings.Join(row, "\t")+"\n"); err != nil {
+			return err
+		}
+	}
+	if err := cur.Err(); err != nil {
+		return err
+	}
+	if err := w.Flush(); err != nil {
+		return err
+	}
+	if snapshot.Len() <= stationStreamCacheMaxBytes {
+		s.stationCacheMu.Lock()
+		s.stationCache[cacheKey] = bomStreamCacheEntry{data: snapshot.Bytes(), expiresAt: time.Now().Add(stationStreamCacheTTL)}
+		s.stationCacheMu.Unlock()
+	}
+	return nil
+}
+
+func bomStreamCacheKey(f ViewFilters) string {
+	return strings.Join([]string{f.Keyword, f.From, f.To, f.DateFrom, f.DateTo, f.StationCode, f.SN, f.ProductionOrder, f.SalesOrder, f.Base, f.ProductModel, f.HeadOrder, f.ItemOrder, f.HeadSN, f.ItemSN, f.MaterialCode}, "\x00")
+}
+
+func stationStreamCacheKey(f ViewFilters) string {
+	return strings.Join([]string{f.Keyword, f.From, f.To, f.DateFrom, f.DateTo, f.StationCode, f.SN, f.ProductionOrder, f.SalesOrder, f.Base, f.ProductModel}, "\x00")
+}
+
+func isEmptyBOMFilter(f ViewFilters) bool {
+	return f == (ViewFilters{})
+}
+
+func csvValue(value any) string {
+	if value == nil {
+		return ""
+	}
+	switch typed := value.(type) {
+	case string:
+		return typed
+	case []byte:
+		return string(typed)
+	case primitive.Decimal128:
+		return typed.String()
+	case primitive.ObjectID:
+		return typed.Hex()
+	case time.Time:
+		return typed.Format(time.RFC3339)
+	case int:
+		return strconv.Itoa(typed)
+	case int32:
+		return strconv.FormatInt(int64(typed), 10)
+	case int64:
+		return strconv.FormatInt(typed, 10)
+	case float32:
+		return strconv.FormatFloat(float64(typed), 'f', -1, 32)
+	case float64:
+		return strconv.FormatFloat(typed, 'f', -1, 64)
+	case bool:
+		return strconv.FormatBool(typed)
+	default:
+		return fmt.Sprint(value)
+	}
 }
 
 func (s *Store) ViewDetail(ctx context.Context, viewID, id string) (ViewDetailResult, error) {

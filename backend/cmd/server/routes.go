@@ -8,6 +8,7 @@ func registerRoutes(h *server) *http.ServeMux {
 	mux.HandleFunc("GET /api/openapi.json", h.apiDocument)
 	mux.HandleFunc("GET /api/agent-guide.md", h.apiDocument)
 	mux.HandleFunc("GET /api/health", h.health)
+	mux.HandleFunc("GET /api/config", h.serviceConfig)
 	mux.HandleFunc("GET /api/faults", h.faults)
 	mux.HandleFunc("POST /api/faults/lookup", h.faultLookup)
 	mux.HandleFunc("POST /api/faults/by-sns", h.faultRowsBySNS)
@@ -27,6 +28,11 @@ func registerRoutes(h *server) *http.ServeMux {
 	mux.HandleFunc("GET /api/views/{viewID}/stats", h.viewStats)
 	mux.HandleFunc("POST /api/sync/incremental", h.startIncrementalSync)
 	mux.HandleFunc("GET /api/sync/status", h.syncStatus)
+	mux.HandleFunc("GET /api/sync/tasks", h.syncTasks)
+	mux.HandleFunc("POST /api/sync/runs", h.startSyncRun)
+	mux.HandleFunc("GET /api/sync/runs", h.syncRuns)
+	mux.HandleFunc("GET /api/sync/runs/{id}", h.syncRun)
+	mux.HandleFunc("POST /api/sync/runs/{id}/retry", h.retrySyncRun)
 	mux.HandleFunc("GET /api/data-status", h.dataStatus)
 	return mux
 }

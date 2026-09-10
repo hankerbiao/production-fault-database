@@ -538,6 +538,8 @@ def backfill_repairs(
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="增量同步 HANA 维修故障记录，并回填缺失订单和计划生产时间")
+    parser.add_argument("--mode", choices=("incremental", "full"), default="incremental", help="HANA 同步模式")
+    parser.add_argument("--start-date", type=parse_date, help="全量同步起始日期 YYYY-MM-DD")
     parser.add_argument("--batch-size", type=int, default=int(env("SYNC_BATCH_SIZE", "1000")), help="MongoDB 批量写入大小")
     parser.add_argument("--preview-limit", type=int, default=20, help="JSON 摘要中展示的回填样本数量")
     parser.add_argument(
@@ -627,8 +629,8 @@ def run_workflow(
                 db,
                 args.repair_collection,
                 env("SYNC_CHECKPOINT_COLLECTION", "sync_checkpoints"),
-                "incremental",
-                None,
+                getattr(args, "mode", "incremental"),
+                getattr(args, "start_date", None),
                 args.sync_end_date,
                 args.sync_lookback_days,
                 args.batch_size,
@@ -682,7 +684,8 @@ def run_workflow(
         progress.finish()
     return {
         "success": True,
-        "mode": "apply" if args.apply else "dry-run",
+        "mode": getattr(args, "mode", "incremental"),
+        "dry_run": not args.apply,
         "repair_collection": args.repair_collection,
         "station_collection": args.station_collection,
         "sales_order_collection": args.sales_order_collection,
@@ -713,6 +716,12 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         raise ValueError("SAP retries/retry-delay 不能为负数，timeout 必须大于 0")
     if args.preview_limit < 0:
         raise ValueError("--preview-limit 不能小于 0")
+    if args.mode == "full" and not args.start_date:
+        raise ValueError("全量同步必须提供 --start-date YYYY-MM-DD")
+    if args.mode == "incremental" and args.start_date:
+        raise ValueError("增量同步不接受 --start-date")
+    if args.start_date and args.start_date > args.sync_end_date:
+        raise ValueError("--start-date 不能晚于 --sync-end-date")
     load_dotenv()
     database = env("MONGODB_DATABASE")
     if not database:

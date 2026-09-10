@@ -11,6 +11,7 @@ import (
 
 type Store struct {
 	client          *mongo.Client
+	db              *mongo.Database
 	repairs         *mongo.Collection
 	orders          *mongo.Collection
 	views           map[string]*mongo.Collection
@@ -21,6 +22,10 @@ type Store struct {
 	stationCache    map[string]bomStreamCacheEntry
 	stationWarmDone chan struct{}
 }
+
+// SyncRun is intentionally flexible because the Python orchestration runtime
+// owns the stage summary schema while Go exposes it verbatim to the API.
+type SyncRun bson.M
 
 type bomStreamCacheEntry struct {
 	data      []byte
@@ -152,23 +157,35 @@ type ViewFilters struct {
 	DateFrom, DateTo, StationCode, SN, ProductionOrder, SalesOrder, Base, ProductModel string
 	HeadOrder, ItemOrder, HeadSN, ItemSN, MaterialCode                                 string
 	MissingSalesOrder                                                                  bool
+	DOACode, DOAType, Status, Customer, ServiceOrder                                   string
+	ChangeType, PartNumber, PartSN, Operator, NeedReturn, Revoked                      string
+	Company5000                                                                        string
+	Judgment, EnrichmentStatus, AcceptedDateFrom, AcceptedDateTo                       string
 }
 type ViewListResult struct {
 	Items    []bson.M `json:"items"`
 	Page     int      `json:"page"`
 	PageSize int      `json:"pageSize"`
 	Total    int64    `json:"total"`
+	HasMore  bool     `json:"hasMore,omitempty"`
+	Preview  bool     `json:"preview,omitempty"`
 }
 type ViewStatsResult struct {
-	Total                          int64  `json:"total"`
-	SalesOrders                    int64  `json:"salesOrders"`
-	ProductionOrders               int64  `json:"productionOrders"`
-	MissingSalesOrder              int64  `json:"missingSalesOrder"`
-	MissingProductionOrder         int64  `json:"missingProductionOrder"`
-	MissingProductionOrderDistinct int64  `json:"missingProductionOrderDistinct"`
-	DataStartDate                  string `json:"dataStartDate"`
-	DataEndDate                    string `json:"dataEndDate"`
-	LatestSyncedAt                 string `json:"latestSyncedAt"`
+	Total                          int64    `json:"total"`
+	SalesOrders                    int64    `json:"salesOrders"`
+	ProductionOrders               int64    `json:"productionOrders"`
+	MissingSalesOrder              int64    `json:"missingSalesOrder"`
+	MissingProductionOrder         int64    `json:"missingProductionOrder"`
+	MissingProductionOrderDistinct int64    `json:"missingProductionOrderDistinct"`
+	DataStartDate                  string   `json:"dataStartDate"`
+	DataEndDate                    string   `json:"dataEndDate"`
+	LatestSyncedAt                 string   `json:"latestSyncedAt"`
+	ByType                         []bson.M `json:"byType,omitempty"`
+	ByStatus                       []bson.M `json:"byStatus,omitempty"`
+	ByJudgment                     []bson.M `json:"byJudgment,omitempty"`
+	LatestAcceptedAt               string   `json:"latestAcceptedAt,omitempty"`
+	LatestCreatedAt                string   `json:"latestCreatedAt,omitempty"`
+	Is5000Count                    int64    `json:"is5000Count,omitempty"`
 }
 type ViewDetailResult struct {
 	Item   bson.M  `json:"item"`
@@ -180,6 +197,10 @@ type DataStatus struct {
 	StationRecordsLastSyncedAt string `json:"stationRecordsLastSyncedAt"`
 	SerialBindingsLastSyncedAt string `json:"serialBindingsLastSyncedAt"`
 	BOMPostingsLastSyncedAt    string `json:"bomPostingsLastSyncedAt"`
+	SCSDoaLastSyncedAt         string `json:"scsDoaLastSyncedAt"`
+	SCSChangeLastSyncedAt      string `json:"scsChangeLastSyncedAt"`
+	SCSDoaRecordCount          int64  `json:"scsDoaRecordCount"`
+	SCSChangeRecordCount       int64  `json:"scsChangeRecordCount"`
 }
 
 var documentedViews = map[string]struct {
@@ -191,6 +212,8 @@ var documentedViews = map[string]struct {
 	"ZSGV_ZSD124":        {"order_bom_postings_sap", "BUDAT_MKPF", []string{"MBLNR", "MJAHR", "ZEILE", "MATNR", "AUFNR_1", "VBELN_EX", "KUNNR", "NAME1"}, []string{"BUDAT_MKPF", "MBLNR", "MJAHR", "ZEILE"}},
 	"ZSGV_ZPP_SERNOLIST": {"serial_bindings_sap", "", []string{"ZCODE_HEAD", "ZCODE_ITEM", "AUFNR_HEAD", "AUFNR_ITEM", "PRODH"}, []string{"ZCODE_HEAD", "ZCODE_ITEM", "AUFNR_HEAD", "AUFNR_ITEM"}},
 	"Z_V_ZMES_T_001":     {"station_records_sap", "ACTUAL_START_TIME", []string{"HISTROYID", "PCODE", "OCODE", "AUFNR", "SPEC", "OPERATION", "GSTRS", "ACTUAL_START_TIME", "ACTUAL_END_TIME"}, []string{"ACTUAL_START_TIME", "HISTROYID", "SPEC_TIME"}},
+	"SCS_DOA":            {"scs_doa_records", "declare_time", []string{"doa_code", "doa_type", "declare_reason", "service_uid", "status", "doa_judge", "customer_uid", "sugon_sn", "spare_part_sn", "product_name", "review_name", "detail_problem", "problem_conclusion", "declare_uid", "business_unit", "acceptance_uid"}, []string{"declare_time", "doa_code"}},
+	"SCS_CHANGE":         {"scs_change_records", "create_time", []string{"so_code", "customer_name", "device_sn", "change_type", "part_number", "part_sn", "part_name", "original_code", "remark", "operator", "is_5000_company"}, []string{"create_time", "so_code"}},
 }
 
 var viewAllProjections = map[string]bson.M{

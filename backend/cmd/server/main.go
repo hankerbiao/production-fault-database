@@ -14,8 +14,9 @@ import (
 )
 
 type server struct {
-	store storeAPI
-	sync  *syncManager
+	store  storeAPI
+	sync   *syncManager
+	config serviceConfig
 }
 
 func main() {
@@ -33,7 +34,7 @@ func main() {
 	}
 	defer s.Close(context.Background())
 
-	h := &server{store: s, sync: newSyncManager()}
+	h := &server{store: s, sync: newSyncManager(), config: newServiceConfig()}
 	mux := registerRoutes(h)
 
 	// Keep the default aligned with the Vite development proxy and README.

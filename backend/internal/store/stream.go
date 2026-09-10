@@ -110,6 +110,58 @@ func (s *Store) ViewStationStream(ctx context.Context, f ViewFilters, out io.Wri
 	return s.viewStationStream(ctx, f, out)
 }
 
+// ViewSCSStream exposes the normalized SCS source fields for server-side
+// calculations without the 10,000-row JSON endpoint limit.
+func (s *Store) ViewSCSStream(ctx context.Context, viewID string, f ViewFilters, out io.Writer) error {
+	config, ok := documentedViews[viewID]
+	if !ok || (viewID != "SCS_DOA" && viewID != "SCS_CHANGE") {
+		return fmt.Errorf("unknown view: %s", viewID)
+	}
+	filter := viewFilter(viewID, f, config.searchFields, config.dateField)
+	fields := scsStreamFields(viewID)
+	projection := bson.M{"_id": 1}
+	for _, field := range fields[1:] {
+		projection[field] = 1
+	}
+	cur, err := s.views[viewID].Find(ctx, filter, options.Find().SetProjection(projection).SetSort(bson.D{{Key: config.orderFields[0], Value: -1}}).SetBatchSize(10000))
+	if err != nil {
+		return err
+	}
+	defer cur.Close(ctx)
+	w := bufio.NewWriterSize(out, 1<<20)
+	if _, err := io.WriteString(w, strings.Join(fields, "\t")+"\n"); err != nil {
+		return err
+	}
+	for cur.Next(ctx) {
+		var doc bson.M
+		if err := cur.Decode(&doc); err != nil {
+			return err
+		}
+		row := make([]string, 0, len(fields))
+		for _, field := range fields {
+			value := doc[field]
+			if field == "id" {
+				value = doc["_id"]
+			}
+			row = append(row, tsvSanitizer.Replace(csvValue(value)))
+		}
+		if _, err := io.WriteString(w, strings.Join(row, "\t")+"\n"); err != nil {
+			return err
+		}
+	}
+	if err := cur.Err(); err != nil {
+		return err
+	}
+	return w.Flush()
+}
+
+func scsStreamFields(viewID string) []string {
+	if viewID == "SCS_DOA" {
+		return []string{"id", "doa_code", "doa_type", "service_uid", "status", "doa_judge", "customer_uid", "sugon_sn", "spare_part_sn", "product_name", "problem_batch_number", "declare_time", "acceptance_time", "sales_order", "is_5000_company", "factory_date", "warranty_end_date", "enrichment_status"}
+	}
+	return []string{"id", "so_code", "customer_name", "device_sn", "change_type", "part_number", "part_sn", "part_name", "operator", "need_return", "is_revoked", "create_time", "is_5000_company"}
+}
+
 func defaultStationStreamFilters() ViewFilters {
 	end := time.Now()
 	return ViewFilters{DateFrom: end.AddDate(0, 0, -29).Format("2006-01-02"), DateTo: end.Format("2006-01-02")}

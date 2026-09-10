@@ -5,6 +5,7 @@ import { Header } from './components/Header';
 import { RepairsPage } from './pages/RepairsPage';
 import { OrdersPage } from './pages/OrdersPage';
 import { ViewDashboardPage } from './pages/ViewDashboardPage';
+import { SyncManagementPage } from './pages/SyncManagementPage';
 import { orderModels } from './api/orders';
 import { startSync, syncStatus } from './api/sync';
 import { ApiError } from './api/client';
@@ -35,14 +36,14 @@ export function App() {
   }
   const pageProps = { modelOptions, setConnected, setRefreshing, refreshToken };
   return <div className="app"><Header view={view} setView={setView} connected={connected} refreshing={refreshing} syncStatus={status} onSync={runSync} onRefresh={() => setRefreshToken(token => token + 1)} />
-    {view === 'api-docs' ? <ApiDocs /> : view === 'repairs' ? <RepairsPage {...pageProps} /> : view === 'orders' ? <OrdersPage {...pageProps} /> : <ViewDashboardPage {...pageProps} config={viewConfigs[view]} />}
+    {view === 'api-docs' ? <ApiDocs /> : view === 'sync-management' ? <SyncManagementPage onStarted={setStatus} /> : view === 'repairs' ? <RepairsPage {...pageProps} /> : view === 'orders' ? <OrdersPage {...pageProps} /> : <ViewDashboardPage key={view} {...pageProps} config={viewConfigs[view]} />}
     <footer><span>Production Fault Gateway · v0.1.0</span><span>MongoDB 数据源</span></footer>
   </div>;
 }
 
 const apiGroups = [
   { key: 'health', label: '健康检查' }, { key: 'faults', label: '维修故障' },
-  { key: 'orders', label: '销售订单' }, { key: 'views', label: 'HANA 视图' }, { key: 'sync', label: '同步与状态' },
+  { key: 'orders', label: '销售订单' }, { key: 'views', label: 'HANA 视图' }, { key: 'scs', label: 'SCS 数据' }, { key: 'sync', label: '同步与状态' },
 ];
 
 function ApiDocs() {

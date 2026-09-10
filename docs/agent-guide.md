@@ -57,7 +57,27 @@ GET /api/views/Z_V_ZMES_T_001?sn=SN001&dateFrom=2026-01-01&dateTo=2026-01-31
 GET /api/views/ZSGV_ZSD124?productionOrder=PO001&dateFrom=2026-01-01
 ```
 
-缺失销售订单排查使用 `missingSalesOrder=true`。BOM 和工位数据支持 TSV 流式导出：`GET /api/views/{viewID}/stream`，当前仅适用于 `ZSGV_ZSD124` 和 `Z_V_ZMES_T_001`。
+缺失销售订单排查使用 `missingSalesOrder=true`。BOM、工位和 SCS 数据支持 TSV 流式导出：`GET /api/views/{viewID}/stream`；SCS 支持 `SCS_DOA` 与 `SCS_CHANGE`，用于服务端全量计算。
+
+### 查询 SCS DOA 申报
+
+```text
+GET /api/views/SCS_DOA?serviceOrder=SH001&company5000=true&page=1&pageSize=20
+GET /api/views/SCS_DOA?dateFrom=2026-01-01&dateTo=2026-01-31&salesOrder=XHG2609190
+GET /api/views/SCS_DOA/detail?id=KX202609090004
+```
+
+支持 `doaCode`、`doaType`、`status`、`customer`、`serviceOrder`、`sn`、`salesOrder` 和 `company5000`；日期字段为 `declare_time`，结果包含 `sales_order` 和 `is_5000_company`。
+
+### 查询 SCS 换上换下
+
+```text
+GET /api/views/SCS_CHANGE?changeType=换上-up&partNumber=33000306&page=1&pageSize=20
+GET /api/views/SCS_CHANGE?serviceOrder=SH001&company5000=true
+GET /api/views/SCS_CHANGE/detail?id=<items[].id>
+```
+
+支持 `serviceOrder`、`customer`、`sn`、`changeType`、`partNumber`、`partSn`、`operator`、`needReturn`、`revoked` 和 `company5000`；日期字段为 `create_time`，结果包含 `is_5000_company`。
 
 ### 判断数据是否最新
 
@@ -76,5 +96,7 @@ GET /api/views/ZSGV_ZSD124?productionOrder=PO001&dateFrom=2026-01-01
 | BOM 过账 | `/api/views/ZSGV_ZSD124*` | `MATNR`, `AUFNR_1`, `VBELN_EX`, `MENGE_A`, `BUDAT_MKPF` |
 | 序列号绑定 | `/api/views/ZSGV_ZPP_SERNOLIST*` | `ZCODE_HEAD`, `ZCODE_ITEM`, `AUFNR_HEAD`, `AUFNR_ITEM`, `PRODH` |
 | 工位记录 | `/api/views/Z_V_ZMES_T_001*` | `PCODE`, `OCODE`, `AUFNR`, `SPEC`, `ACTUAL_START_TIME`, `ACTUAL_END_TIME` |
+| SCS DOA 申报 | `/api/views/SCS_DOA*` | `doa_code`, `service_uid`, `sales_order`, `sugon_sn`, `is_5000_company` |
+| SCS 换上换下 | `/api/views/SCS_CHANGE*` | `so_code`, `device_sn`, `change_type`, `part_number`, `part_sn`, `is_5000_company` |
 
 机器契约：`GET /api/openapi.json`。

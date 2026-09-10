@@ -44,6 +44,11 @@ func viewFilters(q url.Values) store.ViewFilters {
 		Keyword: query(q, "keyword"), From: query(q, "from"), To: query(q, "to"), DateFrom: query(q, "dateFrom"), DateTo: query(q, "dateTo"), StationCode: query(q, "stationCode"),
 		SN: query(q, "sn"), ProductionOrder: query(q, "productionOrder"), SalesOrder: query(q, "salesOrder"), Base: query(q, "base"), ProductModel: query(q, "productModel"),
 		HeadOrder: query(q, "headOrder"), ItemOrder: query(q, "itemOrder"), HeadSN: query(q, "headSn"), ItemSN: query(q, "itemSn"), MaterialCode: query(q, "materialCode"), MissingSalesOrder: parseBool(q.Get("missingSalesOrder")),
+		DOACode: query(q, "doaCode"), DOAType: query(q, "doaType"), Status: query(q, "status"), Customer: query(q, "customer"), ServiceOrder: query(q, "serviceOrder"),
+		ChangeType: query(q, "changeType"), PartNumber: query(q, "partNumber"), PartSN: query(q, "partSn"), Operator: query(q, "operator"), NeedReturn: query(q, "needReturn"), Revoked: query(q, "revoked"),
+		Company5000: query(q, "company5000"),
+		Judgment:    query(q, "judgment"), EnrichmentStatus: query(q, "enrichmentStatus"),
+		AcceptedDateFrom: query(q, "acceptedDateFrom"), AcceptedDateTo: query(q, "acceptedDateTo"),
 	}
 }
 

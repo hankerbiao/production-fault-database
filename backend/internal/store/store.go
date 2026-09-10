@@ -61,7 +61,7 @@ func New(ctx context.Context, uri, database, repairCollection, orderCollection s
 		}(collection, keys)
 	}
 	result := &Store{
-		client: client, repairs: db.Collection(repairCollection), orders: db.Collection(orderCollection), views: views,
+		client: client, db: db, repairs: db.Collection(repairCollection), orders: db.Collection(orderCollection), views: views,
 		bomCache: make(map[string]bomStreamCacheEntry), bomWarmDone: make(chan struct{}),
 		stationCache: make(map[string]bomStreamCacheEntry), stationWarmDone: make(chan struct{}),
 	}
@@ -70,6 +70,44 @@ func New(ctx context.Context, uri, database, repairCollection, orderCollection s
 	go result.prewarmBOMStream()
 	go result.prewarmStationStream()
 	return result, nil
+}
+
+func (s *Store) SyncRun(ctx context.Context, id string) (SyncRun, error) {
+	var document bson.M
+	err := s.db.Collection("sync_orchestrator_runs").FindOne(ctx, bson.M{"_id": id}).Decode(&document)
+	if err != nil {
+		return nil, err
+	}
+	return SyncRun(document), nil
+}
+
+func (s *Store) LatestSyncRun(ctx context.Context) (SyncRun, error) {
+	var document bson.M
+	err := s.db.Collection("sync_orchestrator_runs").FindOne(ctx, bson.M{}, options.FindOne().SetSort(bson.D{{Key: "started_at", Value: -1}})).Decode(&document)
+	if err != nil {
+		return nil, err
+	}
+	return SyncRun(document), nil
+}
+
+func (s *Store) SyncRuns(ctx context.Context, limit int) ([]SyncRun, error) {
+	if limit < 1 || limit > 100 {
+		limit = 20
+	}
+	cursor, err := s.db.Collection("sync_orchestrator_runs").Find(ctx, bson.M{}, options.Find().SetSort(bson.D{{Key: "started_at", Value: -1}}).SetLimit(int64(limit)))
+	if err != nil {
+		return nil, err
+	}
+	defer cursor.Close(ctx)
+	var documents []bson.M
+	if err := cursor.All(ctx, &documents); err != nil {
+		return nil, err
+	}
+	runs := make([]SyncRun, len(documents))
+	for index, document := range documents {
+		runs[index] = SyncRun(document)
+	}
+	return runs, nil
 }
 
 func (s *Store) Close(ctx context.Context) error { return s.client.Disconnect(ctx) }
@@ -83,8 +121,10 @@ func (s *Store) DataStatus(ctx context.Context) (DataStatus, error) {
 	sources := []source{
 		{s.orders, "last_synced_at"}, {s.repairs, "_synced_at"}, {s.views["Z_V_ZMES_T_001"], "_synced_at"},
 		{s.views["ZSGV_ZPP_SERNOLIST"], "_synced_at"}, {s.views["ZSGV_ZSD124"], "_synced_at"},
+		{s.views["SCS_DOA"], "_synced_at"}, {s.views["SCS_CHANGE"], "_synced_at"},
 	}
 	values := make([]string, len(sources))
+	counts := make([]int64, len(sources))
 	var wg sync.WaitGroup
 	var once sync.Once
 	var resultErr error
@@ -102,13 +142,14 @@ func (s *Store) DataStatus(ctx context.Context) (DataStatus, error) {
 				return
 			}
 			values[index] = timeText(doc[item.field])
+			counts[index], _ = item.collection.CountDocuments(ctx, bson.M{})
 		}(index, item)
 	}
 	wg.Wait()
 	if resultErr != nil {
 		return DataStatus{}, resultErr
 	}
-	return DataStatus{SalesOrdersLastSyncedAt: values[0], FaultsLastSyncedAt: values[1], StationRecordsLastSyncedAt: values[2], SerialBindingsLastSyncedAt: values[3], BOMPostingsLastSyncedAt: values[4]}, nil
+	return DataStatus{SalesOrdersLastSyncedAt: values[0], FaultsLastSyncedAt: values[1], StationRecordsLastSyncedAt: values[2], SerialBindingsLastSyncedAt: values[3], BOMPostingsLastSyncedAt: values[4], SCSDoaLastSyncedAt: values[5], SCSChangeLastSyncedAt: values[6], SCSDoaRecordCount: counts[5], SCSChangeRecordCount: counts[6]}, nil
 }
 
 func (s *Store) Stats(ctx context.Context, f Filters) (StatsResult, error) {
@@ -170,7 +211,7 @@ func viewFilter(viewID string, f ViewFilters, searchFields []string, dateField s
 		}
 		if dateField == "BUDAT_MKPF" {
 			from, to = strings.ReplaceAll(from, "-", ""), strings.ReplaceAll(to, "-", "")
-		} else if dateField == "ACTUAL_START_TIME" {
+		} else if dateField == "ACTUAL_START_TIME" || dateField == "create_time" || dateField == "declare_time" {
 			// Datetime values are commonly stored as `YYYY-MM-DD HH:MM:SS`; include the full end day.
 			to = inclusiveDateTimeEnd(to)
 		}
@@ -181,23 +222,61 @@ func viewFilter(viewID string, f ViewFilters, searchFields []string, dateField s
 			conditions = append(conditions, bson.M{dateField: bson.M{"$lte": to}})
 		}
 	}
-	addExact := func(field, value string, zeroCompat bool) {
+	addExact := func(field, value string) {
+		if strings.TrimSpace(value) != "" {
+			conditions = append(conditions, exactBatch(field, value, false))
+		}
+	}
+	if viewID == "SCS_DOA" {
+		addExact("doa_code", f.DOACode)
+		addExact("doa_type", f.DOAType)
+		addExact("status", f.Status)
+		addExact("doa_judge", f.Judgment)
+		addExact("enrichment_status", f.EnrichmentStatus)
+		addExact("customer_uid", f.Customer)
+		addExact("service_uid", f.ServiceOrder)
+		addExact("sugon_sn", f.SN)
+		addExact("product_name", f.ProductModel)
+		addExact("sales_order", f.SalesOrder)
+		if strings.TrimSpace(f.Company5000) != "" {
+			conditions = append(conditions, bson.M{"is_5000_company": parseBoolFilter(f.Company5000)})
+		}
+		if f.AcceptedDateFrom != "" {
+			conditions = append(conditions, bson.M{"acceptance_time": bson.M{"$gte": f.AcceptedDateFrom}})
+		}
+		if f.AcceptedDateTo != "" {
+			conditions = append(conditions, bson.M{"acceptance_time": bson.M{"$lte": inclusiveDateTimeEnd(f.AcceptedDateTo)}})
+		}
+	} else if viewID == "SCS_CHANGE" {
+		addExact("so_code", f.ServiceOrder)
+		addExact("customer_name", f.Customer)
+		addExact("device_sn", f.SN)
+		addExact("change_type", f.ChangeType)
+		addExact("part_number", f.PartNumber)
+		addExact("part_sn", f.PartSN)
+		addExact("operator", f.Operator)
+		addExact("need_return", f.NeedReturn)
+		addExact("is_revoked", f.Revoked)
+	}
+	addExactCompat := func(field, value string, zeroCompat bool) {
 		if strings.TrimSpace(value) != "" {
 			conditions = append(conditions, exactBatch(field, value, zeroCompat))
 		}
 	}
-	addExact("PCODE", f.SN, false)
+	if viewID != "SCS_DOA" && viewID != "SCS_CHANGE" {
+		addExactCompat("PCODE", f.SN, false)
+	}
 	switch viewID {
 	case "Z_V_ZMES_T_001":
-		addExact("AUFNR", f.ProductionOrder, true)
-		addExact("KDAUF", f.SalesOrder, true)
+		addExactCompat("AUFNR", f.ProductionOrder, true)
+		addExactCompat("KDAUF", f.SalesOrder, true)
 		if f.ProductModel != "" {
 			conditions = append(conditions, bson.M{"$or": bson.A{bson.M{"MAKTX_TH": f.ProductModel}, bson.M{"PRODH": f.ProductModel}, bson.M{"CPXH": f.ProductModel}}})
 		}
 	case "ZSGV_ZSD124":
-		addExact("AUFNR_1", f.ProductionOrder, true)
-		addExact("VBELN_EX", f.SalesOrder, true)
-		addExact("MATNR", f.ProductModel, false)
+		addExactCompat("AUFNR_1", f.ProductionOrder, true)
+		addExactCompat("VBELN_EX", f.SalesOrder, true)
+		addExactCompat("MATNR", f.ProductModel, false)
 		if f.MissingSalesOrder {
 			conditions = append(conditions, bson.M{"$expr": emptyViewField("VBELN_EX")})
 		}
@@ -209,7 +288,7 @@ func viewFilter(viewID string, f ViewFilters, searchFields []string, dateField s
 			conditions = append(conditions, bson.M{"PRODH": f.ProductModel})
 		}
 	}
-	addExact("MATNR", f.MaterialCode, false)
+	addExactCompat("MATNR", f.MaterialCode, false)
 	if f.StationCode != "" {
 		conditions = append(conditions, bson.M{"$or": bson.A{bson.M{"PCODE": f.StationCode}, bson.M{"LINE_CODE": f.StationCode}, bson.M{"SPEC": f.StationCode}, bson.M{"OPERATION": f.StationCode}}})
 	}
@@ -217,21 +296,30 @@ func viewFilter(viewID string, f ViewFilters, searchFields []string, dateField s
 		conditions = append(conditions, bson.M{"$or": bson.A{bson.M{"LGORT": f.Base}, bson.M{"WERKS": f.Base}}})
 	}
 	if f.HeadOrder != "" {
-		addExact("AUFNR_HEAD", f.HeadOrder, true)
+		addExactCompat("AUFNR_HEAD", f.HeadOrder, true)
 	}
 	if f.ItemOrder != "" {
-		addExact("AUFNR_ITEM", f.ItemOrder, true)
+		addExactCompat("AUFNR_ITEM", f.ItemOrder, true)
 	}
 	if f.HeadSN != "" {
-		addExact("ZCODE_HEAD", f.HeadSN, false)
+		addExactCompat("ZCODE_HEAD", f.HeadSN, false)
 	}
 	if f.ItemSN != "" {
-		addExact("ZCODE_ITEM", f.ItemSN, false)
+		addExactCompat("ZCODE_ITEM", f.ItemSN, false)
 	}
 	if len(conditions) == 0 {
 		return bson.M{}
 	}
 	return bson.M{"$and": conditions}
+}
+
+func parseBoolFilter(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "1", "true", "yes", "y", "是":
+		return true
+	default:
+		return false
+	}
 }
 
 func inclusiveDateTimeEnd(value string) string {

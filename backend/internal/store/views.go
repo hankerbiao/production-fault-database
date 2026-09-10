@@ -10,7 +10,7 @@ import (
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
-func (s *Store) ViewList(ctx context.Context, viewID string, f ViewFilters, page, pageSize int) (ViewListResult, error) {
+func (s *Store) ViewList(ctx context.Context, viewID string, f ViewFilters, page, pageSize int, preview bool) (ViewListResult, error) {
 	config, ok := documentedViews[viewID]
 	if !ok {
 		return ViewListResult{}, fmt.Errorf("unknown view: %s", viewID)
@@ -19,6 +19,27 @@ func (s *Store) ViewList(ctx context.Context, viewID string, f ViewFilters, page
 	sortFields := bson.D{}
 	for _, field := range config.orderFields {
 		sortFields = append(sortFields, bson.E{Key: field, Value: -1})
+	}
+	if preview {
+		// A preview deliberately avoids a collection-wide count. Fetch one
+		// additional document so callers can still offer the next page.
+		cur, err := s.views[viewID].Find(ctx, filter, options.Find().SetSort(sortFields).SetSkip(int64((page-1)*pageSize)).SetLimit(int64(pageSize+1)))
+		if err != nil {
+			return ViewListResult{}, err
+		}
+		defer cur.Close(ctx)
+		docs := make([]bson.M, 0, pageSize)
+		if err := cur.All(ctx, &docs); err != nil {
+			return ViewListResult{}, err
+		}
+		hasMore := len(docs) > pageSize
+		if hasMore {
+			docs = docs[:pageSize]
+		}
+		for _, doc := range docs {
+			normalizeViewID(doc)
+		}
+		return ViewListResult{Items: docs, Page: page, PageSize: pageSize, Total: int64(len(docs)), HasMore: hasMore, Preview: true}, nil
 	}
 
 	// Count and page retrieval are independent MongoDB operations. Running
@@ -139,7 +160,66 @@ func (s *Store) ViewStats(ctx context.Context, viewID string, f ViewFilters) (Vi
 			result.LatestSyncedAt = fmt.Sprint(value)
 		}
 	}
+	if viewID == "SCS_DOA" || viewID == "SCS_CHANGE" {
+		facets := bson.M{
+			"byStatus": bson.A{bson.M{"$group": bson.M{"_id": "$status", "count": bson.M{"$sum": 1}}}},
+			"is5000":   bson.A{bson.M{"$group": bson.M{"_id": nil, "count": bson.M{"$sum": bson.M{"$cond": bson.A{"$is_5000_company", 1, 0}}}}}},
+		}
+		if viewID == "SCS_DOA" {
+			facets["byType"] = bson.A{bson.M{"$group": bson.M{"_id": "$doa_type", "count": bson.M{"$sum": 1}}}}
+			facets["byJudgment"] = bson.A{bson.M{"$group": bson.M{"_id": "$doa_judge", "count": bson.M{"$sum": 1}}}}
+			facets["latest"] = bson.A{bson.M{"$group": bson.M{"_id": nil, "value": bson.M{"$max": "$acceptance_time"}}}}
+		} else {
+			facets["byStatus"] = bson.A{bson.M{"$group": bson.M{"_id": "$is_revoked", "count": bson.M{"$sum": 1}}}}
+			facets["latest"] = bson.A{bson.M{"$group": bson.M{"_id": nil, "value": bson.M{"$max": "$create_time"}}}}
+		}
+		cur, err := s.views[viewID].Aggregate(ctx, mongo.Pipeline{{{Key: "$match", Value: filter}}, {{Key: "$facet", Value: facets}}})
+		if err != nil {
+			return ViewStatsResult{}, err
+		}
+		defer cur.Close(ctx)
+		var facetRows []bson.M
+		if err := cur.All(ctx, &facetRows); err != nil {
+			return ViewStatsResult{}, err
+		}
+		if len(facetRows) > 0 {
+			facet := facetRows[0]
+			if values, ok := facet["byType"].(bson.A); ok {
+				result.ByType = facetMaps(values)
+			}
+			if values, ok := facet["byStatus"].(bson.A); ok {
+				result.ByStatus = facetMaps(values)
+			}
+			if values, ok := facet["byJudgment"].(bson.A); ok {
+				result.ByJudgment = facetMaps(values)
+			}
+			if values, ok := facet["latest"].(bson.A); ok && len(values) > 0 {
+				if value, ok := values[0].(bson.M); ok {
+					if viewID == "SCS_DOA" {
+						result.LatestAcceptedAt = firstText(value, "value")
+					} else {
+						result.LatestCreatedAt = firstText(value, "value")
+					}
+				}
+			}
+			if values, ok := facet["is5000"].(bson.A); ok && len(values) > 0 {
+				if value, ok := values[0].(bson.M); ok {
+					result.Is5000Count = int64(number(value["count"]))
+				}
+			}
+		}
+	}
 	return result, nil
+}
+
+func facetMaps(values bson.A) []bson.M {
+	result := make([]bson.M, 0, len(values))
+	for _, value := range values {
+		if item, ok := value.(bson.M); ok {
+			result = append(result, item)
+		}
+	}
+	return result
 }
 
 func viewStatsPipeline(viewID string, filter bson.M, dateField string) mongo.Pipeline {

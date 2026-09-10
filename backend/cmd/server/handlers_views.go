@@ -7,7 +7,8 @@ import (
 
 func (s *server) viewList(w http.ResponseWriter, r *http.Request) {
 	page, pageSize := pagination(r)
-	result, err := s.store.ViewList(r.Context(), r.PathValue("viewID"), viewFilters(r.URL.Query()), page, pageSize)
+	preview := r.PathValue("viewID") == "Z_V_ZMES_T_001" && parseBool(r.URL.Query().Get("preview"))
+	result, err := s.store.ViewList(r.Context(), r.PathValue("viewID"), viewFilters(r.URL.Query()), page, pageSize, preview)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
@@ -31,7 +32,12 @@ func (s *server) viewStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if viewID != "ZSGV_ZSD124" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "stream is only available for ZSGV_ZSD124"})
+		if viewID != "SCS_DOA" && viewID != "SCS_CHANGE" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "stream is only available for ZSGV_ZSD124, SCS_DOA or SCS_CHANGE"})
+			return
+		}
+		streamTSV(w, strings.ToLower(viewID)+".tsv")
+		_ = s.store.ViewSCSStream(r.Context(), viewID, viewFilters(r.URL.Query()), w)
 		return
 	}
 	streamTSV(w, "bom.tsv")

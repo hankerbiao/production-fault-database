@@ -14,6 +14,9 @@ import (
 type storeAPI interface {
 	Ping(context.Context) error
 	DataStatus(context.Context) (store.DataStatus, error)
+	SyncRun(context.Context, string) (store.SyncRun, error)
+	LatestSyncRun(context.Context) (store.SyncRun, error)
+	SyncRuns(context.Context, int) ([]store.SyncRun, error)
 	List(context.Context, store.Filters, int, int) (store.ListResult, error)
 	FaultSNs(context.Context, store.Filters) ([]store.FaultSN, error)
 	FaultRowsBySNS(context.Context, []string, string, string, string) ([]bson.M, error)
@@ -24,10 +27,11 @@ type storeAPI interface {
 	OrderDetail(context.Context, string) (store.OrderDetail, error)
 	OrderStats(context.Context, store.OrderFilters) (store.OrderStatsResult, error)
 	OrderModels(context.Context, string) (store.OrderModelsResult, error)
-	ViewList(context.Context, string, store.ViewFilters, int, int) (store.ViewListResult, error)
+	ViewList(context.Context, string, store.ViewFilters, int, int, bool) (store.ViewListResult, error)
 	ViewListAll(context.Context, string, store.ViewFilters) (store.ViewListResult, error)
 	ViewBOMStream(context.Context, store.ViewFilters, io.Writer) error
 	ViewStationStream(context.Context, store.ViewFilters, io.Writer) error
+	ViewSCSStream(context.Context, string, store.ViewFilters, io.Writer) error
 	ViewDetail(context.Context, string, string) (store.ViewDetailResult, error)
 	ViewStats(context.Context, string, store.ViewFilters) (store.ViewStatsResult, error)
 }

@@ -260,7 +260,7 @@ def sync_repair(db: Any, collection: str, checkpoint_collection: str, mode: str,
     if not allowed_vbelns:
         raise RuntimeError("sales_orders_sap 中没有有效 VBELN，拒绝同步维修数据")
     sql, params = repair_query(mode, checkpoint, start_date, end_date)
-    stats = {"success": False, "source_rows": 0, "matched_sales_orders": 0, "empty_sales_orders_retained": 0, "filtered_missing_sales_order": 0, "batches": 0, "inserted": 0, "updated": 0, "sales_order_vbelns": len(allowed_vbelns), "range": {"start": start_date.isoformat(), "end": end_date.isoformat()}}
+    stats = {"success": False, "mode": mode, "source_rows": 0, "matched_sales_orders": 0, "empty_sales_orders_retained": 0, "filtered_missing_sales_order": 0, "batches": 0, "inserted": 0, "updated": 0, "sales_order_vbelns": len(allowed_vbelns), "range": {"start": start_date.isoformat(), "end": end_date.isoformat()}}
     watermark = None
     if not dry_run:
         db[collection].create_index("_source_key", unique=True, name="source_key_unique")

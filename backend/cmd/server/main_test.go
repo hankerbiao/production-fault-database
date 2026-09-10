@@ -32,6 +32,9 @@ type fakeStore struct {
 	gotOrderFilters      store.OrderFilters
 	gotID                string
 	gotAll               bool
+	gotPreview           bool
+	gotViewID            string
+	gotViewFilters       store.ViewFilters
 }
 
 func (f *fakeStore) Ping(context.Context) error { return f.pingErr }
@@ -93,13 +96,21 @@ func (f *fakeStore) OrderModels(_ context.Context, _ string) (store.OrderModelsR
 func (f *fakeStore) DataStatus(context.Context) (store.DataStatus, error) {
 	return store.DataStatus{}, f.err
 }
+func (f *fakeStore) SyncRun(context.Context, string) (store.SyncRun, error) {
+	return nil, mongo.ErrNoDocuments
+}
+func (f *fakeStore) LatestSyncRun(context.Context) (store.SyncRun, error) {
+	return nil, mongo.ErrNoDocuments
+}
+func (f *fakeStore) SyncRuns(context.Context, int) ([]store.SyncRun, error) { return nil, f.err }
 func (f *fakeStore) FaultSNs(context.Context, store.Filters) ([]store.FaultSN, error) {
 	return nil, f.err
 }
 func (f *fakeStore) FaultRowsBySNS(context.Context, []string, string, string, string) ([]bson.M, error) {
 	return nil, f.err
 }
-func (f *fakeStore) ViewList(context.Context, string, store.ViewFilters, int, int) (store.ViewListResult, error) {
+func (f *fakeStore) ViewList(_ context.Context, viewID string, filters store.ViewFilters, page, pageSize int, preview bool) (store.ViewListResult, error) {
+	f.gotViewID, f.gotViewFilters, f.gotPage, f.gotPageSize, f.gotPreview = viewID, filters, page, pageSize, preview
 	return store.ViewListResult{}, f.err
 }
 func (f *fakeStore) ViewListAll(context.Context, string, store.ViewFilters) (store.ViewListResult, error) {
@@ -107,6 +118,13 @@ func (f *fakeStore) ViewListAll(context.Context, string, store.ViewFilters) (sto
 }
 func (f *fakeStore) ViewBOMStream(context.Context, store.ViewFilters, io.Writer) error { return f.err }
 func (f *fakeStore) ViewStationStream(context.Context, store.ViewFilters, io.Writer) error {
+	return f.err
+}
+func (f *fakeStore) ViewSCSStream(_ context.Context, viewID string, filters store.ViewFilters, out io.Writer) error {
+	f.gotViewID, f.gotViewFilters = viewID, filters
+	if f.err == nil {
+		_, _ = io.WriteString(out, "id\n")
+	}
 	return f.err
 }
 func (f *fakeStore) ViewDetail(context.Context, string, string) (store.ViewDetailResult, error) {
@@ -161,11 +179,11 @@ func TestOpenAPICoversRegisteredAPIRoutes(t *testing.T) {
 		t.Fatal(err)
 	}
 	expected := map[string][]string{
-		"/api/health": {"get"}, "/api/faults": {"get"}, "/api/faults/lookup": {"post"}, "/api/faults/by-sns": {"get", "post"},
+		"/api/health": {"get"}, "/api/config": {"get"}, "/api/faults": {"get"}, "/api/faults/lookup": {"post"}, "/api/faults/by-sns": {"get", "post"},
 		"/api/faults/by-orders": {"get"}, "/api/faults/detail": {"get"}, "/api/faults/stats": {"get"}, "/api/orders": {"get"},
 		"/api/orders/all": {"get"}, "/api/orders/detail": {"get"}, "/api/orders/stats": {"get"}, "/api/orders/models": {"get"},
 		"/api/views/{viewID}": {"get"}, "/api/views/{viewID}/all": {"get"}, "/api/views/{viewID}/stream": {"get"}, "/api/views/{viewID}/detail": {"get"}, "/api/views/{viewID}/stats": {"get"},
-		"/api/sync/incremental": {"post"}, "/api/sync/status": {"get"}, "/api/data-status": {"get"},
+		"/api/sync/incremental": {"post"}, "/api/sync/status": {"get"}, "/api/sync/tasks": {"get"}, "/api/sync/runs": {"get", "post"}, "/api/sync/runs/{id}": {"get"}, "/api/sync/runs/{id}/retry": {"post"}, "/api/data-status": {"get"},
 	}
 	for path, methods := range expected {
 		for _, method := range methods {
@@ -194,6 +212,40 @@ func TestHealthAndJSONErrors(t *testing.T) {
 			t.Fatalf("code=%d body=%v", r.Code, body)
 		}
 	})
+}
+
+func TestServiceConfigRedactsCredentials(t *testing.T) {
+	t.Setenv("MONGODB_URI", "mongodb://report_user:secret-password@mongo.example:27017/?authSource=admin&tls=true")
+	t.Setenv("MONGODB_DATABASE", "faults")
+	t.Setenv("MONGODB_COLLECTION", "repairs")
+	config := newServiceConfig()
+	body, err := json.Marshal(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(body), "secret-password") || strings.Contains(string(body), "report_user") {
+		t.Fatalf("credentials leaked in config: %s", body)
+	}
+	if config.Database.Address != "mongo.example:27017" || !config.Database.AuthenticationSet || !config.Database.TLS {
+		t.Fatalf("database config=%+v", config.Database)
+	}
+}
+
+func TestServiceConfigEndpointReportsDatabaseStatus(t *testing.T) {
+	s := newTestServer(&fakeStore{})
+	s.config = newServiceConfig()
+	r := httptest.NewRecorder()
+	s.serviceConfig(r, httptest.NewRequest(http.MethodGet, "/api/config", nil))
+	if r.Code != http.StatusOK {
+		t.Fatalf("status=%d", r.Code)
+	}
+	var result serviceConfig
+	if err := json.NewDecoder(r.Body).Decode(&result); err != nil {
+		t.Fatal(err)
+	}
+	if result.Database.Status != "已连接" || result.Database.Address == "" {
+		t.Fatalf("config=%+v", result)
+	}
 }
 
 func TestFaultsNormalisePaginationAndFilters(t *testing.T) {
@@ -238,12 +290,12 @@ func TestDetailEndpoints(t *testing.T) {
 func TestOrdersAndCORS(t *testing.T) {
 	f := &fakeStore{orders: store.OrderListResult{Page: 2, PageSize: 3}}
 	r := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/api/orders?page=2&pageSize=3&source=SG&gstrsFrom=2026-01-01&gstrsTo=2026-01-31&keyword=%20SO-1%20", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/orders?page=2&pageSize=3&source=SG&customer=%E5%AE%A2%E6%88%B7A&gstrsFrom=2026-01-01&gstrsTo=2026-01-31&keyword=%20SO-1%20", nil)
 	newTestServer(f).orders(r, req)
 	if r.Code != http.StatusOK || f.gotPage != 2 || f.gotPageSize != 3 {
 		t.Fatalf("status=%d page=%d size=%d", r.Code, f.gotPage, f.gotPageSize)
 	}
-	if f.gotOrderFilters.Keyword != "SO-1" || f.gotOrderFilters.Source != "SG" || f.gotOrderFilters.GSTRSFrom != "2026-01-01" || f.gotOrderFilters.GSTRSTo != "2026-01-31" {
+	if f.gotOrderFilters.Keyword != "SO-1" || f.gotOrderFilters.Source != "SG" || f.gotOrderFilters.Customer != "客户A" || f.gotOrderFilters.GSTRSFrom != "2026-01-01" || f.gotOrderFilters.GSTRSTo != "2026-01-31" {
 		t.Fatalf("filters=%+v", f.gotOrderFilters)
 	}
 
@@ -302,6 +354,32 @@ func TestViewAndDataStatusRoutes(t *testing.T) {
 	newTestServer(f).dataStatus(r, httptest.NewRequest(http.MethodGet, "/api/data-status", nil))
 	if r.Code != http.StatusOK {
 		t.Fatalf("data status=%d", r.Code)
+	}
+}
+
+func TestStationPreviewRouteUsesLightweightList(t *testing.T) {
+	f := &fakeStore{}
+	r := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/views/Z_V_ZMES_T_001?page=1&pageSize=20&preview=true", nil)
+	req.SetPathValue("viewID", "Z_V_ZMES_T_001")
+	newTestServer(f).viewList(r, req)
+	if r.Code != http.StatusOK || !f.gotPreview || f.gotPage != 1 || f.gotPageSize != 20 {
+		t.Fatalf("status=%d preview=%t page=%d size=%d", r.Code, f.gotPreview, f.gotPage, f.gotPageSize)
+	}
+}
+
+func TestSCSStreamRouteParsesSCSFilters(t *testing.T) {
+	f := &fakeStore{}
+	r := httptest.NewRecorder()
+	registerRoutes(newTestServer(f)).ServeHTTP(r, httptest.NewRequest(http.MethodGet, "/api/views/SCS_DOA/stream?judgment=%E6%98%AF&acceptedDateFrom=2026-09-01&enrichmentStatus=success", nil))
+	if r.Code != http.StatusOK || f.gotViewID != "SCS_DOA" {
+		t.Fatalf("status=%d view=%q", r.Code, f.gotViewID)
+	}
+	if f.gotViewFilters.Judgment != "是" || f.gotViewFilters.AcceptedDateFrom != "2026-09-01" || f.gotViewFilters.EnrichmentStatus != "success" {
+		t.Fatalf("filters=%+v", f.gotViewFilters)
+	}
+	if !strings.Contains(r.Header().Get("Content-Type"), "text/tab-separated-values") {
+		t.Fatalf("content type=%q", r.Header().Get("Content-Type"))
 	}
 }
 

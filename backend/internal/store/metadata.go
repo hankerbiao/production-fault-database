@@ -1,6 +1,7 @@
 package store
 
 import (
+	"encoding/json"
 	"fmt"
 	"sort"
 
@@ -65,6 +66,22 @@ var viewMetadataFieldLabels = map[string]string{
 	"_synced_at":    "同步时间",
 }
 
+var scsDOAFieldLabels = map[string]string{
+	"doa_code": "DOA申报单号", "doa_type": "DOA类型", "declare_reason": "申报原因", "service_uid": "服务单号",
+	"status": "处理状态", "doa_judge": "判定结果", "customer_uid": "客户全称", "sugon_sn": "曙光S/N",
+	"spare_part_sn": "备件S/N", "product_name": "产品/备件名称", "review_name": "问题描述", "shipment_date": "发货日期",
+	"problem_batch_number": "问题批次数量", "engineer_uid": "工程师", "detail_problem": "详细问题描述", "problem_conclusion": "问题分析结论",
+	"declare_uid": "申报人", "declare_time": "申报时间", "review_time": "复核时间", "business_unit": "责任单位", "review_uid": "复核人",
+	"acceptance_time": "受理时间", "acceptance_uid": "受理人", "sales_order": "销售订单", "is_5000_company": "是否为5000公司", "_source": "数据来源",
+}
+
+var scsChangeFieldLabels = map[string]string{
+	"so_code": "服务单号", "customer_name": "客户名称", "device_sn": "报修设备", "change_type": "操作类型",
+	"part_number": "PN", "part_sn": "SN", "part_name": "备件名称", "original_code": "原厂原码", "remark": "备注",
+	"need_return": "是否需要归还", "operator": "操作人", "create_time": "操作时间", "is_revoked": "是否撤销",
+	"revoked_by": "撤销人", "revoked_time": "撤销时间", "is_5000_company": "是否为5000公司", "_source": "数据来源",
+}
+
 func viewDetailFields(viewID string, doc bson.M) []Field {
 	keys := make([]string, 0, len(doc))
 	seen := make(map[string]bool, len(doc))
@@ -81,6 +98,18 @@ func viewDetailFields(viewID string, doc bson.M) []Field {
 	} else if viewID == "ZSGV_ZSD124" {
 		keys = append(keys, bomPostingFieldOrder...)
 		for _, key := range keys {
+			seen[key] = true
+		}
+	}
+	if viewID == "SCS_DOA" {
+		for _, key := range []string{"doa_code", "doa_type", "declare_reason", "service_uid", "status", "doa_judge", "customer_uid", "sugon_sn", "spare_part_sn", "product_name", "review_name", "shipment_date", "problem_batch_number", "engineer_uid", "detail_problem", "problem_conclusion", "declare_uid", "declare_time", "review_time", "business_unit", "review_uid", "acceptance_time", "acceptance_uid", "sales_order", "is_5000_company", "_source"} {
+			keys = append(keys, key)
+			seen[key] = true
+		}
+	}
+	if viewID == "SCS_CHANGE" {
+		for _, key := range []string{"so_code", "customer_name", "device_sn", "change_type", "part_number", "part_sn", "part_name", "original_code", "remark", "need_return", "operator", "create_time", "is_revoked", "revoked_by", "revoked_time", "is_5000_company", "_source"} {
+			keys = append(keys, key)
 			seen[key] = true
 		}
 	}
@@ -112,8 +141,23 @@ func viewDetailFields(viewID string, doc bson.M) []Field {
 				if translated, ok := bomPostingFieldLabels[key]; ok {
 					label = translated
 				}
+			} else if viewID == "SCS_DOA" {
+				if translated, ok := scsDOAFieldLabels[key]; ok {
+					label = translated
+				}
 			}
-			result = append(result, Field{Key: key, Label: label, Value: fmt.Sprint(value)})
+			if viewID == "SCS_CHANGE" {
+				if translated, ok := scsChangeFieldLabels[key]; ok {
+					label = translated
+				}
+			}
+			valueText := fmt.Sprint(value)
+			if viewID == "SCS_DOA" && key == "details" {
+				if encoded, err := json.Marshal(value); err == nil {
+					valueText = string(encoded)
+				}
+			}
+			result = append(result, Field{Key: key, Label: label, Value: valueText})
 		}
 	}
 	return result

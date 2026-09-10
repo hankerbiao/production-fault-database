@@ -12,7 +12,7 @@
 - 请求方法：查询接口使用 `GET`；启动同步使用 `POST`
 - 当前版本不提供认证、授权或限流；服务应部署在受信任网络，生产网关需自行增加认证和访问控制。服务端对所有来源开放 CORS（`Access-Control-Allow-Origin: *`）。
 - 字符编码：UTF-8
-- 列表、统计和状态接口的查询参数均可省略；三个详情接口的 `id` 必填。字符串参数会在后端 `TrimSpace` 后参与过滤
+- 列表、统计和状态接口的查询参数均可省略；视图详情接口的 `id` 必填。字符串参数会在后端 `TrimSpace` 后参与过滤
 - 分页接口默认 `page=1`、`pageSize=20`；`pageSize` 超过 100 或小于 1 时按 20 处理
 - 页码从 1 开始，排序由后端固定，调用方不需要传排序参数
 - 关键字采用不区分大小写的正则匹配，后端会转义用户输入，不支持调用方注入正则表达式
@@ -26,7 +26,7 @@
 销售订单支持全量筛选查询：`GET /api/orders/all`，或在既有接口追加 `all=true`。它使用与 `/api/orders` 完全相同的筛选和排序，但忽略看板分页，仅返回前 `10,000` 条匹配记录；超过上限时响应仍只包含前 `10,000` 条，调用方应使用日期分段查询。可通过 `total` 判断是否被截断。
 - `id` 是稳定查询键：维修和 HANA 视图优先为 `_source_key`，销售订单为 `{source}:{AUFNR}`。详情接口接受该值并返回完整 MongoDB 文档/源字段。
 - 逗号分隔参数（也接受中文逗号）表示批量精确查询。`salesOrder`、`productionOrder` 及对应批量参数支持 SAP 前导零兼容，例如 `123` 可命中 `0000000123`。
-- `/api/faults`、`/api/orders` 的 `items[]` 同时返回稳定摘要字段和 `raw`。`raw` 是当前 MongoDB 源文档的可扩展快照，不承诺字段集合稳定；需要逐字段兼容时应锁定同步版本或使用详情接口。三个 `/api/views/{viewID}` 列表返回完整视图文档，并补充稳定 `id`。
+- `/api/faults`、`/api/orders` 的 `items[]` 同时返回稳定摘要字段和 `raw`。`raw` 是当前 MongoDB 源文档的可扩展快照，不承诺字段集合稳定；需要逐字段兼容时应锁定同步版本或使用详情接口。五个 `/api/views/{viewID}` 列表返回完整视图文档，并补充稳定 `id`。
 - MongoDB 索引应与同步脚本的 `index_fields` 对齐，并补充复合索引：维修 `ZMCOD1 + ZDATE_WX`、`AUFNR + ZDATE_WX`、`VBELN + ZDATE_WX`；订单 `source + aufnr`、`data.VBELN`、`data.GSTRS`；工位 `PCODE + ACTUAL_START_TIME`、`AUFNR + ACTUAL_START_TIME`、`KDAUF + ACTUAL_START_TIME`；BOM `AUFNR_1 + BUDAT_MKPF`、`VBELN_EX + BUDAT_MKPF`。索引创建应由迁移/运维任务执行，不在查询路径即时创建。
 
 ### 销售订单原始数据 `GET /api/orders`
@@ -80,7 +80,7 @@ GET /api/sync/status
 GET /api/data-status
 ```
 
-三个详情接口均保留源字段名并返回完整原始文档字段（不是看板摘要）。`/api/sync/status` 返回同步任务的运行状态和脚本摘要；`/api/data-status` 返回各集合的最新同步时间并带上当前任务的 `state`、`startedAt`、`finishedAt`：
+视图详情接口均保留源字段名并返回完整原始文档字段（不是看板摘要）。`/api/sync/status` 返回同步任务的运行状态和脚本摘要；`/api/data-status` 返回各集合的最新同步时间并带上当前任务的 `state`、`startedAt`、`finishedAt`：
 
 ```json
 {
@@ -103,14 +103,16 @@ GET /api/data-status
 
 状态码按接口实现如下：`200` 成功，`202` 已接受异步任务，`400` 缺少 `id` 或视图 ID/视图参数无效，`404` 记录不存在，`409` 已有同步任务运行，`500` 维修/订单/状态接口的数据库或服务端错误，`503` 仅 `/api/health` 在 MongoDB 不可用时返回，`501` 可选扩展 store 未提供对应能力时返回。非法 `page`、`pageSize` 不报错，而是按默认值处理。
 
-## 2. 四个业务看板
+## 2. 业务看板
 
-四个业务看板分别为：
+业务看板包括：
 
 1. 维修故障记录：`ZSGV_ZZT_WLJL` -> `repair_records_sap`
 2. 订单 BOM 过账：`ZSGV_ZSD124` -> `order_bom_postings_sap`
 3. 序列号绑定：`ZSGV_ZPP_SERNOLIST` -> `serial_bindings_sap`
 4. 工位记录：`Z_V_ZMES_T_001` -> `station_records_sap`
+5. SCS DOA 申报：`SCS_DOA` -> `scs_doa_records`
+6. SCS 换上换下：`SCS_CHANGE` -> `scs_change_records`
 
 销售订单看板（`/api/orders*`）也是前端提供的独立数据模块，接口说明见第 4 节。
 
@@ -192,9 +194,9 @@ GET /api/data-status
 
 响应结构：`{"fault": <Fault>, "fields": [{"key":"PCODE","label":"主机条码","value":"PC-001"}]}`。`fields` 包含源文档中所有非空字段；未知字段标签显示为 `未定义字段（字段名）`。不存在返回 `404`。
 
-### 2.2 三个 HANA 视图看板
+### 2.2 视图看板
 
-三个视图看板共用以下接口模板：
+HANA 和 SCS 视图看板共用以下接口模板：
 
 ```text
 GET /api/views/{viewID}
@@ -209,6 +211,8 @@ GET /api/views/{viewID}/detail?id={id}
 | `ZSGV_ZSD124` | `order_bom_postings_sap` | `BUDAT_MKPF` | `MBLNR`, `MJAHR`, `ZEILE`, `MATNR`, `WERKS`, `BWART`, `MENGE_A`, `AUFNR_1`, `VBELN_EX`, `BUDAT_MKPF` |
 | `ZSGV_ZPP_SERNOLIST` | `serial_bindings_sap` | 无 | `ZCODE_HEAD`, `ZCODE_ITEM`, `AUFNR_HEAD`, `AUFNR_ITEM`, `PRODH` |
 | `Z_V_ZMES_T_001` | `station_records_sap` | `ACTUAL_START_TIME` | `HISTROYID`, `PCODE`, `OCODE`, `AUFNR`, `SPEC`, `OPERATION`, `GSTRS`, `ACTUAL_START_TIME`, `ACTUAL_END_TIME` |
+| `SCS_DOA` | `scs_doa_records` | `declare_time` | `doa_code`, `doa_type`, `service_uid`, `status`, `doa_judge`, `customer_uid`, `sugon_sn`, `spare_part_sn`, `product_name`, `sales_order`, `is_5000_company` |
+| `SCS_CHANGE` | `scs_change_records` | `create_time` | `so_code`, `customer_name`, `device_sn`, `change_type`, `part_number`, `part_sn`, `part_name`, `operator`, `create_time`, `is_revoked`, `is_5000_company` |
 
 #### `GET /api/views/{viewID}`
 
@@ -222,6 +226,18 @@ GET /api/views/{viewID}/detail?id={id}
 | `keyword` | string | 在该视图登记的搜索字段中进行不区分大小写匹配 |
 | `from` | string | 日期下限，格式 `YYYY-MM-DD`；无日期字段的视图忽略 |
 | `to` | string | 日期上限，格式 `YYYY-MM-DD`；无日期字段的视图忽略 |
+| `dateFrom` / `dateTo` | string | `from` / `to` 的兼容参数；SCS 和 HANA 视图均支持，包含边界 |
+| `salesOrder` | string | SCS DOA 按 `sales_order` 精确匹配；其他视图按其登记的销售订单字段匹配 |
+| `doaCode` / `doaType` | string | 仅 `SCS_DOA`：按 DOA 申报单号、DOA 类型精确匹配 |
+| `status` | string | 仅 `SCS_DOA`：按处理状态精确匹配 |
+| `customer` | string | `SCS_DOA` 按 `customer_uid`，`SCS_CHANGE` 按 `customer_name` 精确匹配 |
+| `serviceOrder` | string | `SCS_DOA` 按 `service_uid`，`SCS_CHANGE` 按 `so_code` 精确匹配 |
+| `sn` | string | `SCS_DOA` 按 `sugon_sn`，`SCS_CHANGE` 按 `device_sn` 精确匹配 |
+| `changeType` | string | 仅 `SCS_CHANGE`：按 `change_type` 精确匹配，例如 `换上-up`、`换下-down` |
+| `partNumber` / `partSn` | string | 仅 `SCS_CHANGE`：按备件 PN/SN 精确匹配 |
+| `operator` | string | 仅 `SCS_CHANGE`：按 `operator` 精确匹配 |
+| `needReturn` / `revoked` | string | 仅 `SCS_CHANGE`：按是否归还、是否撤销精确匹配 |
+| `company5000` | string | SCS 视图：传 `true`、`1`、`yes`、`是` 筛选 `is_5000_company=true`，其他值筛选 false |
 
 日期行为：`ZSGV_ZSD124` 会将日期转换为 `YYYYMMDD` 与 `BUDAT_MKPF` 比较；`Z_V_ZMES_T_001` 直接使用 `ACTUAL_START_TIME` 比较。上下限均为包含关系。
 
@@ -275,6 +291,10 @@ GET /api/views/{viewID}/detail?id={id}
 
 `ZSGV_ZSD124` 的 BOM 过账详情字段使用业务中文标签，例如 `MBLNR` 为“物料凭证号”、`MJAHR` 为“物料凭证年度”、`ZEILE` 为“物料凭证行项目”、`MATNR` 为“物料号”、`BWART` 为“移动类型”、`MENGE_A` 为“过账数量”、`AUFNR_1` 为“生产订单”、`VBELN_EX` 为“销售订单”、`BUDAT_MKPF` 为“过账日期”。同步审计字段也会显示为“源记录键”“源视图”“同步批次标识”“同步时间”等中文标签。
 
+`SCS_DOA` 详情保留 DOA 列表字段、`sales_order`、`is_5000_company` 以及 `details` 中的申报、服务单、设备和产品实体字段；`details` 是 JSON 字符串。`is_5000_company` 表示 `sales_order` 是否存在于 `sales_orders_sap.data.VBELN`。
+
+`SCS_CHANGE` 详情保留换上换下结果表字段：`so_code`、`customer_name`、`device_sn`、`change_type`、`part_number`、`part_sn`、`part_name`、`original_code`、`remark`、`need_return`、`operator`、`create_time`、`is_revoked`、`revoked_by`、`revoked_time` 和 `is_5000_company`。该标识通过服务单号匹配已判定为 5000 公司的 `SCS_DOA` 记录。
+
 其他未定义字段使用“字段 / Field（字段名）”格式。未知 `viewID` 返回 `400`，缺少 `id` 返回 `400`，记录不存在返回 `404`。
 
 ## 3. 看板调用示例
@@ -289,6 +309,16 @@ curl 'http://127.0.0.1:18080/api/views/ZSGV_ZSD124?from=2026-01-01&to=2026-01-31
 # 查询视图统计和详情
 curl 'http://127.0.0.1:18080/api/views/Z_V_ZMES_T_001/stats?keyword=PO-001'
 curl 'http://127.0.0.1:18080/api/views/Z_V_ZMES_T_001/detail?id=record-001'
+
+# SCS DOA：按日期、服务单和 5000 公司标识查询
+curl 'http://127.0.0.1:18080/api/views/SCS_DOA?dateFrom=2026-01-01&dateTo=2026-01-31&serviceOrder=SH202601010001&company5000=true&page=1&pageSize=20'
+curl 'http://127.0.0.1:18080/api/views/SCS_DOA/stats?customer=%E5%AE%A2%E6%88%B7A&company5000=false'
+curl 'http://127.0.0.1:18080/api/views/SCS_DOA/detail?id=KX202609090004'
+
+# SCS 换上换下：按操作类型、备件和设备查询
+curl 'http://127.0.0.1:18080/api/views/SCS_CHANGE?changeType=%E6%8D%A2%E4%B8%8A-up&partNumber=33000306&sn=9800210404539234&page=1&pageSize=20'
+curl 'http://127.0.0.1:18080/api/views/SCS_CHANGE/stats?serviceOrder=SH202601010001&company5000=true'
+curl 'http://127.0.0.1:18080/api/views/SCS_CHANGE/detail?id=<items[].id>'
 ```
 
 ## 4. 销售订单看板 API
@@ -304,6 +334,7 @@ curl 'http://127.0.0.1:18080/api/views/Z_V_ZMES_T_001/detail?id=record-001'
 | `page` / `pageSize` | integer | 分页参数，规则同上 |
 | `keyword` | string | 匹配生产订单、销售订单、客户 ID、最终用户、生产机型或计划开始时间 |
 | `source` | string | SAP 来源，支持 `SG`、`KK` |
+| `customer` | string | 精确匹配客户 ID `KID` 或最终用户 `NAME1_ZU`；列表、统计和导出接口均生效 |
 | `gstrsFrom` / `gstrsTo` | string | 按订单计划开始日期过滤，支持 `YYYY-MM-DD` 或 `YYYYMMDD`；`dateFrom` / `dateTo` 为兼容别名，优先级高于本参数 |
 
 响应 `items[]` 字段：`id`（`{source}:{AUFNR}`）、`source`、`aufnr`、`salesOrder`、`customerId`、`finalUser`、`materialDescription`、`productionModel`、`inventoryLocation`、`plannedStartDate`、`orderQuantity`、`storageQuantity`、`recordCount`。
@@ -317,6 +348,13 @@ curl 'http://127.0.0.1:18080/api/views/Z_V_ZMES_T_001/detail?id=record-001'
 返回销售订单数据中去重、排序后的生产机型候选列表：`{"items":["机型 A","机型 B"]}`。可传 `keyword` 进行不区分大小写的候选搜索。前端各看板的机型/产品层次筛选共用此列表，并保留手工输入能力。
 
 销售订单看板的“导出数据”按钮调用 `/api/orders?all=true`，按当前筛选条件查询全量结果（单次最多 10,000 条）并生成 UTF-8 CSV；其它看板仍按分页接口自动拉取各页数据。
+
+按客户筛选示例：
+
+```bash
+curl 'http://127.0.0.1:18080/api/orders?customer=%E5%AE%A2%E6%88%B7A&page=1&pageSize=20'
+curl 'http://127.0.0.1:18080/api/orders/stats?customer=%E5%AE%A2%E6%88%B7A'
+```
 
 ### `GET /api/orders/detail?id={source}:{AUFNR}`
 
@@ -353,6 +391,12 @@ MongoDB 可连通时返回 `200`：`{"status":"ok"}`；不可用时返回 `503`�
 ```
 
 `state` 通常为 `idle`、`running`、`success` 或 `failed`。任务刚启动时 `summary` 可能为空；任务结束后按脚本文件名记录各脚本输出摘要。前端在 `running` 时轮询此接口；状态回到非 `running` 后重新加载当前看板数据。
+
+### 同步编排 API
+
+`GET /api/sync/tasks` 返回全部注册任务、依赖和最近阶段状态。`POST /api/sync/runs` 接收 `{ "mode": "incremental|full", "taskIds": ["..."], "startDate": "YYYY-MM-DD", "endDate": "YYYY-MM-DD" }`；全量必须填写 `startDate`，任务 ID 不在注册表时拒绝请求。编排器会自动补齐依赖并按稳定顺序串行执行。
+
+`GET /api/sync/runs?limit=20` 返回持久化历史，`GET /api/sync/runs/{id}` 返回阶段、尝试次数、摘要和错误，`POST /api/sync/runs/{id}/retry` 使用原始请求创建新的可恢复运行。运行记录保存在 MongoDB `sync_orchestrator_runs`，服务重启后仍可读取；心跳超时的运行会标记为 `abandoned`。
 
 ## 6. 前端推荐调用流程
 

@@ -50,13 +50,15 @@ go run ./cmd/server
 - `GET /api/faults?page=1&pageSize=20&keyword=&productionOrder=&salesOrder=&productModel=&dateFrom=&dateTo=`（其余条件见高级筛选参数）
 - `GET /api/faults/detail?id=<维修记录_source_key>`
 - `GET /api/faults/stats`（接受相同筛选参数；统计维修记录总数、错误信息和维修人员登记情况）
-- `GET /api/orders?page=1&pageSize=20&productionOrder=&salesOrder=&productModel=&dateFrom=&dateTo=&source=SG|KK`
-- `GET /api/orders/all?productionOrder=&salesOrder=&productModel=&dateFrom=&dateTo=&source=SG|KK`（按筛选条件查询全部订单，单次最多 10,000 条；也可给 `/api/orders` 追加 `all=true`）
+- `GET /api/orders?page=1&pageSize=20&productionOrder=&salesOrder=&customer=&productModel=&dateFrom=&dateTo=&source=SG|KK`
+- `GET /api/orders/all?productionOrder=&salesOrder=&customer=&productModel=&dateFrom=&dateTo=&source=SG|KK`（按筛选条件查询全部订单，单次最多 10,000 条；也可给 `/api/orders` 追加 `all=true`）
 - `GET /api/orders/detail?id=<source:AUFNR>`
 - `GET /api/orders/stats`（接受相同筛选参数；按 `data.GSTRS` 过滤并统计生产订单数、去重销售订单数、来源、订单数量、机器数量汇总（`machineQuantity`，取 `GAMNG` 汇总）和入库数量）
 - `GET /api/orders/models?keyword=`：返回销售订单数据中去重后的 `MAKTX_TH` 生产机型列表；`keyword` 可选，用于候选搜索。
-- `POST /api/sync/incremental`（启动销售订单和维修数据增量同步；同一时间仅允许一个任务）
-- `GET /api/sync/status`（查询增量同步状态、起止时间和脚本摘要）
+- `POST /api/sync/incremental`（兼容入口：启动全部来源的增量编排）
+- `GET /api/sync/status`、`GET /api/sync/tasks`、`GET /api/sync/runs`
+- `POST /api/sync/runs`（按任务启动增量或全量同步；全量必须传 `startDate`）
+- `GET /api/sync/runs/{id}`、`POST /api/sync/runs/{id}/retry`
 
 完整的看板 API 参数、响应字段、筛选规则和调用示例见
 [`docs/看板后端API说明.md`](docs/看板后端API说明.md)。
@@ -273,7 +275,19 @@ RECORD01REPAIRM SLOT AUFNR VBELN POSNR U_FIND U_RMA_NAME RMA_RESULT RMA_TYPE2
 | `scripts/sync/order_bom_postings.py` | `order_bom_postings_sap` | 仅保留 `CPX=5000公司` |
 | `scripts/sync/serial_bindings.py` | `serial_bindings_sap` | 仅删除完整业务键的精确重复记录，保留并统计不完整键 |
 
-日常增量预览和执行：
+单任务调试仍可直接调用各脚本；日常执行应统一使用编排器：
+
+```bash
+.venv/bin/python scripts/sync/syncctl.py run --mode incremental --source cron
+```
+
+编排器会记录 MongoDB 运行历史、阶段摘要、心跳和失败原因；全量同步需显式指定任务及起始日期：
+
+```bash
+.venv/bin/python scripts/sync/syncctl.py run --mode full --tasks repair_records --start-date 2026-01-01
+```
+
+单任务预览和执行：
 
 ```bash
 python scripts/sync/sync_sales_orders.py
@@ -293,12 +307,12 @@ MongoDB 租约锁防止并发运行。`SYNC_PYTHON` 指定 Python 解释器，`S
   顺序同步并清洗；任一阶段失败会停止后续步骤。任务完成后前端自动刷新维修故障
   和销售订单两个看板，同步期间按钮显示“同步中”，重复点击会收到 HTTP `409`。
 
-前端同时提供三个 HANA 视图看板：**订单过账**对应 `ZSGV_ZSD124`、**序列号绑定**对应
+前端同时提供 HANA 和 SCS 视图看板：**订单过账**对应 `ZSGV_ZSD124`、**序列号绑定**对应
 `ZSGV_ZPP_SERNOLIST`、**工位记录**对应 `Z_V_ZMES_T_001`。每个看板从对应 MongoDB
 集合读取数据，支持关键字搜索、分页、记录详情和（有日期字段的视图）起止日期筛选；
 页面显示数据来源、数据时间区间和最新同步时间。后端接口分别为
 `GET /api/views/{viewID}`、`GET /api/views/{viewID}/stats` 与
-`GET /api/views/{viewID}/detail?id=...`，只允许 docs 中登记的三个视图 ID，刷新只访问
+`GET /api/views/{viewID}/detail?id=...`，允许 docs 中登记的 HANA 和 SCS 视图 ID，刷新只访问
 MongoDB，不会重新访问 HANA。
 
 订单 BOM 过账看板提供“导出销售订单为空”按钮。该导出保留当前的生产订单、物料和日期筛选，且只导出
@@ -342,7 +356,63 @@ MongoDB 的 `sync_locks` 租约锁跨主机协调；租约时长由 `SYNC_MONGO_
 配置，必须大于一次任务的最长运行时间。
 
 
-### 4. 表结构变更同步要求
+### 4. SCS DOA 数据源
+
+`scripts/sources/scs_doa_sync.py` 登录 SCS 后同步 DOA 申报列表，并沿服务单和物料 SN
+补充设备、产品实体信息。目标集合默认为 `scs_doa_records`，检查点写入
+`sync_checkpoints` 的 `_id=scs_doa`，以 `declare_time` 作为增量水位；DOA 申报单号是稳定幂等键。
+
+在 `.env` 中配置 `SCS_USERNAME`、`SCS_PASSWORD`，以及已有的 MongoDB 配置。首次全量同步：
+
+```bash
+python scripts/sources/scs_doa_sync.py --full --start-date 2026-01-01
+```
+
+日常增量同步和只读预览：
+
+```bash
+python scripts/sources/scs_doa_sync.py
+python scripts/sources/scs_doa_sync.py --dry-run
+```
+
+详情请求失败时仍保留列表原始记录，并在 `details.error` 中记录错误；全量同步成功后才清理
+本次批次之外的 SCS 文档。可用 `SCS_DOA_COLLECTION`、`SCS_LOOKBACK_DAYS`、`SCS_TIMEOUT`
+和 `SCS_PAGE_SIZE` 覆盖默认配置。每次 HTTP 请求默认随机等待 3–5 秒，可通过
+`SCS_REQUEST_DELAY_MIN` 和 `SCS_REQUEST_DELAY_MAX` 调整。
+详情按 `SCS_WRITE_BATCH_SIZE`（默认 25）分批写入，抓取过程中看板会逐步显示已完成记录。
+同步日志会输出列表分页进度、断点位置、处理百分比、已写入数量和详情错误数量；可通过
+`SCS_PROGRESS_INTERVAL` 设置非批次进度日志的输出间隔（默认跟随 `SCS_WRITE_BATCH_SIZE`）。
+全量任务的检查点还会保存 `status`、`run_id`、总行数和最后成功写入的行索引；进程中断后，使用相同
+`--full --start-date` 命令会从最后一个成功批次继续，不会清理已有记录，直至所有行完成。
+
+### 5. SCS 换上换下数据源
+
+`scripts/sources/scs_change_sync.py` 同步 SCS“数据查询 -> 换上换下”结果页，目标集合默认为
+`scs_change_records`，检查点为 `sync_checkpoints` 的 `_id=scs_changes`，以“操作时间”作为增量水位。
+记录按服务单号、设备 SN、操作类型、备件 PN/SN、操作时间和操作人组成的哈希幂等写入；每条记录的
+`is_5000_company` 通过服务单号匹配 `scs_doa_records` 中已判定为 5000 公司的 DOA 记录。
+
+换上换下同步固定限制在 2026 年（`2026-01-01` 至 `2026-12-31`），不会抓取其他年份。
+每次登录或列表 HTTP 请求会随机等待 5-10 秒，可通过 `SCS_CHANGE_REQUEST_DELAY_MIN/MAX` 调整。
+日志会持续展示当前页、已抓取数量、已入库数量和 checkpoint 位置。
+
+首次全量和日常增量：
+
+```bash
+python scripts/sources/scs_change_sync.py --full --start-date 2026-01-01
+python scripts/sources/scs_change_sync.py
+python scripts/sources/scs_change_sync.py --dry-run
+```
+
+换上换下看板使用 `SCS_CHANGE` 视图，可按服务单、客户、设备 SN、操作类型、PN/SN、操作人、归还/撤销状态
+和 5000 公司标识筛选，并展示结果表全部字段。换上换下同步前应先完成 DOA 同步，以获得最新的 5000 公司判定。
+换上换下同步按“抓取一页、写入一批、保存断点”循环执行，不会先把全部结果加载到内存后再落库。
+默认每批写入 100 条，可用 `SCS_WRITE_BATCH_SIZE` 调整；checkpoint 会保存查询起始日期、页码、页内偏移、
+全局行数和运行 ID。抓取或写入阶段中断后，使用相同的全量参数重新执行即可从上次成功位置继续，
+幂等键保证重复批次不会产生重复记录。同步日志会输出列表分页、断点续传和批量写入进度，并使用
+`SCS_PROGRESS_INTERVAL` 控制额外进度日志频率。
+
+### 6. 表结构变更同步要求
 
 - 销售订单接口新增字段会自动保存在 `data` 和 `records` 中，无需改 MongoDB schema；若新增字段参与唯一键、数量或筛选逻辑，必须同步修改 `sync_sales_orders.py` 并补充 README。
 - 维修 HANA 视图新增字段时，必须将字段加入脚本的 `REPAIR_COLUMNS`，同时更新本节字段清单；否则脚本不会读取该列。

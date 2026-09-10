@@ -1,6 +1,8 @@
 package store
 
 import (
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -269,6 +271,38 @@ func TestBOMPostingDetailFieldsUseChineseLabelsAndOrder(t *testing.T) {
 	for index, expected := range want {
 		if fields[index].Key != expected.key || fields[index].Label != expected.label {
 			t.Fatalf("field %d=%+v, want %+v", index, fields[index], expected)
+		}
+	}
+}
+
+func TestSCSDOAFilterUsesSCSFields(t *testing.T) {
+	filter := viewFilter("SCS_DOA", ViewFilters{SN: "9800", Status: "已处理", ServiceOrder: "SH-1", Judgment: "是", EnrichmentStatus: "success", AcceptedDateFrom: "2026-09-01", AcceptedDateTo: "2026-09-30"}, nil, "declare_time")
+	raw, ok := filter["$and"].(bson.A)
+	if !ok {
+		t.Fatalf("expected conjunction filter: %+v", filter)
+	}
+	encoded := fmt.Sprint(raw)
+	for _, expected := range []string{"sugon_sn", "doa_judge", "enrichment_status", "acceptance_time"} {
+		if !strings.Contains(encoded, expected) {
+			t.Fatalf("missing %s in SCS filter: %+v", expected, filter)
+		}
+	}
+	if strings.Contains(encoded, "PCODE") {
+		t.Fatalf("unexpected SCS filter: %+v", filter)
+	}
+}
+
+func TestSCSStreamFieldsExposeNormalizedGatewayColumns(t *testing.T) {
+	doa := strings.Join(scsStreamFields("SCS_DOA"), ",")
+	for _, field := range []string{"service_uid", "acceptance_time", "sales_order", "is_5000_company"} {
+		if !strings.Contains(doa, field) {
+			t.Fatalf("DOA stream missing %s: %s", field, doa)
+		}
+	}
+	change := strings.Join(scsStreamFields("SCS_CHANGE"), ",")
+	for _, field := range []string{"so_code", "change_type", "is_revoked", "create_time"} {
+		if !strings.Contains(change, field) {
+			t.Fatalf("change stream missing %s: %s", field, change)
 		}
 	}
 }

@@ -52,6 +52,8 @@ describe('operations workbench', () => {
     render(<App />);
     fireEvent.click(screen.getByRole('button', { name: 'API 文档' }));
     expect(await screen.findByRole('heading', { name: 'API 文档中心' })).toBeInTheDocument();
+    fireEvent.click(screen.getByText('查看 Agent 任务编排指南'));
+    expect(await screen.findByRole('heading', { name: 'Agent Guide' })).toBeInTheDocument();
     expect(screen.getByText('需人工确认')).toBeInTheDocument();
     fireEvent.change(screen.getByRole('textbox', { name: '搜索接口' }), { target: { value: '维修' } });
     expect(screen.getByText('/api/faults')).toBeInTheDocument();

@@ -50,9 +50,88 @@ func normalizeOrder(doc bson.M) Order {
 		PlannedStartDate:    firstText(data, "GSTRS"),
 		OrderQuantity:       documentQuantity(doc, "order_quantity", "GAMNG"),
 		StorageQuantity:     documentQuantity(doc, "storage_quantity", "WMENG"),
-		RecordCount:         int(number(doc["record_count"])),
-		Raw:                 cloneDocument(doc),
+		ShipmentDate: optionalText(
+			firstOrderValue(doc, data,
+				"shipmentDate", "shipment_date", "actualShipmentDate", "actual_shipment_date",
+				"WADAT_IST", "SHIPMENT_DATE",
+			),
+		),
+		ShipmentQuantity: optionalNumber(
+			firstOrderValue(doc, data,
+				"shipmentQuantity", "shipment_quantity", "actualShipmentQuantity", "actual_shipment_quantity",
+				"LFIMG", "SHIPMENT_QUANTITY",
+			),
+		),
+		Is5000Company: optionalBool(
+			firstOrderValue(doc, data, "is5000Company", "is_5000_company", "company5000", "IS_5000_COMPANY"),
+		),
+		RecordCount: int(number(doc["record_count"])),
+		Raw:         cloneDocument(doc),
 	}
+}
+
+func firstPresent(doc bson.M, keys ...string) (any, bool) {
+	for _, key := range keys {
+		if value, ok := doc[key]; ok && value != nil {
+			return value, true
+		}
+	}
+	return nil, false
+}
+
+func firstOrderValue(doc, data bson.M, keys ...string) (any, bool) {
+	if value, ok := firstPresent(data, keys...); ok {
+		return value, true
+	}
+	return firstPresent(doc, keys...)
+}
+
+func optionalText(value any, ok bool) *string {
+	if !ok {
+		return nil
+	}
+	text := strings.TrimSpace(fmt.Sprint(value))
+	if text == "" || text == "<nil>" {
+		return nil
+	}
+	return &text
+}
+
+func optionalNumber(value any, ok bool) *float64 {
+	if !ok {
+		return nil
+	}
+	parsed := number(value)
+	return &parsed
+}
+
+func optionalBool(value any, ok bool) *bool {
+	if !ok {
+		return nil
+	}
+	if text := strings.TrimSpace(strings.ToLower(fmt.Sprint(value))); text == "" || text == "<nil>" {
+		return nil
+	}
+	parsed := false
+	switch typed := value.(type) {
+	case bool:
+		parsed = typed
+	case int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64, float32, float64:
+		parsed = number(value) != 0
+	default:
+		parsed = textIn(value, "1", "true", "yes", "y", "是")
+	}
+	return &parsed
+}
+
+func textIn(value any, values ...string) bool {
+	text := strings.TrimSpace(strings.ToLower(fmt.Sprint(value)))
+	for _, candidate := range values {
+		if text == candidate {
+			return true
+		}
+	}
+	return false
 }
 
 func cloneDocument(doc bson.M) bson.M {

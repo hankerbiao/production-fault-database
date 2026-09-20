@@ -33,6 +33,7 @@ export function RepairsPage({ modelOptions = [], setConnected, setRefreshing, re
     { key: 'salesOrder', label: '销售订单', render: item => <code>{item.salesOrder || '-'}</code> },
     { key: 'productionOrder', label: '生产订单', render: item => <code>{item.productionOrder || '-'}</code> },
     { key: 'plannedStartDate', label: '计划生产时间', render: item => formatBusinessDate(item.plannedStartDate), exportValue: item => formatBusinessDate(item.plannedStartDate) },
+    { key: 'materialCode', label: '物料号', render: item => <code>{item.materialCode || '-'}</code> },
     { key: 'materialDescription', label: '物料描述', render: item => item.materialDescription || '-' },
     { key: 'faultDescription', label: '故障描述', render: item => item.faultDescription || item.errorDescription || item.reviewProblem || '-', exportValue: item => item.faultDescription || item.errorDescription || item.reviewProblem || '' },
     { key: 'ngStation', label: 'NG工站', render: item => item.ngStation || '-' },

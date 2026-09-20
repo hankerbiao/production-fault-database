@@ -27,7 +27,7 @@
 - `id` 是稳定查询键：维修和 HANA 视图优先为 `_source_key`，销售订单为 `{source}:{AUFNR}`。详情接口接受该值并返回完整 MongoDB 文档/源字段。
 - 逗号分隔参数（也接受中文逗号）表示批量精确查询。`salesOrder`、`productionOrder` 及对应批量参数支持 SAP 前导零兼容，例如 `123` 可命中 `0000000123`。
 - `/api/faults`、`/api/orders` 的 `items[]` 同时返回稳定摘要字段和 `raw`。`raw` 是当前 MongoDB 源文档的可扩展快照，不承诺字段集合稳定；需要逐字段兼容时应锁定同步版本或使用详情接口。五个 `/api/views/{viewID}` 列表返回完整视图文档，并补充稳定 `id`。
-- MongoDB 索引应与同步脚本的 `index_fields` 对齐，并补充复合索引：维修 `ZMCOD1 + ZDATE_WX`、`AUFNR + ZDATE_WX`、`VBELN + ZDATE_WX`；订单 `source + aufnr`、`data.VBELN`、`data.GSTRS`；工位 `PCODE + ACTUAL_START_TIME`、`AUFNR + ACTUAL_START_TIME`、`KDAUF + ACTUAL_START_TIME`；BOM `AUFNR_1 + BUDAT_MKPF`、`VBELN_EX + BUDAT_MKPF`。索引创建应由迁移/运维任务执行，不在查询路径即时创建。
+- MongoDB 索引应与同步脚本的 `index_fields` 对齐，并补充复合索引：维修 `ZMCOD1 + ZDATE_WX`、`AUFNR + ZDATE_WX`、`VBELN + ZDATE_WX`；订单 `source + aufnr`、`data.VBELN`、`data.GSTRS`；工位 `PCODE + ACTUAL_START_TIME`、`AUFNR + ACTUAL_START_TIME`、`KDAUF + ACTUAL_START_TIME`；BOM `AUFNR_1 + GSTRS`、`VBELN_EX + GSTRS`。索引创建应由迁移/运维任务执行，不在查询路径即时创建。
 
 ### 销售订单原始数据 `GET /api/orders`
 
@@ -41,9 +41,12 @@
 | `customer` | 精确匹配 `KID` 或 `NAME1_ZU` |
 | `base` | 精确匹配 `LGORT` 或 `WERKS` |
 | `dateFrom` / `dateTo` | `GSTRS` 日期范围，`YYYY-MM-DD` 或 SAP 无分隔日期均可 |
+| `shipmentDateFrom` / `shipmentDateTo` | 实际发货日期范围；只匹配订单实际发货字段，不回退到 `GSTRS` |
+| `company5000` | 订单级 5000 公司标识；支持 `true`、`false`、`yes`、`no` 等值 |
+| `shipmentOnly` | 为 `true` 时只返回具备实际发货日期和实际发货数量的订单 |
 | `orderScope` | 来源范围（当前为 `SG` 或 `KK`），与旧参数 `source` 兼容 |
 
-`items[].raw` 中保留源字段和同步字段；`raw.data` 至少可取 `AUFNR`、`VBELN`、`KID`、`NAME1_ZU`、`MAKTX`、`MAKTX_TH`、`LGORT`、`GSTRS`、`WMENG`、`GAMNG`、`ZSTAT`、`AUART`、`IF_L6`，顶层可取 `source`。该接口不聚合或计算任何质量指标。
+`items[].raw` 中保留源字段和同步字段；订单响应在源数据具备实际发货契约时提供 `shipmentDate`、`shipmentQuantity`、`is5000Company`。缺少源字段时不使用 `GSTRS` 或 `WMENG` 代替，字段保持缺失。`raw.data` 至少可取 `AUFNR`、`VBELN`、`KID`、`NAME1_ZU`、`MAKTX`、`MAKTX_TH`、`LGORT`、`GSTRS`、`WMENG`、`GAMNG`、`ZSTAT`、`AUART`、`IF_L6`，顶层可取 `source`。该接口不聚合或计算任何质量指标。
 
 ### 维修故障原始数据 `GET /api/faults`
 
@@ -68,7 +71,7 @@ GET /api/faults/by-orders?productionOrders=PO001,PO002
 
 ### BOM 过账原始数据 `GET /api/views/ZSGV_ZSD124`
 
-支持 `productionOrder`、`salesOrder`、`productModel`、`materialCode`、`dateFrom`、`dateTo`、`missingSalesOrder` 和分页参数，分别过滤 `AUFNR_1`、`VBELN_EX`、`MATNR`、`BUDAT_MKPF`。`missingSalesOrder=true` 仅适用于 BOM 过账，匹配空白、`null` 或缺失的 `VBELN_EX`。其中 `productModel` 在该视图按 `MATNR` 匹配。返回原始 BOM 行，包含 `MBLNR`、`MJAHR`、`ZEILE`、`MATNR`、`WERKS`、`BWART`、`MENGE_A`、`AUFNR_1`、`VBELN_EX`、`BUDAT_MKPF`；由调用方决定 LRR 或复合机型关联规则。
+支持 `productionOrder`、`salesOrder`、`productModel`、`materialCode`、`dateFrom`、`dateTo`、`missingSalesOrder` 和分页参数，分别过滤 `AUFNR_1`、`VBELN_EX`、`MATNR`、`GSTRS`。`missingSalesOrder=true` 仅适用于 BOM 过账，匹配空白、`null` 或缺失的 `VBELN_EX`。其中 `productModel` 在该视图按 `MATNR` 匹配。返回原始 BOM 行，包含 `MBLNR`、`MJAHR`、`ZEILE`、`MATNR`、`WERKS`、`BWART`、`MENGE_A`、`AUFNR_1`、`VBELN_EX`、`GSTRS`、`BUDAT_MKPF`；由调用方决定 LRR 或复合机型关联规则。
 
 ### 详情与数据状态
 
@@ -208,7 +211,7 @@ GET /api/views/{viewID}/detail?id={id}
 
 | `viewID` | MongoDB 集合 | 日期筛选字段 | 看板主要列 |
 |---|---|---|---|
-| `ZSGV_ZSD124` | `order_bom_postings_sap` | `BUDAT_MKPF` | `MBLNR`, `MJAHR`, `ZEILE`, `MATNR`, `WERKS`, `BWART`, `MENGE_A`, `AUFNR_1`, `VBELN_EX`, `BUDAT_MKPF` |
+| `ZSGV_ZSD124` | `order_bom_postings_sap` | `GSTRS` | `MBLNR`, `MJAHR`, `ZEILE`, `MATNR`, `WERKS`, `BWART`, `MENGE_A`, `AUFNR_1`, `VBELN_EX`, `GSTRS`, `BUDAT_MKPF` |
 | `ZSGV_ZPP_SERNOLIST` | `serial_bindings_sap` | 无 | `ZCODE_HEAD`, `ZCODE_ITEM`, `AUFNR_HEAD`, `AUFNR_ITEM`, `PRODH` |
 | `Z_V_ZMES_T_001` | `station_records_sap` | `ACTUAL_START_TIME` | `HISTROYID`, `PCODE`, `OCODE`, `AUFNR`, `SPEC`, `OPERATION`, `GSTRS`, `ACTUAL_START_TIME`, `ACTUAL_END_TIME` |
 | `SCS_DOA` | `scs_doa_records` | `declare_time` | `doa_code`, `doa_type`, `service_uid`, `status`, `doa_judge`, `customer_uid`, `sugon_sn`, `spare_part_sn`, `product_name`, `sales_order`, `is_5000_company` |
@@ -239,7 +242,7 @@ GET /api/views/{viewID}/detail?id={id}
 | `needReturn` / `revoked` | string | 仅 `SCS_CHANGE`：按是否归还、是否撤销精确匹配 |
 | `company5000` | string | SCS 视图：传 `true`、`1`、`yes`、`是` 筛选 `is_5000_company=true`，其他值筛选 false |
 
-日期行为：`ZSGV_ZSD124` 会将日期转换为 `YYYYMMDD` 与 `BUDAT_MKPF` 比较；`Z_V_ZMES_T_001` 直接使用 `ACTUAL_START_TIME` 比较。上下限均为包含关系。
+日期行为：`ZSGV_ZSD124` 使用新增的计划开始时间 `GSTRS` 筛选，同时兼容 `YYYY-MM-DD` 和 `YYYYMMDD` 存量格式；`Z_V_ZMES_T_001` 直接使用 `ACTUAL_START_TIME` 比较。上下限均为包含关系。
 
 响应示例：
 
@@ -289,7 +292,7 @@ GET /api/views/{viewID}/detail?id={id}
 | `AUFNR_ITEM` | 小刀/BOX生产订单号（Item/BOX production order） |
 | `PRODH` | 产品层次（Product hierarchy） |
 
-`ZSGV_ZSD124` 的 BOM 过账详情字段使用业务中文标签，例如 `MBLNR` 为“物料凭证号”、`MJAHR` 为“物料凭证年度”、`ZEILE` 为“物料凭证行项目”、`MATNR` 为“物料号”、`BWART` 为“移动类型”、`MENGE_A` 为“过账数量”、`AUFNR_1` 为“生产订单”、`VBELN_EX` 为“销售订单”、`BUDAT_MKPF` 为“过账日期”。同步审计字段也会显示为“源记录键”“源视图”“同步批次标识”“同步时间”等中文标签。
+`ZSGV_ZSD124` 的 BOM 过账详情字段使用业务中文标签，例如 `MBLNR` 为“物料凭证号”、`MJAHR` 为“物料凭证年度”、`ZEILE` 为“物料凭证行项目”、`MATNR` 为“物料号”、`BWART` 为“移动类型”、`MENGE_A` 为“过账数量”、`AUFNR_1` 为“生产订单”、`VBELN_EX` 为“销售订单”、`GSTRS` 为“计划开始时间”、`BUDAT_MKPF` 为“过账日期”。同步审计字段也会显示为“源记录键”“源视图”“同步批次标识”“同步时间”等中文标签。
 
 `SCS_DOA` 详情保留 DOA 列表字段、`sales_order`、`is_5000_company` 以及 `details` 中的申报、服务单、设备和产品实体字段；`details` 是 JSON 字符串。`is_5000_company` 表示 `sales_order` 是否存在于 `sales_orders_sap.data.VBELN`。
 
@@ -337,7 +340,7 @@ curl 'http://127.0.0.1:18080/api/views/SCS_CHANGE/detail?id=<items[].id>'
 | `customer` | string | 精确匹配客户 ID `KID` 或最终用户 `NAME1_ZU`；列表、统计和导出接口均生效 |
 | `gstrsFrom` / `gstrsTo` | string | 按订单计划开始日期过滤，支持 `YYYY-MM-DD` 或 `YYYYMMDD`；`dateFrom` / `dateTo` 为兼容别名，优先级高于本参数 |
 
-响应 `items[]` 字段：`id`（`{source}:{AUFNR}`）、`source`、`aufnr`、`salesOrder`、`customerId`、`finalUser`、`materialDescription`、`productionModel`、`inventoryLocation`、`plannedStartDate`、`orderQuantity`、`storageQuantity`、`recordCount`。
+响应 `items[]` 字段：`id`（`{source}:{AUFNR}`）、`source`、`aufnr`、`salesOrder`、`customerId`、`finalUser`、`materialDescription`、`productionModel`、`inventoryLocation`、`plannedStartDate`、`orderQuantity`、`storageQuantity`、`shipmentDate`、`shipmentQuantity`、`is5000Company`、`recordCount`。后三个字段只有源订单提供实际发货契约时才返回。
 
 ### `GET /api/orders/stats`
 

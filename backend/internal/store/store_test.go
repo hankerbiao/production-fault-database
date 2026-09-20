@@ -108,7 +108,7 @@ func TestViewFilterIncludesEndDateForStationDatetimes(t *testing.T) {
 }
 
 func TestBOMViewFilterIncludesEmptySalesOrders(t *testing.T) {
-	filter := viewFilter("ZSGV_ZSD124", ViewFilters{MissingSalesOrder: true}, nil, "BUDAT_MKPF")
+	filter := viewFilter("ZSGV_ZSD124", ViewFilters{MissingSalesOrder: true}, nil, "GSTRS")
 	conditions := filter["$and"].(primitive.A)
 	if len(conditions) != 1 {
 		t.Fatalf("filter=%v", filter)
@@ -116,6 +116,20 @@ func TestBOMViewFilterIncludesEmptySalesOrders(t *testing.T) {
 	expr, ok := conditions[0].(bson.M)["$expr"].(bson.M)
 	if !ok || expr["$eq"] == nil {
 		t.Fatalf("empty sales order condition=%v", conditions[0])
+	}
+}
+
+func TestBOMViewFilterUsesPlannedStartDate(t *testing.T) {
+	filter := viewFilter("ZSGV_ZSD124", ViewFilters{DateFrom: "2026-01-01", DateTo: "2026-01-31"}, nil, "GSTRS")
+	conditions := filter["$and"].(primitive.A)
+	branches := conditions[0].(bson.M)["$or"].(primitive.A)
+	if len(branches) != 2 {
+		t.Fatalf("date branches=%v", branches)
+	}
+	for _, branch := range branches {
+		if _, ok := branch.(bson.M)["GSTRS"]; !ok {
+			t.Fatalf("date branch=%v", branch)
+		}
 	}
 }
 
@@ -155,7 +169,7 @@ func TestStationViewStatsPipelineCountsMissingOrders(t *testing.T) {
 }
 
 func TestBOMViewStatsPipelineCountsDistinctOrders(t *testing.T) {
-	pipeline := viewStatsPipeline("ZSGV_ZSD124", bson.M{"MATNR": "MAT-1"}, "BUDAT_MKPF")
+	pipeline := viewStatsPipeline("ZSGV_ZSD124", bson.M{"MATNR": "MAT-1"}, "GSTRS")
 	group := pipeline[1].Map()["$group"].(bson.M)
 	project := pipeline[2].Map()["$project"].(bson.M)
 	if _, ok := group["productionOrderValues"]; !ok {
@@ -187,6 +201,13 @@ func TestBOMViewStatsPipelineCountsDistinctOrders(t *testing.T) {
 	}
 }
 
+func TestBOMStreamIncludesPlannedStart(t *testing.T) {
+	joined := strings.Join(bomStreamFields, ",")
+	if !strings.Contains(joined, "GSTRS") {
+		t.Fatalf("BOM stream missing GSTRS: %s", joined)
+	}
+}
+
 func TestOrderStatsPipelineExposesMachineQuantity(t *testing.T) {
 	pipeline := orderStatsPipeline(orderFilter(OrderFilters{Source: "SG"}))
 	project := pipeline[2].Map()["$project"].(bson.M)
@@ -205,6 +226,36 @@ func TestNormalizeFaultAndOrder(t *testing.T) {
 	order := normalizeOrder(bson.M{"_id": "SG:PO1", "source": "SG", "aufnr": "PO1", "data": bson.M{"VBELN": "SO1", "GAMNG": "3", "WMENG": "2", "GSTRS": "20260102"}, "records": bson.A{bson.M{"GAMNG": "1", "WMENG": "4"}}, "record_count": 1})
 	if order.ID != "SG:PO1" || order.OrderQuantity != 1 || order.StorageQuantity != 4 || order.PlannedStartDate != "20260102" {
 		t.Fatalf("order=%+v", order)
+	}
+}
+
+func TestNormalizeOrderExposesActualShipmentContractWithoutFallbacks(t *testing.T) {
+	order := normalizeOrder(bson.M{
+		"_id":    "SG:PO1",
+		"source": "SG",
+		"aufnr":  "PO1",
+		"data": bson.M{
+			"VBELN":            "SO1",
+			"shipmentDate":     "2026-09-01",
+			"shipmentQuantity": "12",
+			"is5000Company":    true,
+			"GSTRS":            "20260102",
+			"WMENG":            "99",
+		},
+	})
+	if order.ShipmentDate == nil || *order.ShipmentDate != "2026-09-01" {
+		t.Fatalf("shipment date=%v", order.ShipmentDate)
+	}
+	if order.ShipmentQuantity == nil || *order.ShipmentQuantity != 12 {
+		t.Fatalf("shipment quantity=%v", order.ShipmentQuantity)
+	}
+	if order.Is5000Company == nil || !*order.Is5000Company {
+		t.Fatalf("5000 company=%v", order.Is5000Company)
+	}
+
+	withoutShipment := normalizeOrder(bson.M{"data": bson.M{"GSTRS": "20260102", "WMENG": "99"}})
+	if withoutShipment.ShipmentDate != nil || withoutShipment.ShipmentQuantity != nil || withoutShipment.Is5000Company != nil {
+		t.Fatalf("unexpected fallback contract=%+v", withoutShipment)
 	}
 }
 
@@ -269,14 +320,14 @@ func TestBOMPostingDetailFieldsUseChineseLabelsAndOrder(t *testing.T) {
 	}
 	doc := bson.M{
 		"VBELN_EX": "SO-1", "MENGE_A": "2", "MBLNR": "50000001", "MATNR": "MAT-1", "AUFNR_1": "PO-1",
-		"_source_key": "bom-1", "_synced_at": "2026-09-03T00:00:00Z", "_id": "ignored",
+		"GSTRS": "2026-01-09", "_source_key": "bom-1", "_synced_at": "2026-09-03T00:00:00Z", "_id": "ignored",
 	}
 	fields := viewDetailFields("ZSGV_ZSD124", doc)
-	if len(fields) != 7 {
+	if len(fields) != 8 {
 		t.Fatalf("fields=%+v", fields)
 	}
 	want := []struct{ key, label string }{
-		{"MATNR", "物料号"}, {"MENGE_A", "过账数量"}, {"AUFNR_1", "生产订单"}, {"VBELN_EX", "销售订单"},
+		{"MATNR", "物料号"}, {"MENGE_A", "过账数量"}, {"AUFNR_1", "生产订单"}, {"VBELN_EX", "销售订单"}, {"GSTRS", "计划开始时间"},
 		{"MBLNR", "物料凭证号"}, {"_source_key", "源记录键"}, {"_synced_at", "同步时间"},
 	}
 	for index, expected := range want {

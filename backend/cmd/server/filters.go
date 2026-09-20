@@ -48,6 +48,8 @@ func orderFilters(q url.Values) store.OrderFilters {
 		Keyword: query(q, "keyword"), Source: query(q, "source"), GSTRSFrom: query(q, "gstrsFrom"), GSTRSTo: query(q, "gstrsTo"),
 		SalesOrder: query(q, "salesOrder"), ProductionOrder: query(q, "productionOrder"), SerialNumber: query(q, "serialNumber"), ProductModel: query(q, "productModel"),
 		Customer: query(q, "customer"), Base: query(q, "base"), DateFrom: query(q, "dateFrom"), DateTo: query(q, "dateTo"), OrderScope: query(q, "orderScope"),
+		ShipmentDateFrom: query(q, "shipmentDateFrom"), ShipmentDateTo: query(q, "shipmentDateTo"),
+		Company5000: company5000Filter(query(q, "company5000")), ShipmentOnly: parseBool(q.Get("shipmentOnly")),
 	}
 }
 

@@ -43,6 +43,8 @@ type Filters struct {
 type OrderFilters struct {
 	Keyword, Source, GSTRSFrom, GSTRSTo                                                                   string
 	SalesOrder, ProductionOrder, SerialNumber, ProductModel, Customer, Base, DateFrom, DateTo, OrderScope string
+	ShipmentDateFrom, ShipmentDateTo, Company5000                                                         string
+	ShipmentOnly                                                                                          bool
 }
 
 type Fault struct {
@@ -116,8 +118,14 @@ type Order struct {
 	PlannedStartDate    string  `json:"plannedStartDate"`
 	OrderQuantity       float64 `json:"orderQuantity"`
 	StorageQuantity     float64 `json:"storageQuantity"`
-	RecordCount         int     `json:"recordCount"`
-	Raw                 bson.M  `json:"raw,omitempty"`
+	// These fields are intentionally pointers.  An omitted field means the
+	// source did not provide the actual-shipment contract; it must not be
+	// confused with an actual zero quantity or a false company flag.
+	ShipmentDate     *string  `json:"shipmentDate,omitempty"`
+	ShipmentQuantity *float64 `json:"shipmentQuantity,omitempty"`
+	Is5000Company    *bool    `json:"is5000Company,omitempty"`
+	RecordCount      int      `json:"recordCount"`
+	Raw              bson.M   `json:"raw,omitempty"`
 }
 type OrderDetail struct {
 	Order  Order   `json:"order"`
@@ -135,7 +143,7 @@ const MaxBulkQueryRows = 10000
 const MaxOrderQueryRows = MaxBulkQueryRows
 const MaxViewQueryRows = MaxBulkQueryRows
 
-var bomStreamFields = []string{"id", "AUFNR_1", "VBELN_EX", "MENGE_A", "MATNR", "LGORT", "BUDAT_MKPF"}
+var bomStreamFields = []string{"id", "AUFNR_1", "VBELN_EX", "GSTRS", "MENGE_A", "MATNR", "LGORT", "BUDAT_MKPF"}
 var stationStreamFields = []string{"id", "PCODE", "AUFNR", "KDAUF", "SPEC", "SPEC_DESC", "OPERATION", "ACTUAL_START_TIME", "ACTUAL_END_TIME", "MAKTX_TH", "LGORT", "LINE_CODE"}
 var tsvSanitizer = strings.NewReplacer("\t", " ", "\r", " ", "\n", " ")
 
@@ -212,7 +220,7 @@ var documentedViews = map[string]struct {
 	searchFields []string
 	orderFields  []string
 }{
-	"ZSGV_ZSD124":        {"order_bom_postings_sap", "BUDAT_MKPF", []string{"MBLNR", "MJAHR", "ZEILE", "MATNR", "AUFNR_1", "VBELN_EX", "KUNNR", "NAME1"}, []string{"BUDAT_MKPF", "MBLNR", "MJAHR", "ZEILE"}},
+	"ZSGV_ZSD124":        {"order_bom_postings_sap", "GSTRS", []string{"MBLNR", "MJAHR", "ZEILE", "MATNR", "AUFNR_1", "VBELN_EX", "KUNNR", "NAME1"}, []string{"GSTRS", "MBLNR", "MJAHR", "ZEILE"}},
 	"ZSGV_ZPP_SERNOLIST": {"serial_bindings_sap", "", []string{"ZCODE_HEAD", "ZCODE_ITEM", "AUFNR_HEAD", "AUFNR_ITEM", "PRODH"}, []string{"ZCODE_HEAD", "ZCODE_ITEM", "AUFNR_HEAD", "AUFNR_ITEM"}},
 	"Z_V_ZMES_T_001":     {"station_records_sap", "ACTUAL_START_TIME", []string{"HISTROYID", "PCODE", "OCODE", "AUFNR", "SPEC", "OPERATION", "GSTRS", "ACTUAL_START_TIME", "ACTUAL_END_TIME"}, []string{"ACTUAL_START_TIME", "HISTROYID", "SPEC_TIME"}},
 	"SCS_DOA":            {"scs_doa_records", "declare_time", []string{"doa_code", "doa_type", "declare_reason", "service_uid", "status", "doa_judge", "customer_uid", "sugon_sn", "spare_part_sn", "product_name", "review_name", "detail_problem", "problem_conclusion", "declare_uid", "business_unit", "acceptance_uid"}, []string{"declare_time", "doa_code"}},
@@ -221,7 +229,7 @@ var documentedViews = map[string]struct {
 
 var viewAllProjections = map[string]bson.M{
 	"ZSGV_ZSD124": {
-		"_id": 1, "_source_key": 1, "AUFNR_1": 1, "VBELN_EX": 1, "MENGE_A": 1,
+		"_id": 1, "_source_key": 1, "AUFNR_1": 1, "VBELN_EX": 1, "GSTRS": 1, "MENGE_A": 1,
 		"MATNR": 1, "LGORT": 1, "WERKS": 1, "BUDAT_MKPF": 1, "KUNNR": 1, "NAME1": 1,
 	},
 	"Z_V_ZMES_T_001": {
@@ -249,6 +257,14 @@ var orderListProjection = bson.M{
 	"source": 1, "aufnr": 1, "record_count": 1, "order_quantity": 1, "storage_quantity": 1,
 	"data.VBELN": 1, "data.KID": 1, "data.NAME1_ZU": 1, "data.MAKTX": 1, "data.MAKTX_TH": 1, "data.LGORT": 1, "data.GSTRS": 1, "data.GAMNG": 1, "data.WMENG": 1,
 	"data.IF_L6": 1, "data.ZSTAT": 1, "data.AUART": 1,
+	"data.shipmentDate": 1, "data.shipment_date": 1, "data.actualShipmentDate": 1, "data.actual_shipment_date": 1,
+	"data.WADAT_IST": 1, "data.SHIPMENT_DATE": 1,
+	"data.shipmentQuantity": 1, "data.shipment_quantity": 1, "data.actualShipmentQuantity": 1, "data.actual_shipment_quantity": 1,
+	"data.LFIMG": 1, "data.SHIPMENT_QUANTITY": 1,
+	"data.is5000Company": 1, "data.is_5000_company": 1, "data.company5000": 1, "data.IS_5000_COMPANY": 1,
+	"shipmentDate": 1, "shipment_date": 1, "actualShipmentDate": 1, "actual_shipment_date": 1, "WADAT_IST": 1, "SHIPMENT_DATE": 1,
+	"shipmentQuantity": 1, "shipment_quantity": 1, "actualShipmentQuantity": 1, "actual_shipment_quantity": 1, "LFIMG": 1, "SHIPMENT_QUANTITY": 1,
+	"is5000Company": 1, "is_5000_company": 1, "company5000": 1, "IS_5000_COMPANY": 1,
 	"data.出厂日期": 1, "data.生产日期": 1, "data.FACTORY_DATE": 1, "data.保修结束日期": 1, "data.质保到期日": 1, "data.WARRANTY_END_DATE": 1,
 	"records.GAMNG": 1, "records.WMENG": 1,
 }

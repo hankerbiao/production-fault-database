@@ -11,7 +11,7 @@ function formatTime(value) {
 
 function StageList({ stages = [] }) {
   return <div className="sync-stage-list">{stages.map(stage => <div className={`sync-stage ${stage.state || 'pending'}`} key={stage.task_id}>
-    <span className="sync-stage-dot" /><div><strong>{stage.label || stage.task_id}</strong><small>第 {stage.attempts || 0} 次尝试{stage.error?.message ? ` · ${stage.error.message}` : ''}</small></div><b>{stage.state || 'pending'}</b>
+    <span className="sync-stage-dot" /><div><strong>{stage.label || stage.task_id}</strong><small>第 {stage.attempts || 0} 次尝试{stage.progress?.phase ? ` · ${stage.progress.phase}` : ''}{stage.progress?.total ? ` · ${stage.progress.scanned}/${stage.progress.total}（${stage.progress.percent}%）` : ''}{stage.error?.message ? ` · ${stage.error.message}` : ''}</small></div><b>{stage.state || 'pending'}</b>
   </div>)}</div>;
 }
 

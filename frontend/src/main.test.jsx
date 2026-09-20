@@ -79,6 +79,7 @@ describe('operations workbench', () => {
     expect(await screen.findByRole('heading', { name: '维修故障记录' })).toBeInTheDocument();
     expect(screen.getByText('SAP HANA 视图 ZSGV_ZZT_WLJL', { exact: false })).toBeInTheDocument();
     expect(screen.getByRole('columnheader', { name: '计划生产时间' })).toBeInTheDocument();
+    expect(screen.getByRole('columnheader', { name: '物料号' })).toBeInTheDocument();
     expect(screen.getByText('主机条码数量（去重）')).toBeInTheDocument();
     expect((await screen.findAllByText('PC-1')).length).toBeGreaterThan(0);
     fireEvent.click(screen.getAllByTitle('查看完整数据库字段')[0]);
@@ -261,6 +262,8 @@ describe('operations workbench', () => {
     render(<App />);
     fireEvent.click(screen.getByRole('button', { name: /订单过账/ }));
     expect(await screen.findByRole('heading', { name: '订单 BOM 过账' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /计划开始时间（GSTRS）/ })).toBeInTheDocument();
+    expect(screen.getByRole('columnheader', { name: '计划开始时间（GSTRS）' })).toBeInTheDocument();
     expect(screen.getByText('生产订单数量（去重）').parentElement).toHaveTextContent('2');
     expect(screen.getByText('销售订单数量（去重）').parentElement).toHaveTextContent('1');
     expect(screen.getByText('销售订单为空').parentElement).toHaveTextContent('3');

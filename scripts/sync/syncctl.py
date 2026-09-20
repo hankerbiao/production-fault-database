@@ -45,7 +45,7 @@ class Task:
     priority: int = 0
     full_supported: bool = True
 
-    def command(self, python: str, mode: str, start_date: str | None, end_date: str | None) -> list[str]:
+    def command(self, python: str, mode: str, start_date: str | None, end_date: str | None, run_id: str | None = None) -> list[str]:
         path = str(ROOT / self.script)
         args = [python, path]
         if self.id == "sales_orders":
@@ -59,6 +59,10 @@ class Task:
                 args.extend(["--start-date", start_date or ""])
             if end_date:
                 args.extend(["--end-date", end_date])
+        elif self.id == "order_bom_planned_start":
+            args.append("--apply")
+            if run_id:
+                args.extend(["--run-id", run_id])
         elif self.id == "repair_records":
             args.extend(["--mode", mode, "--apply", "--no-progress", "--log-level", "ERROR"])
             if mode == "full":
@@ -76,6 +80,7 @@ TASKS: tuple[Task, ...] = (
     Task("station_records", "工位记录", "scripts/sync/station_records.py", ("sales_orders",), 20),
     Task("repair_records", "维修故障", "scripts/sync/增量同步和清洗维修故障记录.py", ("sales_orders", "station_records"), 30),
     Task("order_bom_postings", "订单 BOM 过账", "scripts/sync/order_bom_postings.py", ("sales_orders",), 40),
+    Task("order_bom_planned_start", "BOM 计划开始时间回填", "scripts/maintenance/backfill_order_bom_planned_start.py", ("sales_orders", "order_bom_postings"), 45),
     Task("serial_bindings", "序列号绑定", "scripts/sync/serial_bindings.py", priority=50),
     Task("scs_doa", "SCS DOA", "scripts/sources/scs_doa_sync.py", ("sales_orders",), 60),
     Task("scs_change", "SCS 换上换下", "scripts/sources/scs_change_sync.py", ("scs_doa",), 70),
@@ -281,7 +286,7 @@ class Orchestrator:
     def _execute_task(self, run_id: str, task: Task, mode: str, start: str | None, end: str | None) -> dict[str, Any]:
         for attempt in range(1, self.attempts + 1):
             self.store.stage(run_id, task.id, state="running", attempts=attempt, started_at=datetime.now(timezone.utc), finished_at=None, error=None)
-            command = task.command(self.python, mode, start, end)
+            command = task.command(self.python, mode, start, end, run_id)
             completed = subprocess.run(command, cwd=ROOT, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
             try:
                 summary = json_result(completed.stdout, task, mode)

@@ -94,7 +94,7 @@ func repairPlannedDateRangeFilter(dateFrom, dateTo string) bson.M {
 }
 
 func orderFilter(f OrderFilters) bson.M {
-	conditions := make(bson.A, 0, 12)
+	conditions := make(bson.A, 0, 16)
 	if f.Source != "" {
 		conditions = append(conditions, bson.M{"source": f.Source})
 	}
@@ -130,6 +130,21 @@ func orderFilter(f OrderFilters) bson.M {
 	if dateFrom != "" || dateTo != "" {
 		conditions = append(conditions, orderDateRangeFilter(dateFrom, dateTo))
 	}
+	if f.ShipmentDateFrom != "" || f.ShipmentDateTo != "" {
+		conditions = append(conditions, shipmentDateRangeFilter(f.ShipmentDateFrom, f.ShipmentDateTo))
+	}
+	if f.Company5000 != "" {
+		conditions = append(conditions, anyOrderFieldEquals(
+			[]string{"is5000Company", "is_5000_company", "company5000", "IS_5000_COMPANY", "data.is5000Company", "data.is_5000_company", "data.company5000", "data.IS_5000_COMPANY"},
+			parseBoolFilter(f.Company5000),
+		))
+	}
+	if f.ShipmentOnly {
+		conditions = append(conditions, bson.M{"$and": bson.A{
+			anyOrderFieldPresent([]string{"shipmentDate", "shipment_date", "actualShipmentDate", "actual_shipment_date", "WADAT_IST", "SHIPMENT_DATE", "data.shipmentDate", "data.shipment_date", "data.actualShipmentDate", "data.actual_shipment_date", "data.WADAT_IST", "data.SHIPMENT_DATE"}),
+			anyOrderFieldPresent([]string{"shipmentQuantity", "shipment_quantity", "actualShipmentQuantity", "actual_shipment_quantity", "LFIMG", "SHIPMENT_QUANTITY", "data.shipmentQuantity", "data.shipment_quantity", "data.actualShipmentQuantity", "data.actual_shipment_quantity", "data.LFIMG", "data.SHIPMENT_QUANTITY"}),
+		}})
+	}
 	if f.Keyword != "" {
 		re := regexp.QuoteMeta(f.Keyword)
 		conditions = append(conditions, bson.M{"$or": bson.A{bson.M{"aufnr": bson.M{"$regex": re, "$options": "i"}}, bson.M{"data.VBELN": bson.M{"$regex": re, "$options": "i"}}, bson.M{"data.NAME1_ZU": bson.M{"$regex": re, "$options": "i"}}, bson.M{"data.MAKTX_TH": bson.M{"$regex": re, "$options": "i"}}, bson.M{"data.KID": bson.M{"$regex": re, "$options": "i"}}, bson.M{"data.GSTRS": bson.M{"$regex": re, "$options": "i"}}}})
@@ -161,6 +176,48 @@ func orderDateRangeFilter(dateFrom, dateTo string) bson.M {
 		bson.M{"data.GSTRS": bounds(isoFrom, isoTo)},
 		bson.M{"data.GSTRS": bounds(compactFrom, compactTo)},
 	}}
+}
+
+func shipmentDateRangeFilter(dateFrom, dateTo string) bson.M {
+	isoFrom, isoTo := isoDate(dateFrom), isoDate(dateTo)
+	compactFrom, compactTo := strings.ReplaceAll(isoFrom, "-", ""), strings.ReplaceAll(isoTo, "-", "")
+	bounds := func(from, to string) bson.M {
+		result := bson.M{}
+		if from != "" {
+			result["$gte"] = from
+		}
+		if to != "" {
+			result["$lte"] = to
+		}
+		return result
+	}
+	fields := []string{
+		"shipmentDate", "shipment_date", "actualShipmentDate", "actual_shipment_date",
+		"WADAT_IST", "SHIPMENT_DATE",
+		"data.shipmentDate", "data.shipment_date", "data.actualShipmentDate", "data.actual_shipment_date",
+		"data.WADAT_IST", "data.SHIPMENT_DATE",
+	}
+	branches := make(bson.A, 0, len(fields)*2)
+	for _, field := range fields {
+		branches = append(branches, bson.M{field: bounds(isoFrom, isoTo)}, bson.M{field: bounds(compactFrom, compactTo)})
+	}
+	return bson.M{"$or": branches}
+}
+
+func anyOrderFieldPresent(fields []string) bson.M {
+	branches := make(bson.A, 0, len(fields))
+	for _, field := range fields {
+		branches = append(branches, bson.M{field: bson.M{"$exists": true, "$nin": bson.A{"", nil}}})
+	}
+	return bson.M{"$or": branches}
+}
+
+func anyOrderFieldEquals(fields []string, value bool) bson.M {
+	branches := make(bson.A, 0, len(fields))
+	for _, field := range fields {
+		branches = append(branches, bson.M{field: value})
+	}
+	return bson.M{"$or": branches}
 }
 
 func isoDate(value string) string {

@@ -17,6 +17,13 @@ def test_full_requires_start_date_and_rejects_unknown_tasks():
         resolve_tasks(["not-a-task"])
 
 
+def test_planned_start_task_resolves_bom_dependency_and_reports_run_id():
+    tasks = resolve_tasks(["order_bom_planned_start"])
+    assert [task.id for task in tasks] == ["sales_orders", "order_bom_postings", "order_bom_planned_start"]
+    command = tasks[-1].command("python", "incremental", None, None, "run-1")
+    assert command[-3:] == ["--apply", "--run-id", "run-1"]
+
+
 def test_script_result_uses_last_json_line_and_preserves_contract():
     task = resolve_tasks(["sales_orders"])[0]
     result = json_result("diagnostic line\n{\"success\": true, \"run_id\": \"child\"}\n", task, "incremental")

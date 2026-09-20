@@ -196,8 +196,8 @@ SCS 换上换下在 MongoDB `sync_checkpoints` 中保存页码、页内偏移、
 | 数据域 | 主要接口 | 关键字段 |
 | --- | --- | --- |
 | 维修故障 | `/api/faults*` | `PCODE`, `AUFNR`, `VBELN`, `ERROR_CODE`, `ERROR_MSG`, `ZDATE_WX` |
-| 销售订单 | `/api/orders*` | `AUFNR`, `VBELN`, `KID`, `MAKTX_TH`, `GSTRS`, `GAMNG`, `WMENG` |
-| BOM 过账 | `/api/views/ZSGV_ZSD124*` | `MATNR`, `AUFNR_1`, `VBELN_EX`, `MENGE_A`, `BUDAT_MKPF` |
+| 销售订单 | `/api/orders*` | `AUFNR`, `VBELN`, `KID`, `MAKTX_TH`, `GSTRS`, `GAMNG`, `WMENG`, `shipmentDate`, `shipmentQuantity`, `is5000Company` |
+| BOM 过账 | `/api/views/ZSGV_ZSD124*` | `MATNR`, `AUFNR_1`, `VBELN_EX`, `GSTRS`, `MENGE_A`, `BUDAT_MKPF` |
 | 序列号绑定 | `/api/views/ZSGV_ZPP_SERNOLIST*` | `ZCODE_HEAD`, `ZCODE_ITEM`, `AUFNR_HEAD`, `AUFNR_ITEM`, `PRODH` |
 | 工位记录 | `/api/views/Z_V_ZMES_T_001*` | `PCODE`, `OCODE`, `AUFNR`, `SPEC`, `ACTUAL_START_TIME`, `ACTUAL_END_TIME` |
 | SCS DOA 申报 | `/api/views/SCS_DOA*` | `doa_code`, `service_uid`, `sales_order`, `sugon_sn`, `is_5000_company` |

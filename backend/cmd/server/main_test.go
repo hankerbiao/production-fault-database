@@ -316,6 +316,19 @@ func TestOrdersAllUsesFiltersWithoutBoardPagination(t *testing.T) {
 	}
 }
 
+func TestOrderFiltersSupportActualShipmentQuery(t *testing.T) {
+	query := url.Values{
+		"shipmentDateFrom": {"2026-09-01"},
+		"shipmentDateTo":   {"2026-09-30"},
+		"company5000":      {"true"},
+		"shipmentOnly":     {"true"},
+	}
+	filters := orderFilters(query)
+	if filters.ShipmentDateFrom != "2026-09-01" || filters.ShipmentDateTo != "2026-09-30" || filters.Company5000 != "yes" || !filters.ShipmentOnly {
+		t.Fatalf("filters=%+v", filters)
+	}
+}
+
 func TestOrderModels(t *testing.T) {
 	f := &fakeStore{models: store.OrderModelsResult{Items: []string{"M-1", "M-2"}}}
 	r := httptest.NewRecorder()

@@ -2,22 +2,19 @@ package store
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
 	"go.mongodb.org/mongo-driver/bson"
-	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
 func (s *Store) List(ctx context.Context, f Filters, page, pageSize int) (ListResult, error) {
-	filter := repairFilter(f)
-	var total int64
-	var err error
-	if f.Company5000 == "yes" || f.Company5000 == "no" {
-		total, err = s.countCompanyFiltered(ctx, filter, f.Company5000)
-	} else {
-		total, err = s.repairs.CountDocuments(ctx, filter)
+	filter, err := s.repairFilterWithCompany(ctx, f)
+	if err != nil {
+		return ListResult{}, err
 	}
+	total, err := s.repairs.CountDocuments(ctx, filter)
 	if err != nil {
 		return ListResult{}, err
 	}
@@ -25,9 +22,6 @@ func (s *Store) List(ctx context.Context, f Filters, page, pageSize int) (ListRe
 	if repairTimeField(f) == "planned" {
 		// Descending string order places populated GSTRS values before empty or missing ones.
 		sortFields = bson.D{{Key: "GSTRS", Value: -1}, {Key: "ZDATE_WX", Value: -1}, {Key: "ZTIME", Value: -1}}
-	}
-	if f.Company5000 == "yes" || f.Company5000 == "no" {
-		return s.listCompanyFiltered(ctx, filter, f.Company5000, sortFields, page, pageSize, total)
 	}
 	cur, err := s.repairs.Find(ctx, filter, options.Find().SetSort(sortFields).SetSkip(int64((page-1)*pageSize)).SetLimit(int64(pageSize)))
 	if err != nil {
@@ -45,84 +39,58 @@ func (s *Store) List(ctx context.Context, f Filters, page, pageSize int) (ListRe
 	return ListResult{Items: items, Page: page, PageSize: pageSize, Total: total}, nil
 }
 
-func repairCompany5000Lookup(orderCollection string) bson.D {
-	return bson.D{{Key: "$lookup", Value: bson.M{
-		"from":         orderCollection,
-		"localField":   "_company5000_order_keys",
-		"foreignField": "aufnr",
-		"pipeline":     mongo.Pipeline{{{Key: "$limit", Value: 1}}},
-		"as":           "_company5000_orders",
-	}}}
-}
-
-func repairCompany5000Keys() bson.D {
-	return bson.D{{Key: "$set", Value: bson.M{"_company5000_order_keys": bson.A{
-		"$AUFNR", normalizedOrderExpression("$AUFNR"),
-	}}}}
-}
-
-func repairCompany5000Match(value string) bson.D {
-	if value == "yes" {
-		return bson.D{{Key: "$match", Value: bson.M{"_company5000_orders.0": bson.M{"$exists": true}}}}
+func (s *Store) repairFilterWithCompany(ctx context.Context, f Filters) (bson.M, error) {
+	filter := repairFilter(f)
+	if f.Company5000 != "yes" && f.Company5000 != "no" {
+		return filter, nil
 	}
-	return bson.D{{Key: "$match", Value: bson.M{"_company5000_orders.0": bson.M{"$exists": false}}}}
-}
-
-func normalizedOrderExpression(field string) bson.M {
-	return bson.M{"$ltrim": bson.M{
-		"input": bson.M{"$trim": bson.M{"input": bson.M{"$convert": bson.M{"input": field, "to": "string", "onError": "", "onNull": ""}}}},
-		"chars": "0",
-	}}
-}
-
-func (s *Store) listCompanyFiltered(ctx context.Context, filter bson.M, company5000 string, sortFields bson.D, page, pageSize int, total int64) (ListResult, error) {
-	pipeline := mongo.Pipeline{
-		{{Key: "$match", Value: filter}},
-		repairCompany5000Keys(),
-		repairCompany5000Lookup(s.orders.Name()),
-		repairCompany5000Match(company5000),
-		{{Key: "$sort", Value: sortFields}},
-		{{Key: "$skip", Value: int64((page - 1) * pageSize)}},
-		{{Key: "$limit", Value: int64(pageSize)}},
-		{{Key: "$project", Value: repairListProjection}},
-	}
-	cur, err := s.repairs.Aggregate(ctx, pipeline)
+	values, err := s.companyOrderCandidates(ctx)
 	if err != nil {
-		return ListResult{}, err
+		return nil, err
 	}
-	defer cur.Close(ctx)
-	docs := make([]bson.M, 0)
-	if err = cur.All(ctx, &docs); err != nil {
-		return ListResult{}, err
+	condition := bson.M{"AUFNR": bson.M{"$in": values}}
+	if f.Company5000 == "no" {
+		condition = bson.M{"AUFNR": bson.M{"$nin": values}}
 	}
-	items := make([]Fault, 0, len(docs))
-	for _, doc := range docs {
-		items = append(items, normalizeFault(doc))
-	}
-	return ListResult{Items: items, Page: page, PageSize: pageSize, Total: total}, nil
+	return withFilter(filter, condition), nil
 }
 
-func (s *Store) countCompanyFiltered(ctx context.Context, filter bson.M, company5000 string) (int64, error) {
-	pipeline := mongo.Pipeline{
-		{{Key: "$match", Value: filter}},
-		repairCompany5000Keys(),
-		repairCompany5000Lookup(s.orders.Name()),
-		repairCompany5000Match(company5000),
-		{{Key: "$count", Value: "total"}},
+func (s *Store) companyOrderCandidates(ctx context.Context) ([]string, error) {
+	values := make([]string, 0)
+	for _, field := range []string{"aufnr", "data.AUFNR"} {
+		items, err := s.orders.Distinct(ctx, field, bson.M{})
+		if err != nil {
+			return nil, err
+		}
+		values = append(values, normalizedOrderCandidates(items)...)
 	}
-	cur, err := s.repairs.Aggregate(ctx, pipeline)
-	if err != nil {
-		return 0, err
+	seen := make(map[string]struct{}, len(values))
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		result = append(result, value)
 	}
-	defer cur.Close(ctx)
-	var rows []bson.M
-	if err = cur.All(ctx, &rows); err != nil {
-		return 0, err
+	return result, nil
+}
+
+func normalizedOrderCandidates(items []any) []string {
+	values := make([]string, 0, len(items)*3)
+	for _, item := range items {
+		value := strings.TrimSpace(fmt.Sprint(item))
+		if value == "" || value == "<nil>" {
+			continue
+		}
+		trimmed := strings.TrimLeft(value, "0")
+		if trimmed == "" {
+			trimmed = "0"
+		}
+		padded := strings.Repeat("0", max(0, 12-len(trimmed))) + trimmed
+		values = append(values, value, trimmed, padded)
 	}
-	if len(rows) == 0 {
-		return 0, nil
-	}
-	return int64(number(rows[0]["total"])), nil
+	return values
 }
 
 // FaultSNs returns only the order/SN relationship needed by RTY joins.

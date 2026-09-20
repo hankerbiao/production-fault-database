@@ -153,12 +153,11 @@ func (s *Store) DataStatus(ctx context.Context) (DataStatus, error) {
 }
 
 func (s *Store) Stats(ctx context.Context, f Filters) (StatsResult, error) {
-	pipeline := repairStatsPipeline(repairFilter(f), repairTimeField(f))
-	var err error
-	if f.Company5000 == "yes" || f.Company5000 == "no" {
-		pipeline = append(mongo.Pipeline{pipeline[0], repairCompany5000Keys(), repairCompany5000Lookup(s.orders.Name()), repairCompany5000Match(f.Company5000)}, pipeline[1:]...)
+	filter, err := s.repairFilterWithCompany(ctx, f)
+	if err != nil {
+		return StatsResult{}, err
 	}
-	cur, err := s.repairs.Aggregate(ctx, pipeline)
+	cur, err := s.repairs.Aggregate(ctx, repairStatsPipeline(filter, repairTimeField(f)))
 	if err != nil {
 		return StatsResult{}, err
 	}

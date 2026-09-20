@@ -330,12 +330,12 @@ func TestOrderModels(t *testing.T) {
 }
 
 func TestFilterHelpers(t *testing.T) {
-	q := url.Values{"keyword": {" a "}, "source": {" SG "}, "sns": {"SN1,SN2"}, "productionOrders": {"00012,13"}, "dateFrom": {"2026-01-01"}, "station": {"ST-1"}, "timeField": {" planned "}}
+	q := url.Values{"keyword": {" a "}, "source": {" SG "}, "sns": {"SN1,SN2"}, "productionOrders": {"00012,13"}, "dateFrom": {"2026-01-01"}, "station": {"ST-1"}, "timeField": {" planned "}, "company5000": {" 是 "}}
 	if repairFilters(q).Keyword != "a" || orderFilters(q).Source != "SG" {
 		t.Fatal("query values were not trimmed")
 	}
 	filters := repairFilters(q)
-	if filters.SNS != "SN1,SN2" || filters.ProductionOrders != "00012,13" || filters.DateFrom != "2026-01-01" || filters.Station != "ST-1" || filters.TimeField != "planned" {
+	if filters.SNS != "SN1,SN2" || filters.ProductionOrders != "00012,13" || filters.DateFrom != "2026-01-01" || filters.Station != "ST-1" || filters.TimeField != "planned" || filters.Company5000 != "yes" {
 		t.Fatalf("extended filters=%+v", filters)
 	}
 	if !viewFilters(url.Values{"missingSalesOrder": {" true "}}).MissingSalesOrder {

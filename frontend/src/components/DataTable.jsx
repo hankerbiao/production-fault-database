@@ -1,4 +1,4 @@
-import { Check, Columns3, Eye, Rows3 } from 'lucide-react';
+import { Columns3, Eye, Rows3 } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 
 const preferenceKey = pageId => `fault-workbench-table:${pageId}`;
@@ -52,8 +52,4 @@ export function DataTable({ pageId, columns, items, loading, error, onOpen, empt
     </div>
     {!loading && items.length > 0 && <div className="mobile-record-list">{items.map(item => <button className="mobile-record" type="button" key={item.id} onClick={() => onOpen(item.id)}>{visibleColumns.slice(0, 4).map((column, index) => <span key={column.key} className={index === 0 ? 'mobile-primary' : ''}><small>{column.label}</small><b>{column.render(item)}</b></span>)}<Eye size={16} /></button>)}</div>}
   </section>;
-}
-
-export function DetailCopyButton({ copied, onClick }) {
-  return <button className="field-copy" type="button" title="复制字段值" onClick={onClick}>{copied ? <Check size={14} /> : '复制'}</button>;
 }

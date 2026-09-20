@@ -61,9 +61,21 @@ func TestMongoQueriesWithTemporaryDatabase(t *testing.T) {
 	if err != nil || list.Total != 1 || len(list.Items) != 1 || list.Items[0].ID != "r1" {
 		t.Fatalf("list=%+v err=%v", list, err)
 	}
+	companyList, err := s.List(ctx, Filters{Company5000: "yes"}, 1, 10)
+	if err != nil || companyList.Total != 1 || len(companyList.Items) != 1 || companyList.Items[0].ID != "r1" {
+		t.Fatalf("5000 list=%+v err=%v", companyList, err)
+	}
+	nonCompanyList, err := s.List(ctx, Filters{Company5000: "no"}, 1, 10)
+	if err != nil || nonCompanyList.Total != 1 || len(nonCompanyList.Items) != 1 || nonCompanyList.Items[0].ID != "r2" {
+		t.Fatalf("non-5000 list=%+v err=%v", nonCompanyList, err)
+	}
 	stats, err := s.Stats(ctx, Filters{})
 	if err != nil || stats.Total != 2 || stats.SalesOrders != 1 || stats.ProductionOrders != 2 {
 		t.Fatalf("stats=%+v err=%v", stats, err)
+	}
+	companyStats, err := s.Stats(ctx, Filters{Company5000: "yes"})
+	if err != nil || companyStats.Total != 1 || companyStats.ProductionOrders != 1 {
+		t.Fatalf("5000 stats=%+v err=%v", companyStats, err)
 	}
 	orderStats, err := s.OrderStats(ctx, OrderFilters{Source: "SG"})
 	if err != nil || orderStats.Total != 1 || orderStats.SalesOrders != 1 || orderStats.SG != 1 || orderStats.OrderQuantity != 3 {

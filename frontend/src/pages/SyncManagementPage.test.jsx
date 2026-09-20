@@ -20,7 +20,7 @@ describe('SyncManagementPage', () => {
     await screen.findByText('销售订单');
     fireEvent.click(screen.getByRole('button', { name: '全量' }));
     fireEvent.change(screen.getByLabelText('全量开始日期'), { target: { value: '2026-01-01' } });
-    fireEvent.click(screen.getByRole('checkbox', { name: '我确认执行全量同步及成功后的范围清理' }));
+    fireEvent.click(screen.getByRole('checkbox', { name: /我确认执行全量同步/ }));
     fireEvent.click(screen.getByRole('button', { name: '执行全量同步' }));
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith('/api/sync/runs', expect.objectContaining({ method: 'POST', body: JSON.stringify({ mode: 'full', taskIds: ['sales_orders'], startDate: '2026-01-01', endDate: undefined }) })));
   });

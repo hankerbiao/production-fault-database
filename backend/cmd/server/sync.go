@@ -61,58 +61,6 @@ func (m *syncManager) statusSnapshot() syncStatus {
 	return m.status
 }
 
-func (m *syncManager) start() (syncStatus, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.status.State == "running" {
-		return m.status, fmt.Errorf("已有同步任务运行中")
-	}
-
-	commands, err := syncCommands()
-	if err != nil {
-		return m.status, err
-	}
-	python := os.Getenv("SYNC_PYTHON")
-	if python == "" {
-		python = "python"
-	}
-	started := time.Now().UTC()
-	m.status = syncStatus{State: "running", StartedAt: started.Format(time.RFC3339), Message: "正在执行增量同步"}
-
-	go func() {
-		summaries := make(map[string]any, len(commands))
-		var runErr error
-		for _, command := range commands {
-			result, err := runSyncCommand(python, command.path, command.args)
-			if result != nil {
-				summaries[command.name] = result
-			}
-			if err != nil && runErr == nil {
-				runErr = err
-				break
-			}
-		}
-		finished := time.Now().UTC()
-		status := syncStatus{State: "success", StartedAt: started.Format(time.RFC3339), FinishedAt: finished.Format(time.RFC3339), Message: "增量同步完成"}
-		if runErr != nil {
-			status.State = "failed"
-			status.Message = runErr.Error()
-		}
-		status.Summary = summaries
-		for _, summary := range summaries {
-			if value, ok := summary.(map[string]any); ok {
-				if success, ok := value["success"].(bool); ok && !success {
-					status.State = "failed"
-				}
-			}
-		}
-		m.mu.Lock()
-		m.status = status
-		m.mu.Unlock()
-	}()
-	return m.status, nil
-}
-
 // startRun launches the durable Python runner. Its MongoDB state remains
 // queryable even if this HTTP process restarts while the child is working.
 func (m *syncManager) startRun(request syncRunRequest) (syncStatus, error) {
@@ -184,12 +132,6 @@ func (m *syncManager) startRun(request syncRunRequest) (syncStatus, error) {
 	return m.status, nil
 }
 
-type syncCommand struct {
-	name string
-	path string
-	args []string
-}
-
 func runSyncCommand(python, script string, args []string) (map[string]any, error) {
 	cmd := exec.Command(python, append([]string{script}, args...)...)
 	cmd.Dir = filepath.Dir(script)
@@ -233,27 +175,4 @@ func syncScriptDir() (string, error) {
 		}
 	}
 	return "", fmt.Errorf("找不到同步脚本目录，请配置 SYNC_SCRIPT_DIR")
-}
-
-func syncCommands() ([]syncCommand, error) {
-	root, err := syncScriptDir()
-	if err != nil {
-		return nil, err
-	}
-	salesOrdersScript := filepath.Join(root, "scripts", "sync", "sync_sales_orders.py")
-	repairRecordsScript := filepath.Join(root, "scripts", "sync", "增量同步和清洗维修故障记录.py")
-	commands := []syncCommand{
-		{name: "sales_orders", path: salesOrdersScript},
-		{name: "station_records", path: filepath.Join(root, "scripts", "sync", "station_records.py"), args: []string{"--mode", "incremental", "--apply"}},
-		{name: "repair_records", path: repairRecordsScript, args: []string{"--apply", "--no-progress", "--log-level", "ERROR"}},
-		{name: "order_bom_postings", path: filepath.Join(root, "scripts", "sync", "order_bom_postings.py"), args: []string{"--mode", "incremental", "--apply"}},
-		{name: "serial_bindings", path: filepath.Join(root, "scripts", "sync", "serial_bindings.py"), args: []string{"--mode", "incremental", "--apply"}},
-	}
-	for _, command := range commands {
-		path := command.path
-		if _, statErr := os.Stat(path); statErr != nil {
-			return nil, fmt.Errorf("找不到同步脚本 %s，请检查 SYNC_SCRIPT_DIR", path)
-		}
-	}
-	return commands, nil
 }

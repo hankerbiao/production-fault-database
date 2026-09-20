@@ -20,6 +20,8 @@
 .venv/bin/python scripts/sync/syncctl.py tasks
 ```
 
+销售订单全量默认只在 `start-date` 不晚于 `2026-01-01` 且结束日期覆盖当天时清理范围外旧单。从更晚日期重建只会 upsert，不会删除历史月份。强制整表替换需直接调用脚本并同时传入 `--replace-collection --confirm-delete`。
+
 首次验证建议先对每个脚本使用 `--dry-run`。销售订单脚本的 `--dry-run` 只读；其余三个 HANA 视图脚本使用 `--mode incremental --dry-run`。维修数据仅重跑回填时使用 `--apply --skip-hana-sync`。
 
 ## Crontab

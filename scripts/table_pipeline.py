@@ -5,7 +5,6 @@ import argparse
 import json
 from datetime import date, datetime, timezone
 from typing import Any
-from uuid import uuid4
 
 from pymongo import MongoClient
 

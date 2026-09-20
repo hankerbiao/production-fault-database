@@ -219,7 +219,7 @@ SAP SN 存在任一失败批次时，`--apply` 会在写入前停止。只有明
 | 业务唯一键 | `source + AUFNR`；MongoDB `_id` 为 `{source}:{AUFNR}`，SG/KK 同号不会互相覆盖 |
 | 增量水位 | `sync_checkpoints` 中的 `sales_orders:SG`、`sales_orders:KK`，按接口查询日期推进 |
 | 增量窗口 | 水位日期向前回看 `SYNC_LOOKBACK_DAYS` 天（默认 7 天）到当天，覆盖迟到或修改记录 |
-| 全量窗口 | `--full --start-date YYYY-MM-DD`；按 `FULL_WINDOW_DAYS`（默认 7 天）分段请求，避免大响应占满内存；所有来源成功后清理 SG/KK 范围外旧订单，失败时保留旧数据 |
+| 全量窗口 | `--full --start-date YYYY-MM-DD`；按 `FULL_WINDOW_DAYS`（默认 7 天）分段请求，SAP `No Data` 视为空窗。仅当起始日期不晚于 `2026-01-01` 且结束日期覆盖当天时，成功后才清理本次未覆盖的 SG/KK 旧订单；更晚的起始日期只补数不删历史。本次写入为 0 或待删超过写入量 2 倍时拒绝清理，除非 `--replace-collection --confirm-delete`。失败时保留旧数据 |
 
 订单文档字段：
 
@@ -382,8 +382,7 @@ python scripts/sources/scs_doa_sync.py --dry-run
 详情按 `SCS_WRITE_BATCH_SIZE`（默认 25）分批写入，抓取过程中看板会逐步显示已完成记录。
 同步日志会输出列表分页进度、断点位置、处理百分比、已写入数量和详情错误数量；可通过
 `SCS_PROGRESS_INTERVAL` 设置非批次进度日志的输出间隔（默认跟随 `SCS_WRITE_BATCH_SIZE`）。
-全量任务的检查点还会保存 `status`、`run_id`、总行数和最后成功写入的行索引；进程中断后，使用相同
-`--full --start-date` 命令会从最后一个成功批次继续，不会清理已有记录，直至所有行完成。
+增量从上次 `declare_time` 水位回看 `SCS_LOOKBACK_DAYS`（默认 2 天）；水位支持 ISO 时间。水位缺失或无法解析时按当天回看，不再拉全年。列表字段未变化且已有完整详情的记录会跳过详情页。全量和增量检查点都会保存 `status`、`run_id`、查询窗口、总行数和行索引；进程中断后，同一窗口会从最后一个成功批次继续。
 
 ### 5. SCS 换上换下数据源
 
@@ -392,7 +391,7 @@ python scripts/sources/scs_doa_sync.py --dry-run
 记录按服务单号、设备 SN、操作类型、备件 PN/SN、操作时间和操作人组成的哈希幂等写入；每条记录的
 `is_5000_company` 通过服务单号匹配 `scs_doa_records` 中已判定为 5000 公司的 DOA 记录。
 
-换上换下同步固定限制在 2026 年（`2026-01-01` 至 `2026-12-31`），不会抓取其他年份。
+换上换下同步固定限制在 2026 年（`2026-01-01` 至 `2026-12-31`），不会抓取其他年份。增量从上次操作时间水位回看 `SCS_LOOKBACK_DAYS`（默认 2 天）；水位缺失时同样按当天回看，避免再次爬取全年。
 每次登录或列表 HTTP 请求会随机等待 5-10 秒，可通过 `SCS_CHANGE_REQUEST_DELAY_MIN/MAX` 调整。
 日志会持续展示当前页、已抓取数量、已入库数量和 checkpoint 位置。
 

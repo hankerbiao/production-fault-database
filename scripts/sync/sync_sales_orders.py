@@ -4,15 +4,15 @@
 The default mode is incremental.  Each SAP source has its own date watermark;
 the watermark is advanced only after that source has fetched and written
 successfully. Use ``--full --start-date YYYY-MM-DD`` for the initial load.
+Collection-wide cleanup only runs when the full window covers 2026-01-01 through
+today, or when ``--replace-collection --confirm-delete`` is passed.
 """
 from __future__ import annotations
 
 import argparse
-import fcntl
 import hashlib
 import json
-import os
-import signal
+import sys
 from collections import OrderedDict
 from contextlib import contextmanager
 from datetime import date, datetime, timedelta, timezone
@@ -33,8 +33,9 @@ except ImportError as exc:  # pragma: no cover - exercised by deployment, not un
     raise SystemExit(2) from exc
 
 from scripts.sources.hana.hana_view_sync import (
+    env,
+    load_dotenv,
     mongo_client_options,
-    mongo_lease_lock,
     mongo_write_concern_summary,
     stream_nonempty_field_values,
 )
@@ -60,26 +61,8 @@ REPAIR_KEY_FIELDS = ("MANDT", "PCODE", "ZMCOD1", "ZDATE_WX", "ZTIME")
 # The repair view is only in scope from this date onward. This lower bound is
 # enforced for both full and incremental runs, even when callers omit a start.
 REPAIR_START_DATE = date(2026, 1, 1)
-
-
-def load_dotenv(path: Path) -> None:
-    """Load simple KEY=VALUE pairs without requiring an extra dotenv package."""
-    if not path.is_file():
-        return
-    for line in path.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, value = line.split("=", 1)
-        key = key.strip()
-        value = value.strip()
-        if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
-            value = value[1:-1]
-        os.environ.setdefault(key, value)
-
-
-def env(name: str, default: str = "") -> str:
-    return os.getenv(name, default).strip()
+SALES_SCOPE_START = date(2026, 1, 1)
+CLEANUP_DELETE_RATIO = 2
 
 
 def parse_date(value: str) -> date:
@@ -117,11 +100,27 @@ def request_headers() -> dict[str, str]:
     return {"Content-Type": "application/json", "method": METHOD, "sign": signature, "time": today}
 
 
+def current_date() -> date:
+    return date.today()
+
+
+def is_empty_sap_result(body: Mapping[str, Any]) -> bool:
+    message = str(body.get("MSGTX") or "").strip().lower()
+    return "no data" in message
+
+
+def covers_sales_full_scope(start: date, end: date, *, today: date | None = None) -> bool:
+    today = today or current_date()
+    return start <= SALES_SCOPE_START and end >= today
+
+
 def validate_records(body: Any, source: str) -> list[dict[str, Any]]:
     if not isinstance(body, dict):
         raise RuntimeError(f"{source}: 响应不是 JSON 对象")
     msgty = str(body.get("MSGTY") or "").upper()
     if msgty in ERROR_MSGTYS:
+        if is_empty_sap_result(body):
+            return []
         raise RuntimeError(f"{source}: SAP error ({msgty}): {body.get('MSGTX') or 'Unknown SAP error'}")
     records = body.get("DATA")
     if not isinstance(records, list) or not all(isinstance(row, dict) for row in records):
@@ -333,6 +332,8 @@ def build_parser() -> argparse.ArgumentParser:
     group.add_argument("--prodh-list", nargs="+", help="覆盖产品层次过滤，例如 --prodh-list 00100 00200")
     group.add_argument("--all-prodh", action="store_true", help="取消产品层次过滤")
     parser.add_argument("--dry-run", action="store_true", help="只请求和统计，不写入订单及水位线")
+    parser.add_argument("--replace-collection", action="store_true", help="全量成功后强制删除本次未覆盖的 SG/KK 订单；必须同时提供 --confirm-delete")
+    parser.add_argument("--confirm-delete", action="store_true", help="确认删除范围外旧订单；覆盖安全闸或配合 --replace-collection")
     return parser
 
 
@@ -360,6 +361,46 @@ def date_windows(start: date, end: date, days: int) -> list[tuple[date, date]]:
         windows.append((cursor, window_end))
         cursor = window_end + timedelta(days=1)
     return windows
+
+
+def out_of_scope_query(run_id: str) -> dict[str, Any]:
+    return {"source": {"$in": list(SOURCES)}, "_scope_run_id": {"$ne": run_id}}
+
+
+def cleanup_sales_orders(
+    db: Any,
+    collection: str,
+    *,
+    run_id: str,
+    start: date,
+    end: date,
+    replace_collection: bool,
+    confirm_delete: bool,
+) -> dict[str, Any]:
+    query = out_of_scope_query(run_id)
+    would_delete = db[collection].count_documents(query)
+    written = db[collection].count_documents({"_scope_run_id": run_id})
+    result: dict[str, Any] = {
+        "deleted_out_of_scope": 0,
+        "would_delete_out_of_scope": would_delete,
+        "written_in_scope": written,
+        "cleanup": "skipped_partial_range",
+    }
+    replace = replace_collection or covers_sales_full_scope(start, end)
+    if not replace:
+        return result
+    dangerous = would_delete > 0 and (written == 0 or would_delete > max(written, 1) * CLEANUP_DELETE_RATIO)
+    if dangerous and not confirm_delete:
+        result["cleanup"] = "aborted"
+        result["error"] = (
+            f"将删除 {would_delete} 条范围外订单，但本次仅写入 {written} 条；已拒绝清理。"
+            f"请使用 --full --start-date {SALES_SCOPE_START.isoformat()} 且结束日期覆盖今天，"
+            "或显式传入 --replace-collection --confirm-delete"
+        )
+        return result
+    result["deleted_out_of_scope"] = db[collection].delete_many(query).deleted_count
+    result["cleanup"] = "replaced"
+    return result
 
 
 def read_watermark(db: Any, collection: str, source: str) -> date | None:
@@ -396,21 +437,6 @@ def upsert(db: Any, collection: str, documents: list[dict[str, Any]], synced_at:
     return len(ids) - len(existing), len(existing)
 
 
-@contextmanager
-def process_lock(path: str) -> Iterator[None]:
-    lock = Path(path).expanduser()
-    lock.parent.mkdir(parents=True, exist_ok=True)
-    with lock.open("a+") as handle:
-        try:
-            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError as exc:
-            raise RuntimeError(f"已有同步任务运行中: {lock}") from exc
-        try:
-            yield
-        finally:
-            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
-
-
 def sync_sales(args: argparse.Namespace) -> dict[str, Any]:
     if args.lookback_days < 0:
         raise ValueError("--lookback-days 不能为负数")
@@ -422,6 +448,12 @@ def sync_sales(args: argparse.Namespace) -> dict[str, Any]:
         raise ValueError("--full 必须同时提供 --start-date YYYY-MM-DD")
     if not args.full and args.start_date:
         raise ValueError("增量模式不接受 --start-date；全量请使用 --full --start-date")
+    replace_collection = bool(getattr(args, "replace_collection", False))
+    confirm_delete = bool(getattr(args, "confirm_delete", False))
+    if (replace_collection or confirm_delete) and not args.full:
+        raise ValueError("--replace-collection / --confirm-delete 仅用于全量同步")
+    if replace_collection and not confirm_delete:
+        raise ValueError("--replace-collection 必须同时提供 --confirm-delete")
 
     database_name = env("MONGODB_DATABASE")
     if not database_name:
@@ -482,8 +514,14 @@ def sync_sales(args: argparse.Namespace) -> dict[str, Any]:
                     summary["success"] = False
                 summary["sources"][source] = item
         if args.full and not args.dry_run and summary["success"]:
-            result = db[target_collection].delete_many({"source": {"$in": list(SOURCES)}, "_scope_run_id": {"$ne": run_id}})
-            summary["deleted_out_of_scope"] = result.deleted_count
+            cleanup = cleanup_sales_orders(
+                db, target_collection,
+                run_id=run_id, start=args.start_date, end=args.end_date,
+                replace_collection=replace_collection, confirm_delete=confirm_delete,
+            )
+            summary.update(cleanup)
+            if cleanup.get("error"):
+                summary["success"] = False
         if not args.dry_run:
             db[env("SYNC_RUN_COLLECTION", "sync_runs")].insert_one({**summary, "created_at": synced_at})
         return summary
@@ -499,8 +537,9 @@ def main() -> int:
     load_dotenv(PROJECT_ROOT / ".env")
     args = build_parser().parse_args()
     try:
-        print(json.dumps(run(args), ensure_ascii=False, default=str, sort_keys=True))
-        return 0
+        summary = run(args)
+        print(json.dumps(summary, ensure_ascii=False, default=str, sort_keys=True))
+        return 0 if summary.get("success") is not False else 1
     except Exception as exc:
         print(json.dumps({"success": False, "error": str(exc)}, ensure_ascii=False), file=sys.stdout)
         return 1

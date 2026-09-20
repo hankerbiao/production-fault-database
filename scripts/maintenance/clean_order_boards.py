@@ -7,7 +7,6 @@
 from __future__ import annotations
 
 import argparse
-import json
 import sys
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
@@ -22,13 +21,13 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from scripts.sources.hana.hana_view_sync import (  # noqa: E402
+    env,
     mongo_client_options,
     mongo_lease_lock,
     mongo_uri,
     mongo_write_concern_summary,
     process_lock,
 )
-from scripts.sync.sync_sales_orders import env, load_dotenv  # noqa: E402
 
 
 CONFIRMATION = "DELETE-ORDER-BOARD-INVALID"

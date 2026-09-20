@@ -22,7 +22,7 @@ if str(PROJECT_ROOT) not in __import__("sys").path:
     __import__("sys").path.insert(0, str(PROJECT_ROOT))
 
 try:
-    from pymongo import ASCENDING, MongoClient, ReturnDocument, UpdateOne
+    from pymongo import MongoClient, ReturnDocument, UpdateOne
     from pymongo.errors import DuplicateKeyError
 except ImportError as exc:  # pragma: no cover - deployment error
     raise SystemExit(f"missing dependency: {exc.name}; install pymongo") from exc

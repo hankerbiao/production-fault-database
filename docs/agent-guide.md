@@ -53,13 +53,14 @@ GET /api/sync/status
 
 ```text
 GET /api/faults?productionOrder=PO001&dateFrom=2026-01-01&dateTo=2026-01-31&page=1&pageSize=100
+GET /api/faults?company5000=yes&page=1&pageSize=100
 GET /api/faults/by-orders?productionOrders=PO001,PO002&page=1&pageSize=100
 GET /api/faults/by-sns?sns=SN001,SN002&page=1&pageSize=100
 GET /api/orders?productionOrder=PO001&source=SG&page=1&pageSize=20
 GET /api/orders/detail?id=SG:PO001
 ```
 
-维修故障列表允许叠加 `dateFrom`、`dateTo`、`station` 和 `timeField`。按 SN 的批量 POST 接口单次不应超过 10,000 个 SN。故障列表逐条返回，不按序列号去重；需要去重时应在结果层明确使用的键和规则。
+维修故障列表允许叠加 `dateFrom`、`dateTo`、`station`、`timeField` 和 `company5000`。`company5000=yes` 表示维修记录的生产订单号存在于销售订单看板，`company5000=no` 表示不存在。按 SN 的批量 POST 接口单次不应超过 10,000 个 SN。故障列表逐条返回，不按序列号去重；需要去重时应在结果层明确使用的键和规则。
 
 ### 工位、BOM 与序列号绑定
 
@@ -104,7 +105,7 @@ SCS DOA 支持 `doaCode`、`doaType`、`status`、`customer`、`serviceOrder`、
 | 模式 | 适用场景 | 必填字段 | 风险与限制 |
 | --- | --- | --- | --- |
 | `incremental` | 日常刷新、补抓近期修改 | `mode`，可选 `taskIds` | 从检查点/水位线回看一段时间；适合重复执行 |
-| `full` | 首次建库、明确范围的历史重建、修复错误范围 | `mode`、`startDate`，建议同时给出 `taskIds` 和 `endDate` | 成功后部分任务会清理所选范围外的旧数据，必须二次人工确认 |
+| `full` | 首次建库、明确范围的历史重建、修复错误范围 | `mode`、`startDate`，建议同时给出 `taskIds` 和 `endDate` | 成功后部分任务会清理所选范围外的旧数据，必须二次人工确认。销售订单仅在 `startDate` 不晚于 2026-01-01 且 `endDate` 为空或当天时清理；更短窗口只补数不删历史 |
 
 全量模式的 `startDate` 必须是 `YYYY-MM-DD`；`endDate` 可选，未传时由编排器使用当天。SCS 换上换下的当前同步范围固定约束在 2026 年，服务端请求为 `2026-01-01` 到 `2026-12-31`，并以每页少于 500 条或空页作为列表结束条件。
 

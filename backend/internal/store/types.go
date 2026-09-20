@@ -35,7 +35,7 @@ type bomStreamCacheEntry struct {
 type Filters struct {
 	Keyword, HostBarcode, DefectResponsibility, NGStation, SalesOrder, ProductionOrder string
 	SNS, ProductionOrders, SalesOrders, DateFrom, DateTo, Station, ProductModel        string
-	TimeField                                                                          string
+	TimeField, Company5000                                                             string
 }
 type OrderFilters struct {
 	Keyword, Source, GSTRSFrom, GSTRSTo                                                                   string

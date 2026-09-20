@@ -68,10 +68,6 @@ class Task:
         else:  # SCS commands share the same flag convention.
             if mode == "full":
                 args.extend(["--full", "--start-date", start_date or ""])
-            if end_date:
-                # SCS endpoints currently derive their end bound server-side.
-                # Keep this option out of their command contracts until needed.
-                pass
         return args
 
 

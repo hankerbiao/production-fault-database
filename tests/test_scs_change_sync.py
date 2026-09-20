@@ -1,4 +1,6 @@
 import argparse
+from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 
 from scripts.sources.scs_change_sync import (
     bounded_change_range,
@@ -9,6 +11,7 @@ from scripts.sources.scs_change_sync import (
     request,
     sync,
 )
+from scripts.sources.scs_doa_sync import query_window
 
 
 def test_parse_changes_maps_all_result_fields():
@@ -44,6 +47,15 @@ def test_change_queries_are_limited_to_2026():
     assert bounded_change_range() == ("2026-01-01", "2026-12-31")
     assert bounded_change_range("2025-12-01", "2027-01-01") == ("2026-01-01", "2026-12-31")
     assert bounded_change_range("2026-03-01", "2026-04-01") == ("2026-03-01", "2026-04-01")
+
+
+def test_incremental_change_window_looks_back_two_days():
+    args = SimpleNamespace(full=False, start_date="2026-01-01", lookback_days=2)
+    start, end = query_window(args, {"watermark": "2026-09-19T10:55:27+00:00"})
+    assert bounded_change_range(start, end) == ("2026-09-17", "2026-12-31")
+    fallback = (datetime.now(timezone.utc) - timedelta(days=2)).date().isoformat()
+    start, end = query_window(args, {"watermark": "unreadable"})
+    assert bounded_change_range(start, end) == (fallback, "2026-12-31")
 
 
 def test_change_request_uses_five_to_ten_second_random_delay(monkeypatch):

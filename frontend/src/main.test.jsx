@@ -104,6 +104,16 @@ describe('operations workbench', () => {
     await waitFor(() => expect(fetchMock.mock.calls.some(([url]) => String(url).includes('timeField=repair'))).toBe(true));
   });
 
+  it('filters repair records by 5000 company order membership', async () => {
+    const fetchMock = mockFetch();
+    vi.stubGlobal('fetch', fetchMock);
+    render(<App />);
+    await screen.findByRole('heading', { name: '维修故障记录' });
+    fireEvent.click(screen.getByRole('button', { name: '是', exact: true }));
+    fireEvent.click(screen.getByRole('button', { name: /筛选/ }));
+    await waitFor(() => expect(fetchMock.mock.calls.some(([url]) => String(url).includes('company5000=yes'))).toBe(true));
+  });
+
   it('offers searchable model options from the order model list', async () => {
     vi.stubGlobal('fetch', mockFetch());
     render(<App />);

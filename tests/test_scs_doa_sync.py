@@ -1,12 +1,20 @@
+from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
+
 from scripts.sources.scs_doa_sync import (
     backfill_5000_company,
+    can_resume,
     classify_doa_document,
     extract_equipment,
+    parse_datetime,
     parse_labels,
     parse_list,
     parse_pml_context,
+    query_window,
     request,
+    should_refresh_details,
     source_key,
+    build_parser,
 )
 
 
@@ -80,3 +88,46 @@ def test_backfill_5000_company_re_evaluates_existing_documents():
     database = Database()
     assert backfill_5000_company(database, "scs_doa_records", {"XHG1"}) == 1
     assert database.collection.operations
+
+
+def test_parse_datetime_accepts_iso_watermark():
+    parsed = parse_datetime("2026-09-17T18:44:00+00:00")
+    assert parsed == datetime(2026, 9, 17, 18, 44, tzinfo=timezone.utc)
+    assert parse_datetime("2026-09-17 18:44") == datetime(2026, 9, 17, 18, 44, tzinfo=timezone.utc)
+    assert parse_datetime("") is None
+
+
+def test_incremental_query_window_uses_watermark_lookback():
+    args = SimpleNamespace(full=False, start_date="2026-01-01", lookback_days=2)
+    start, end = query_window(args, {"watermark": "2026-09-17T18:44:00+00:00"})
+    assert start == "2026-09-15" and end == ""
+    fallback = (datetime.now(timezone.utc) - timedelta(days=2)).date().isoformat()
+    assert query_window(args, {"watermark": "unreadable"}) == (fallback, "")
+    assert query_window(args, None) == (fallback, "")
+    assert query_window(SimpleNamespace(full=True, start_date="2026-01-01", lookback_days=2), None) == ("2026-01-01", "")
+
+
+def test_parser_defaults_lookback_to_two_days(monkeypatch):
+    monkeypatch.delenv("SCS_LOOKBACK_DAYS", raising=False)
+    args = build_parser().parse_args([])
+    assert args.lookback_days == 2
+    monkeypatch.setenv("SCS_LOOKBACK_DAYS", "5")
+    args = build_parser().parse_args([])
+    assert args.lookback_days == 5
+
+
+def test_incremental_can_resume_same_query_window():
+    args = SimpleNamespace(full=False, start_date=None)
+    checkpoint = {"status": "running", "mode": "incremental", "query_start": "2026-09-10", "run_id": "run-1"}
+    assert can_resume(checkpoint, args, "2026-09-10") is True
+    assert can_resume(checkpoint, args, "2026-09-11") is False
+    assert can_resume({"status": "completed", "mode": "incremental", "query_start": "2026-09-10"}, args, "2026-09-10") is False
+
+
+def test_should_refresh_details_skips_unchanged_complete_rows():
+    row = {"doa_code": "KX-1", "status": "已受理", "declare_time": "2026-09-17 18:44"}
+    existing = {"doa_code": "KX-1", "status": "已受理", "declare_time": "2026-09-17 18:44", "details": {"fields": {"销售订单": "X"}}}
+    assert should_refresh_details(existing, row) is False
+    assert should_refresh_details(None, row) is True
+    assert should_refresh_details({**existing, "status": "已完成"}, row) is True
+    assert should_refresh_details({**existing, "details": {"error": "timeout"}}, row) is True

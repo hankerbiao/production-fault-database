@@ -87,6 +87,24 @@ func TestBatchAndLeadingZeroFilters(t *testing.T) {
 	}
 }
 
+func TestRepairCompany5000StagesJoinNormalizedProductionOrders(t *testing.T) {
+	lookup := repairCompany5000Lookup("sales_orders_sap")
+	value := lookup.Map()["$lookup"].(bson.M)
+	if value["from"] != "sales_orders_sap" || value["localField"] != "_company5000_order_keys" || value["foreignField"] != "aufnr" || value["as"] != "_company5000_orders" {
+		t.Fatalf("lookup=%v", value)
+	}
+	keys := repairCompany5000Keys().Map()["$set"].(bson.M)["_company5000_order_keys"].(bson.A)
+	if len(keys) != 2 {
+		t.Fatalf("lookup keys=%v", keys)
+	}
+	if got := repairCompany5000Match("yes").Map()["$match"].(bson.M)["_company5000_orders.0"].(bson.M)["$exists"]; got != true {
+		t.Fatalf("yes match=%v", got)
+	}
+	if got := repairCompany5000Match("no").Map()["$match"].(bson.M)["_company5000_orders.0"].(bson.M)["$exists"]; got != false {
+		t.Fatalf("no match=%v", got)
+	}
+}
+
 func TestViewFilterIncludesEndDateForStationDatetimes(t *testing.T) {
 	filter := viewFilter("Z_V_ZMES_T_001", ViewFilters{DateTo: "2026-03-31"}, nil, "ACTUAL_START_TIME")
 	conditions := filter["$and"].(primitive.A)

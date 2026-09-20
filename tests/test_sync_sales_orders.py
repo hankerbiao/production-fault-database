@@ -5,6 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from scripts.sources.hana.hana_view_sync import process_lock
 from scripts.sync import sync_sales_orders as sync
 
 
@@ -65,9 +66,18 @@ def test_bson_value_and_keys():
 
 def test_validate_records():
     assert sync.validate_records({"MSGTY": "S", "DATA": [{"AUFNR": "1"}]}, "SG") == [{"AUFNR": "1"}]
+    assert sync.validate_records({"MSGTY": "E", "MSGTX": "No Data"}, "SG") == []
+    assert sync.validate_records({"MSGTY": "E", "MSGTX": "no data found"}, "KK") == []
     for body in ({"MSGTY": "E", "MSGTX": "bad"}, [], {"DATA": ["not a row"]}, {}):
         with pytest.raises(RuntimeError):
             sync.validate_records(body, "SG")
+
+
+def test_covers_sales_full_scope():
+    today = date(2026, 9, 20)
+    assert sync.covers_sales_full_scope(date(2026, 1, 1), today, today=today)
+    assert not sync.covers_sales_full_scope(date(2026, 9, 1), today, today=today)
+    assert not sync.covers_sales_full_scope(date(2026, 1, 1), date(2026, 1, 31), today=today)
 
 
 def test_watermark_and_aggregate():
@@ -150,6 +160,21 @@ class FakeCollection:
             if value is not None:
                 values.append(value)
         return values
+
+    def _match(self, doc, query):
+        for key, expected in query.items():
+            actual = doc.get(key)
+            if isinstance(expected, dict):
+                if "$in" in expected and actual not in expected["$in"]:
+                    return False
+                if "$ne" in expected and actual == expected["$ne"]:
+                    return False
+            elif actual != expected:
+                return False
+        return True
+
+    def count_documents(self, query):
+        return sum(1 for doc in self.docs if self._match(doc, query))
 
     def bulk_write(self, operations, ordered=False):
         for operation in operations:
@@ -288,8 +313,95 @@ def test_sync_sales_full_cleans_old_source_documents_after_success(monkeypatch):
         client.db["orders"].docs.append({"_id": "SG:stale", "source": "SG", "_scope_run_id": "old"})
         return client
     monkeypatch.setattr(sync, "MongoClient", seeded_client)
+    monkeypatch.setattr(sync, "current_date", lambda: date(2026, 1, 1))
     result = sync.sync_sales(args)
     assert result["success"] is True and result["deleted_out_of_scope"] == 1
+    assert result["cleanup"] == "replaced"
+    assert {doc["_id"] for doc in FakeMongoClient.instances[-1].db["orders"].docs} == {"SG:new-sg", "KK:new-kk"}
+
+
+def _seeded_sales_client(stale=None):
+    original_client = sync.MongoClient
+    def seeded_client(*args, **kwargs):
+        client = original_client(*args, **kwargs)
+        if stale:
+            client.db["orders"].docs.extend(stale)
+        return client
+    return seeded_client
+
+
+def test_sync_sales_full_partial_range_does_not_delete(monkeypatch):
+    FakeMongoClient.instances.clear()
+    monkeypatch.setenv("MONGODB_DATABASE", "test")
+    monkeypatch.setenv("TARGET_COLLECTION", "orders")
+    monkeypatch.setenv("MONGODB_HOSTS", "localhost:27017")
+    monkeypatch.setenv("FULL_WINDOW_DAYS", "31")
+    monkeypatch.setattr(sync, "MongoClient", FakeMongoClient)
+    monkeypatch.setattr(sync, "SOURCES", {"SG": "http://sg", "KK": "http://kk"})
+    http = FakeHTTPClient({
+        "http://sg": [FakeResponse({"DATA": [{"AUFNR": "new-sg"}]})],
+        "http://kk": [FakeResponse({"DATA": [{"AUFNR": "new-kk"}]})],
+    })
+    monkeypatch.setattr(sync.httpx, "Client", lambda **_kwargs: http)
+    monkeypatch.setattr(sync, "MongoClient", _seeded_sales_client([{"_id": "SG:stale", "source": "SG", "_scope_run_id": "old"}]))
+    monkeypatch.setattr(sync, "current_date", lambda: date(2026, 9, 16))
+    args = SimpleNamespace(full=True, start_date=date(2026, 9, 1), end_date=date(2026, 9, 16), lookback_days=0, dry_run=False, all_prodh=False, prodh_list=None)
+    result = sync.sync_sales(args)
+    assert result["success"] is True
+    assert result["cleanup"] == "skipped_partial_range"
+    assert result["deleted_out_of_scope"] == 0
+    assert result["would_delete_out_of_scope"] == 1
+    assert {doc["_id"] for doc in FakeMongoClient.instances[-1].db["orders"].docs} == {"SG:stale", "SG:new-sg", "KK:new-kk"}
+
+
+def test_sync_sales_full_empty_fetch_aborts_cleanup(monkeypatch):
+    FakeMongoClient.instances.clear()
+    monkeypatch.setenv("MONGODB_DATABASE", "test")
+    monkeypatch.setenv("TARGET_COLLECTION", "orders")
+    monkeypatch.setenv("MONGODB_HOSTS", "localhost:27017")
+    monkeypatch.setattr(sync, "MongoClient", FakeMongoClient)
+    monkeypatch.setattr(sync, "SOURCES", {"SG": "http://sg", "KK": "http://kk"})
+    http = FakeHTTPClient({
+        "http://sg": [FakeResponse({"MSGTY": "E", "MSGTX": "No Data"})],
+        "http://kk": [FakeResponse({"DATA": []})],
+    })
+    monkeypatch.setattr(sync.httpx, "Client", lambda **_kwargs: http)
+    monkeypatch.setattr(sync, "MongoClient", _seeded_sales_client([{"_id": "SG:stale", "source": "SG", "_scope_run_id": "old"}]))
+    monkeypatch.setattr(sync, "current_date", lambda: date(2026, 1, 1))
+    args = SimpleNamespace(full=True, start_date=date(2026, 1, 1), end_date=date(2026, 1, 1), lookback_days=0, dry_run=False, all_prodh=False, prodh_list=None)
+    result = sync.sync_sales(args)
+    assert result["success"] is False
+    assert result["cleanup"] == "aborted"
+    assert result["deleted_out_of_scope"] == 0
+    assert FakeMongoClient.instances[-1].db["orders"].docs[0]["_id"] == "SG:stale"
+
+
+def test_sync_sales_replace_collection_requires_confirm(monkeypatch):
+    monkeypatch.setenv("MONGODB_DATABASE", "test")
+    args = SimpleNamespace(full=True, start_date=date(2026, 9, 1), end_date=date(2026, 9, 16), lookback_days=0, dry_run=True, all_prodh=False, prodh_list=None, replace_collection=True, confirm_delete=False)
+    with pytest.raises(ValueError, match="--confirm-delete"):
+        sync.sync_sales(args)
+
+
+def test_sync_sales_replace_collection_deletes_after_confirm(monkeypatch):
+    FakeMongoClient.instances.clear()
+    monkeypatch.setenv("MONGODB_DATABASE", "test")
+    monkeypatch.setenv("TARGET_COLLECTION", "orders")
+    monkeypatch.setenv("MONGODB_HOSTS", "localhost:27017")
+    monkeypatch.setenv("FULL_WINDOW_DAYS", "31")
+    monkeypatch.setattr(sync, "MongoClient", FakeMongoClient)
+    monkeypatch.setattr(sync, "SOURCES", {"SG": "http://sg", "KK": "http://kk"})
+    http = FakeHTTPClient({
+        "http://sg": [FakeResponse({"DATA": [{"AUFNR": "new-sg"}]})],
+        "http://kk": [FakeResponse({"DATA": [{"AUFNR": "new-kk"}]})],
+    })
+    monkeypatch.setattr(sync.httpx, "Client", lambda **_kwargs: http)
+    monkeypatch.setattr(sync, "MongoClient", _seeded_sales_client([{"_id": "SG:stale", "source": "SG", "_scope_run_id": "old"}]))
+    monkeypatch.setattr(sync, "current_date", lambda: date(2026, 9, 16))
+    args = SimpleNamespace(full=True, start_date=date(2026, 9, 1), end_date=date(2026, 9, 16), lookback_days=0, dry_run=False, all_prodh=False, prodh_list=None, replace_collection=True, confirm_delete=True)
+    result = sync.sync_sales(args)
+    assert result["success"] is True and result["cleanup"] == "replaced"
+    assert result["deleted_out_of_scope"] == 1
     assert {doc["_id"] for doc in FakeMongoClient.instances[-1].db["orders"].docs} == {"SG:new-sg", "KK:new-kk"}
 
 
@@ -343,6 +455,7 @@ def test_sync_repair_filters_sales_orders_retains_empty_and_advances_watermark(m
         {"full": True, "start_date": None},
         {"full": False, "start_date": date(2026, 1, 1)},
         {"full": True, "start_date": date(2026, 1, 3), "end_date": date(2026, 1, 1)},
+        {"replace_collection": True, "confirm_delete": True},
     ],
 )
 def test_sync_sales_rejects_invalid_arguments(monkeypatch, overrides):
@@ -356,9 +469,9 @@ def test_sync_sales_rejects_invalid_arguments(monkeypatch, overrides):
 
 def test_process_lock_blocks_and_releases(tmp_path):
     lock_path = tmp_path / "sync.lock"
-    with sync.process_lock(str(lock_path)):
+    with process_lock(str(lock_path)):
         with pytest.raises(RuntimeError):
-            with sync.process_lock(str(lock_path)):
+            with process_lock(str(lock_path)):
                 pass
-    with sync.process_lock(str(lock_path)):
+    with process_lock(str(lock_path)):
         pass

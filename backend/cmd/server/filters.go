@@ -28,6 +28,18 @@ func repairFilters(q url.Values) store.Filters {
 		Keyword: query(q, "keyword"), HostBarcode: query(q, "hostBarcode"), DefectResponsibility: query(q, "defectResponsibility"), NGStation: query(q, "ngStation"),
 		SalesOrder: query(q, "salesOrder"), ProductionOrder: query(q, "productionOrder"), SNS: query(q, "sns"), ProductionOrders: query(q, "productionOrders"), SalesOrders: query(q, "salesOrders"),
 		DateFrom: query(q, "dateFrom"), DateTo: query(q, "dateTo"), Station: query(q, "station"), ProductModel: query(q, "productModel"), TimeField: query(q, "timeField"),
+		Company5000: company5000Filter(query(q, "company5000")),
+	}
+}
+
+func company5000Filter(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "1", "true", "yes", "y", "是":
+		return "yes"
+	case "0", "false", "no", "n", "否":
+		return "no"
+	default:
+		return ""
 	}
 }
 

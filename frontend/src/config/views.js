@@ -177,6 +177,9 @@ export const viewConfigs = {
     showSalesOrder: false,
     showProductModel: false,
     bilingual: false,
+    stats: [
+      { key: "is5000Count", label: "5000公司记录", tone: "orange" },
+    ],
     advancedFields: [
       { key: "serviceOrder", placeholder: "服务单号" },
       { key: "customer", placeholder: "客户名称" },
@@ -202,6 +205,3 @@ export const viewConfigs = {
     },
   },
 };
-export const viewById = Object.fromEntries(
-  Object.values(viewConfigs).map((config) => [config.id, config]),
-);

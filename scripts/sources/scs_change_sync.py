@@ -14,7 +14,7 @@ import logging
 import random
 import sys
 import time
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -32,6 +32,7 @@ from scripts.sources.scs_doa_sync import (
     ListParser,
     env,
     parse_datetime,
+    query_window,
 )
 
 ROOT = PROJECT_ROOT
@@ -236,12 +237,8 @@ def sync(args: argparse.Namespace) -> dict[str, Any]:
             start, end = "", ""
             if can_resume and checkpoint.get("query_start") is not None:
                 start = str(checkpoint.get("query_start") or "")
-            elif args.full:
-                start = args.start_date
-            elif checkpoint and checkpoint.get("watermark"):
-                watermark = parse_datetime(checkpoint["watermark"])
-                if watermark:
-                    start = (watermark - timedelta(days=args.lookback_days)).strftime("%Y-%m-%d")
+            else:
+                start, end = query_window(args, checkpoint)
             start, end = bounded_change_range(start, end)
 
             resume_page = 1
@@ -368,7 +365,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="同步 SCS 换上换下数据查询记录")
     parser.add_argument("--full", action="store_true", help="首次全量同步")
     parser.add_argument("--start-date", default=env("SCS_FULL_START_DATE", "2026-01-01"), help="全量开始日期 YYYY-MM-DD")
-    parser.add_argument("--lookback-days", type=int, default=int(env("SCS_LOOKBACK_DAYS", "7")))
+    parser.add_argument("--lookback-days", type=int, default=int(env("SCS_LOOKBACK_DAYS", "2")))
     parser.add_argument("--page-size", type=int, default=int(env("SCS_PAGE_SIZE", "500")))
     parser.add_argument("--dry-run", action="store_true", help="只登录、读取和统计，不写 MongoDB")
     return parser

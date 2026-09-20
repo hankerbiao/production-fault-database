@@ -31,4 +31,3 @@ export async function request(path, options = {}) {
 export function get(path, params) { const qs = queryString(params); return request(qs ? `${path}?${qs}` : path); }
 export function post(path, body) { return request(path, { method: 'POST', body }); }
 export async function fetchPage(path, filters, page, pageSize) { return get(path, { ...filters, page, pageSize }); }
-export async function fetchAll(path, filters, pageSize = 10000) { return get(path, { ...filters, all: true, page: 1, pageSize }); }

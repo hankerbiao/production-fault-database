@@ -12,7 +12,6 @@ import hashlib
 import html
 import json
 import logging
-import os
 import random
 import re
 import sys
@@ -24,13 +23,14 @@ from typing import Any
 from urllib.parse import unquote
 
 import httpx
-from pymongo import ASCENDING, MongoClient, UpdateOne
+from pymongo import MongoClient, UpdateOne
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from scripts.sources.hana.hana_view_sync import (
+    env,
     load_dotenv,
     mongo_client_options,
     mongo_uri,
@@ -56,10 +56,6 @@ LIST_FIELDS = (
     "declare_uid declare_time review_time business_unit review_uid "
     "acceptance_time acceptance_uid"
 ).split()
-
-
-def env(name: str, default: str = "") -> str:
-    return os.getenv(name, default).strip()
 
 
 def text(value: Any) -> str:
@@ -296,12 +292,46 @@ def parse_datetime(value: Any) -> datetime | None:
     value = text(value)
     if not value:
         return None
+    iso = value.replace("Z", "+00:00")
+    try:
+        parsed = datetime.fromisoformat(iso)
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc)
+    except ValueError:
+        pass
     for fmt in ("%Y-%m-%d %H:%M", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M:%S.%f", "%Y-%m-%d"):
         try:
             return datetime.strptime(value, fmt).replace(tzinfo=timezone.utc)
         except ValueError:
             pass
     return None
+
+
+def query_window(args: argparse.Namespace, checkpoint: dict[str, Any] | None) -> tuple[str, str]:
+    if args.full:
+        return text(args.start_date), ""
+    watermark = parse_datetime((checkpoint or {}).get("watermark"))
+    basis = watermark or datetime.now(timezone.utc)
+    lookback_days = max(0, int(getattr(args, "lookback_days", 0) or 0))
+    return (basis - timedelta(days=lookback_days)).date().isoformat(), ""
+
+
+def can_resume(checkpoint: dict[str, Any] | None, args: argparse.Namespace, query_start: str) -> bool:
+    if not checkpoint or checkpoint.get("status") != "running":
+        return False
+    if args.full:
+        return checkpoint.get("mode") == "full" and checkpoint.get("start_date") == args.start_date
+    return checkpoint.get("mode") == "incremental" and text(checkpoint.get("query_start")) == query_start
+
+
+def should_refresh_details(existing: dict[str, Any] | None, row: dict[str, Any]) -> bool:
+    if not existing:
+        return True
+    details = existing.get("details") if isinstance(existing.get("details"), dict) else {}
+    if not details or details.get("error") or not details.get("fields"):
+        return True
+    return any(text(existing.get(field)) != text(row.get(field)) for field in LIST_FIELDS)
 
 
 def extract_sales_order(details: dict[str, Any]) -> str:
@@ -358,55 +388,59 @@ def sync(args: argparse.Namespace) -> dict[str, Any]:
         with httpx.Client(base_url=BASE_URL, timeout=float(env("SCS_TIMEOUT", "120")), follow_redirects=True) as http:
             login(http)
             checkpoint = None
-            if not args.dry_run:
-                client = MongoClient(mongo_uri(), **options)
-                checkpoint = client[env("MONGODB_DATABASE")][checkpoint_name].find_one({"_id": CHECKPOINT_ID})
-                if args.full and checkpoint and checkpoint.get("status") == "running" and checkpoint.get("start_date") == args.start_date:
-                    run_id = text(checkpoint.get("run_id")) or run_id
-            start, end = "", ""
-            if args.full:
-                start = args.start_date
-            elif checkpoint and checkpoint.get("watermark"):
-                wm = parse_datetime(checkpoint["watermark"])
-                if wm:
-                    start = (wm - timedelta(days=args.lookback_days)).strftime("%Y-%m-%d")
+            client = MongoClient(mongo_uri(), **options)
+            checkpoint = client[env("MONGODB_DATABASE")][checkpoint_name].find_one({"_id": CHECKPOINT_ID})
+            start, end = query_window(args, checkpoint)
+            if can_resume(checkpoint, args, start):
+                run_id = text(checkpoint.get("run_id")) or run_id
             rows = fetch_list(http, start, end, args.page_size)
-            stats: dict[str, Any] = {"success": True, "mode": "full" if args.full else "incremental", "fetched": len(rows), "upserted": 0, "detail_errors": 0, "range": {"start": start, "end": end}}
+            stats: dict[str, Any] = {"success": True, "mode": "full" if args.full else "incremental", "fetched": len(rows), "upserted": 0, "detail_errors": 0, "skipped_details": 0, "range": {"start": start, "end": end}}
             if args.dry_run:
                 return stats
-            if client is None:
-                client = MongoClient(mongo_uri(), **options)
             db = client[env("MONGODB_DATABASE")]
             coll = db[collection_name]
             checkpoints = db[checkpoint_name]
             resume_index = 0
-            if args.full and checkpoint and checkpoint.get("status") == "running" and checkpoint.get("run_id") == run_id and checkpoint.get("start_date") == args.start_date:
+            if can_resume(checkpoint, args, start) and text(checkpoint.get("run_id")) == run_id:
                 resume_index = max(0, int(checkpoint.get("row_index", 0)))
-            checkpoints.update_one({"_id": CHECKPOINT_ID}, {"$set": {"dataset": "scs_doa", "status": "running", "mode": "full" if args.full else "incremental", "start_date": args.start_date if args.full else None, "run_id": run_id, "row_index": resume_index, "total_rows": len(rows), "updated_at": datetime.now(timezone.utc)}}, upsert=True)
+            checkpoints.update_one({"_id": CHECKPOINT_ID}, {"$set": {"dataset": "scs_doa", "status": "running", "mode": "full" if args.full else "incremental", "start_date": args.start_date if args.full else None, "query_start": start, "query_end": end, "run_id": run_id, "row_index": resume_index, "total_rows": len(rows), "updated_at": datetime.now(timezone.utc)}}, upsert=True)
             sales_orders = load_sales_orders(db, env("SCS_SALES_ORDER_COLLECTION", "sales_orders_sap"))
             coll.create_index("_source_key", unique=True, name="scs_doa_source_key")
+            existing_by_key = {
+                text(doc.get("_source_key")): doc
+                for doc in coll.find(
+                    {"_source_key": {"$in": [source_key(row) for row in rows[resume_index:]]}},
+                    {"_source_key": 1, "details": 1, **{field: 1 for field in LIST_FIELDS}},
+                )
+            }
             operations: list[UpdateOne] = []
             watermark: datetime | None = None
             batch_size = max(1, int(env("SCS_WRITE_BATCH_SIZE", "25")))
             progress_interval = max(1, int(env("SCS_PROGRESS_INTERVAL", str(batch_size))))
             LOGGER.info(
-                "SCS DOA 开始处理：总计 %d 条，从断点 %d 继续，批量写入 %d 条",
-                len(rows), resume_index, batch_size,
+                "SCS DOA 开始处理：总计 %d 条，从断点 %d 继续，批量写入 %d 条，查询窗口 %s 至 %s",
+                len(rows), resume_index, batch_size, start or "-", end or "最新",
             )
             for row_index, row in enumerate(rows):
                 if row_index < resume_index:
                     continue
+                key = source_key(row)
+                existing = existing_by_key.get(key)
                 details: dict[str, Any] = {}
-                try:
-                    details = fetch_detail(http, row)
-                except Exception as exc:  # preserve list data even if one detail is unavailable
-                    stats["detail_errors"] += 1
-                    details = {"error": str(exc)}
+                if should_refresh_details(existing, row):
+                    try:
+                        details = fetch_detail(http, row)
+                    except Exception as exc:  # preserve list data even if one detail is unavailable
+                        stats["detail_errors"] += 1
+                        details = {"error": str(exc)}
+                else:
+                    stats["skipped_details"] += 1
+                    details = existing.get("details") or {}
                 declared = parse_datetime(row.get("declare_time"))
                 if declared and (watermark is None or declared > watermark):
                     watermark = declared
-                doc = {key: row.get(key, "") for key in LIST_FIELDS}
-                doc.update({"_source_key": source_key(row), "_source": "scs", "details": details, "_sync_run_id": run_id, "_synced_at": datetime.now(timezone.utc)})
+                doc = {field: row.get(field, "") for field in LIST_FIELDS}
+                doc.update({"_source_key": key, "_source": "scs", "details": details, "_sync_run_id": run_id, "_synced_at": datetime.now(timezone.utc)})
                 doc.update(classify_doa_document(doc, sales_orders))
                 operations.append(UpdateOne({"_source_key": doc["_source_key"]}, {"$set": doc, "$setOnInsert": {"_id": hashlib.sha256(doc["_source_key"].encode()).hexdigest()}}, upsert=True))
                 if len(operations) >= batch_size:
@@ -443,8 +477,8 @@ def sync(args: argparse.Namespace) -> dict[str, Any]:
                 watermark = parse_datetime(checkpoint.get("watermark"))
             checkpoints.update_one({"_id": CHECKPOINT_ID}, {"$set": {"dataset": "scs_doa", "status": "completed", "watermark": watermark.isoformat() if watermark else None, "run_id": run_id, "row_index": len(rows), "total_rows": len(rows), "updated_at": datetime.now(timezone.utc)}} , upsert=True)
             LOGGER.info(
-                "SCS DOA 同步完成：共 %d 条，写入 %d 条，详情错误 %d 条",
-                len(rows), stats["upserted"], stats["detail_errors"],
+                "SCS DOA 同步完成：共 %d 条，写入 %d 条，跳过详情 %d 条，详情错误 %d 条",
+                len(rows), stats["upserted"], stats["skipped_details"], stats["detail_errors"],
             )
             return stats
     finally:
@@ -456,7 +490,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="同步 SCS DOA 申报及设备产品信息")
     parser.add_argument("--full", action="store_true", help="首次全量同步")
     parser.add_argument("--start-date", default=env("SCS_FULL_START_DATE", "2026-01-01"), help="全量开始日期 YYYY-MM-DD")
-    parser.add_argument("--lookback-days", type=int, default=int(env("SCS_LOOKBACK_DAYS", "7")))
+    parser.add_argument("--lookback-days", type=int, default=int(env("SCS_LOOKBACK_DAYS", "2")))
     parser.add_argument("--page-size", type=int, default=int(env("SCS_PAGE_SIZE", "500")))
     parser.add_argument("--dry-run", action="store_true", help="只登录、读取和统计，不写 MongoDB")
     return parser

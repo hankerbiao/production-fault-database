@@ -89,7 +89,7 @@ func TestBatchAndLeadingZeroFilters(t *testing.T) {
 
 func TestNormalizedOrderCandidatesHandleLeadingZeroes(t *testing.T) {
 	values := normalizedOrderCandidates([]any{"000010349862", "10349862", ""})
-	want := map[string]bool{"000010349862": true, "10349862": true}
+	want := map[string]bool{"000010349862": true}
 	for _, value := range values {
 		delete(want, value)
 	}

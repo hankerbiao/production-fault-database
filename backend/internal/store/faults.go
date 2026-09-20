@@ -93,7 +93,11 @@ func normalizedOrderCandidates(items []any) []string {
 			trimmed = "0"
 		}
 		padded := strings.Repeat("0", max(0, 12-len(trimmed))) + trimmed
-		values = append(values, value, trimmed, padded)
+		if padded != "" {
+			values = append(values, padded)
+		} else {
+			values = append(values, value)
+		}
 	}
 	return values
 }

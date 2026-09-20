@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo/options"
@@ -56,14 +57,16 @@ func (s *Store) repairFilterWithCompany(ctx context.Context, f Filters) (bson.M,
 }
 
 func (s *Store) companyOrderCandidates(ctx context.Context) ([]string, error) {
-	values := make([]string, 0)
-	for _, field := range []string{"aufnr", "data.AUFNR"} {
-		items, err := s.orders.Distinct(ctx, field, bson.M{})
-		if err != nil {
-			return nil, err
-		}
-		values = append(values, normalizedOrderCandidates(items)...)
+	s.companyOrderCacheMu.Lock()
+	defer s.companyOrderCacheMu.Unlock()
+	if len(s.companyOrderCache) > 0 && time.Since(s.companyOrderCacheAt) < companyOrderCacheTTL {
+		return s.companyOrderCache, nil
 	}
+	items, err := s.orders.Distinct(ctx, "aufnr", bson.M{})
+	if err != nil {
+		return nil, err
+	}
+	values := normalizedOrderCandidates(items)
 	seen := make(map[string]struct{}, len(values))
 	result := make([]string, 0, len(values))
 	for _, value := range values {
@@ -73,6 +76,8 @@ func (s *Store) companyOrderCandidates(ctx context.Context) ([]string, error) {
 		seen[value] = struct{}{}
 		result = append(result, value)
 	}
+	s.companyOrderCache = result
+	s.companyOrderCacheAt = time.Now()
 	return result, nil
 }
 

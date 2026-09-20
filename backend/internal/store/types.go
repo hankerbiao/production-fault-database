@@ -10,17 +10,20 @@ import (
 )
 
 type Store struct {
-	client          *mongo.Client
-	db              *mongo.Database
-	repairs         *mongo.Collection
-	orders          *mongo.Collection
-	views           map[string]*mongo.Collection
-	bomCacheMu      sync.RWMutex
-	bomCache        map[string]bomStreamCacheEntry
-	bomWarmDone     chan struct{}
-	stationCacheMu  sync.RWMutex
-	stationCache    map[string]bomStreamCacheEntry
-	stationWarmDone chan struct{}
+	client              *mongo.Client
+	db                  *mongo.Database
+	repairs             *mongo.Collection
+	orders              *mongo.Collection
+	views               map[string]*mongo.Collection
+	bomCacheMu          sync.RWMutex
+	bomCache            map[string]bomStreamCacheEntry
+	bomWarmDone         chan struct{}
+	stationCacheMu      sync.RWMutex
+	stationCache        map[string]bomStreamCacheEntry
+	stationWarmDone     chan struct{}
+	companyOrderCacheMu sync.Mutex
+	companyOrderCacheAt time.Time
+	companyOrderCache   []string
 }
 
 // SyncRun is intentionally flexible because the Python orchestration runtime
@@ -233,6 +236,7 @@ const bomStreamCacheTTL = 60 * time.Second
 const bomStreamCacheMaxBytes = 64 << 20
 const stationStreamCacheTTL = 60 * time.Second
 const stationStreamCacheMaxBytes = 96 << 20
+const companyOrderCacheTTL = 60 * time.Second
 
 // Bulk and board queries use these narrow projections; detail endpoints read
 // the complete source document separately.

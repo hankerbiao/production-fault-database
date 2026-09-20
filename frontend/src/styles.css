@@ -21,3 +21,12 @@ th.column-judgment,td.column-judgment{width:78px;min-width:78px;max-width:78px;p
 .company-filter-selector button:last-child{border-right:0}
 .company-filter-selector button.active{background:var(--amber-soft);color:var(--amber);font-weight:650}
 @media(max-width:720px){.company-filter-selector{grid-column:1/-1}.company-filter-selector span{padding-left:10px;padding-right:10px}}
+.date-range-months{padding:11px 0 12px;border-bottom:1px solid var(--line)}
+.date-range-months-head{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:9px}
+.date-range-months-head strong{font-size:11px;color:var(--ink)}
+.date-range-months-head button{border:0;background:transparent;color:#0f718b;display:inline-flex;align-items:center;gap:3px;padding:2px 0;font-size:11px;font-weight:650;cursor:pointer;white-space:nowrap}
+.date-range-month-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:6px}
+.date-range-month-grid button{height:34px;border:1px solid var(--line);border-radius:6px;background:#fff;color:var(--ink-muted);cursor:pointer;font-size:12px}
+.date-range-month-grid button:hover{border-color:#9fc8e3;background:var(--blue-soft);color:var(--blue)}
+.date-range-month-grid button.selected{border-color:var(--blue);background:var(--blue);color:#fff;font-weight:650}
+.date-range-panel{max-height:calc(100vh - 32px);overflow:auto}

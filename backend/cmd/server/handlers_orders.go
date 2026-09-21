@@ -59,3 +59,12 @@ func (s *server) orderModels(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, result)
 }
+
+func (s *server) orderCustomerIDs(w http.ResponseWriter, r *http.Request) {
+	result, err := s.store.OrderCustomerIDs(r.Context())
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}

@@ -143,7 +143,7 @@ const MaxBulkQueryRows = 10000
 const MaxOrderQueryRows = MaxBulkQueryRows
 const MaxViewQueryRows = MaxBulkQueryRows
 
-var bomStreamFields = []string{"id", "AUFNR_1", "VBELN_EX", "GSTRS", "MENGE_A", "MATNR", "LGORT", "BUDAT_MKPF"}
+var bomStreamFields = []string{"id", "AUFNR_1", "VBELN_EX", "GSTRS", "GSTRS_DATE", "MENGE_A", "MATNR", "LGORT", "BUDAT_MKPF"}
 var stationStreamFields = []string{"id", "PCODE", "AUFNR", "KDAUF", "SPEC", "SPEC_DESC", "OPERATION", "ACTUAL_START_TIME", "ACTUAL_END_TIME", "MAKTX_TH", "LGORT", "LINE_CODE"}
 var tsvSanitizer = strings.NewReplacer("\t", " ", "\r", " ", "\n", " ")
 
@@ -160,6 +160,10 @@ type OrderStatsResult struct {
 	StorageQuantity float64 `json:"storageQuantity"`
 }
 type OrderModelsResult struct {
+	Items []string `json:"items"`
+}
+
+type OrderCustomerIDsResult struct {
 	Items []string `json:"items"`
 }
 
@@ -220,7 +224,7 @@ var documentedViews = map[string]struct {
 	searchFields []string
 	orderFields  []string
 }{
-	"ZSGV_ZSD124":        {"order_bom_postings_sap", "GSTRS", []string{"MBLNR", "MJAHR", "ZEILE", "MATNR", "AUFNR_1", "VBELN_EX", "KUNNR", "NAME1"}, []string{"GSTRS", "MBLNR", "MJAHR", "ZEILE"}},
+	"ZSGV_ZSD124":        {"order_bom_postings_sap", "GSTRS_DATE", []string{"MBLNR", "MJAHR", "ZEILE", "MATNR", "AUFNR_1", "VBELN_EX", "KUNNR", "NAME1"}, []string{"GSTRS_DATE", "GSTRS", "MBLNR", "MJAHR", "ZEILE"}},
 	"ZSGV_ZPP_SERNOLIST": {"serial_bindings_sap", "", []string{"ZCODE_HEAD", "ZCODE_ITEM", "AUFNR_HEAD", "AUFNR_ITEM", "PRODH"}, []string{"ZCODE_HEAD", "ZCODE_ITEM", "AUFNR_HEAD", "AUFNR_ITEM"}},
 	"Z_V_ZMES_T_001":     {"station_records_sap", "ACTUAL_START_TIME", []string{"HISTROYID", "PCODE", "OCODE", "AUFNR", "SPEC", "OPERATION", "GSTRS", "ACTUAL_START_TIME", "ACTUAL_END_TIME"}, []string{"ACTUAL_START_TIME", "HISTROYID", "SPEC_TIME"}},
 	"SCS_DOA":            {"scs_doa_records", "declare_time", []string{"doa_code", "doa_type", "declare_reason", "service_uid", "status", "doa_judge", "customer_uid", "sugon_sn", "spare_part_sn", "product_name", "review_name", "detail_problem", "problem_conclusion", "declare_uid", "business_unit", "acceptance_uid"}, []string{"declare_time", "doa_code"}},
@@ -229,7 +233,7 @@ var documentedViews = map[string]struct {
 
 var viewAllProjections = map[string]bson.M{
 	"ZSGV_ZSD124": {
-		"_id": 1, "_source_key": 1, "AUFNR_1": 1, "VBELN_EX": 1, "GSTRS": 1, "MENGE_A": 1,
+		"_id": 1, "_source_key": 1, "AUFNR_1": 1, "VBELN_EX": 1, "GSTRS": 1, "GSTRS_DATE": 1, "MENGE_A": 1,
 		"MATNR": 1, "LGORT": 1, "WERKS": 1, "BUDAT_MKPF": 1, "KUNNR": 1, "NAME1": 1,
 	},
 	"Z_V_ZMES_T_001": {

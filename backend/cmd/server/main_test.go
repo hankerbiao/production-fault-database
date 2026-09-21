@@ -26,6 +26,7 @@ type fakeStore struct {
 	stats                store.StatsResult
 	ostats               store.OrderStatsResult
 	models               store.OrderModelsResult
+	customerIDs          store.OrderCustomerIDsResult
 	err                  error
 	gotPage, gotPageSize int
 	gotFilters           store.Filters
@@ -92,6 +93,12 @@ func (f *fakeStore) OrderModels(_ context.Context, _ string) (store.OrderModelsR
 		return store.OrderModelsResult{}, f.err
 	}
 	return f.models, nil
+}
+func (f *fakeStore) OrderCustomerIDs(context.Context) (store.OrderCustomerIDsResult, error) {
+	if f.err != nil {
+		return store.OrderCustomerIDsResult{}, f.err
+	}
+	return f.customerIDs, nil
 }
 func (f *fakeStore) DataStatus(context.Context) (store.DataStatus, error) {
 	return store.DataStatus{}, f.err
@@ -181,7 +188,7 @@ func TestOpenAPICoversRegisteredAPIRoutes(t *testing.T) {
 	expected := map[string][]string{
 		"/api/health": {"get"}, "/api/config": {"get"}, "/api/faults": {"get"}, "/api/faults/lookup": {"post"}, "/api/faults/by-sns": {"get", "post"},
 		"/api/faults/by-orders": {"get"}, "/api/faults/detail": {"get"}, "/api/faults/stats": {"get"}, "/api/orders": {"get"},
-		"/api/orders/all": {"get"}, "/api/orders/detail": {"get"}, "/api/orders/stats": {"get"}, "/api/orders/models": {"get"},
+		"/api/orders/all": {"get"}, "/api/orders/detail": {"get"}, "/api/orders/stats": {"get"}, "/api/orders/models": {"get"}, "/api/orders/customer-ids": {"get"},
 		"/api/views/{viewID}": {"get"}, "/api/views/{viewID}/all": {"get"}, "/api/views/{viewID}/stream": {"get"}, "/api/views/{viewID}/detail": {"get"}, "/api/views/{viewID}/stats": {"get"},
 		"/api/sync/incremental": {"post"}, "/api/sync/status": {"get"}, "/api/sync/tasks": {"get"}, "/api/sync/runs": {"get", "post"}, "/api/sync/runs/{id}": {"get"}, "/api/sync/runs/{id}/retry": {"post"}, "/api/data-status": {"get"},
 	}
@@ -337,6 +344,19 @@ func TestOrderModels(t *testing.T) {
 		t.Fatalf("status=%d", r.Code)
 	}
 	var result store.OrderModelsResult
+	if err := json.NewDecoder(r.Body).Decode(&result); err != nil || len(result.Items) != 2 {
+		t.Fatalf("result=%+v err=%v", result, err)
+	}
+}
+
+func TestOrderCustomerIDs(t *testing.T) {
+	f := &fakeStore{customerIDs: store.OrderCustomerIDsResult{Items: []string{"C-1", "C-2"}}}
+	r := httptest.NewRecorder()
+	newTestServer(f).orderCustomerIDs(r, httptest.NewRequest(http.MethodGet, "/api/orders/customer-ids", nil))
+	if r.Code != http.StatusOK {
+		t.Fatalf("status=%d", r.Code)
+	}
+	var result store.OrderCustomerIDsResult
 	if err := json.NewDecoder(r.Body).Decode(&result); err != nil || len(result.Items) != 2 {
 		t.Fatalf("result=%+v err=%v", result, err)
 	}

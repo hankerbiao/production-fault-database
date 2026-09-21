@@ -14,6 +14,7 @@ function mockFetch({ fail = false } = {}) {
     if (url === '/api/openapi.json') return { ok: true, json: async () => ({ openapi: '3.0.3', info: { version: '1.0.0' }, servers: [{ url: '/api' }], paths: { '/api/health': { get: { tags: ['health'], operationId: 'health', summary: '健康检查', responses: { '200': { description: '正常' } } } }, '/api/faults': { get: { tags: ['faults'], operationId: 'listFaults', summary: '查询维修故障', parameters: [{ name: 'page', in: 'query', required: false, description: '页码' }], responses: { '200': { description: '分页结果' } } } }, '/api/views/SCS_DOA': { get: { tags: ['scs'], operationId: 'listSCSDoaRecords', summary: '查询 SCS DOA 申报', responses: { '200': { description: '分页结果' } } } }, '/api/sync/incremental': { post: { tags: ['sync'], operationId: 'sync', summary: '增量同步', responses: { '202': { description: '已启动' } } } } } }) };
     if (url === '/api/agent-guide.md') return { ok: true, text: async () => '# Agent Guide' };
     if (String(url).startsWith('/api/orders/models')) return { ok: true, json: async () => ({ items: ['Model-A', 'Model-B'] }) };
+    if (String(url).startsWith('/api/orders/customer-ids')) return { ok: true, json: async () => ({ items: ['CUST-001', 'CUST-002'] }) };
     if (String(url).startsWith('/api/faults?')) return { ok: true, json: async () => ({ items: [{ id: 'r1', hostBarcode: 'PC-1', salesOrder: 'SO-1', productionOrder: 'PO-1', plannedStartDate: '20260101', materialDescription: '物料', faultDescription: '故障', ngStation: '站点' }], total: 1 }) };
     if (String(url).startsWith('/api/faults/stats')) return { ok: true, json: async () => faultStats };
     if (String(url).startsWith('/api/orders?')) return { ok: true, json: async () => ({ items: [{ id: 'SG:PO-1', source: 'SG', aufnr: 'PO-1', salesOrder: 'SO-1', customerId: 'C1', materialDescription: '物料', orderQuantity: 3, storageQuantity: 2, recordCount: 1 }], total: 1 }) };
@@ -133,9 +134,10 @@ describe('operations workbench', () => {
     expect(await screen.findByRole('heading', { name: '销售订单看板' })).toBeInTheDocument();
     expect(await screen.findByText('机器数量汇总：3')).toBeInTheDocument();
     fireEvent.change(screen.getByRole('combobox'), { target: { value: 'SG' } });
-    fireEvent.change(screen.getByRole('textbox', { name: '客户 ID / 最终用户' }), { target: { value: '客户A' } });
+    fireEvent.click(screen.getByRole('button', { name: '客户 ID' }));
+    fireEvent.click(await screen.findByRole('option', { name: 'CUST-001' }));
     fireEvent.click(screen.getByRole('button', { name: /筛选/ }));
-    await waitFor(() => expect(fetchMock.mock.calls.some(([url]) => String(url).includes('source=SG') && String(url).includes('customer=%E5%AE%A2%E6%88%B7A'))).toBe(true));
+    await waitFor(() => expect(fetchMock.mock.calls.some(([url]) => String(url).includes('source=SG') && String(url).includes('customer=CUST-001'))).toBe(true));
   });
 
   it('exports all filtered order rows as a CSV download', async () => {
@@ -262,8 +264,9 @@ describe('operations workbench', () => {
     render(<App />);
     fireEvent.click(screen.getByRole('button', { name: /订单过账/ }));
     expect(await screen.findByRole('heading', { name: '订单 BOM 过账' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /计划开始时间（GSTRS）/ })).toBeInTheDocument();
-    expect(screen.getByRole('columnheader', { name: '计划开始时间（GSTRS）' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /计划开始时间（GSTRS_DATE）/ })).toBeInTheDocument();
+    expect(screen.getByRole('columnheader', { name: '计划开始时间（源值）' })).toBeInTheDocument();
+    expect(screen.getByRole('columnheader', { name: '计划开始日期（标准化）' })).toBeInTheDocument();
     expect(screen.getByText('生产订单数量（去重）').parentElement).toHaveTextContent('2');
     expect(screen.getByText('销售订单数量（去重）').parentElement).toHaveTextContent('1');
     expect(screen.getByText('销售订单为空').parentElement).toHaveTextContent('3');

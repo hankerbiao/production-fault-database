@@ -39,7 +39,7 @@ var serialBindingFieldLabels = map[string]string{
 
 var bomPostingFieldOrder = []string{
 	"MANDT", "WERKS", "MATNR", "BWART", "BUDAT_MKPF", "LGORT", "MENGE_A", "KUNNR_A", "MAKTX", "NAME1_A",
-	"TYPE", "VGBEL_A", "VGPOS_A", "MATNR_SC", "MATKX_SC2", "AUFNR_1", "POSNR_EX", "VBELN_EX", "GSTRS", "KUNNR_EX", "NAME1_EX",
+	"TYPE", "VGBEL_A", "VGPOS_A", "MATNR_SC", "MATKX_SC2", "AUFNR_1", "POSNR_EX", "VBELN_EX", "GSTRS", "GSTRS_DATE", "KUNNR_EX", "NAME1_EX",
 	"AUART", "KUNNR_1", "NAME1_X", "MAKTX_CP", "MATNR_CP", "PSMNG", "MATKL", "CXFLG", "WGBEZ", "CPX",
 	"BU", "MATNR_BI", "ZSTAT", "MBLNR", "MJAHR", "ZEILE", "FDATU_O", "DATE_JH_O", "ETENR_O", "MAT_KDAUF",
 	"MAT_KDPOS", "VGBEL", "VGPOS", "KUNNR", "NAME1", "MENGE", "USNAM_MKPF", "VSNMR_V", "ZNAM",
@@ -49,7 +49,7 @@ var bomPostingFieldLabels = map[string]string{
 	"MANDT": "集团", "WERKS": "工厂", "MATNR": "物料号", "BWART": "移动类型", "BUDAT_MKPF": "过账日期",
 	"LGORT": "库存地点", "MENGE_A": "过账数量", "KUNNR_A": "关联客户编号", "MAKTX": "物料描述", "NAME1_A": "关联客户名称",
 	"TYPE": "业务类型", "VGBEL_A": "关联前序单据", "VGPOS_A": "关联前序单据行项目", "MATNR_SC": "子件物料号", "MATKX_SC2": "子件物料描述",
-	"AUFNR_1": "生产订单", "POSNR_EX": "销售订单行项目", "VBELN_EX": "销售订单", "GSTRS": "计划开始时间", "KUNNR_EX": "销售订单客户编号", "NAME1_EX": "销售订单客户名称",
+	"AUFNR_1": "生产订单", "POSNR_EX": "销售订单行项目", "VBELN_EX": "销售订单", "GSTRS": "计划开始时间（源值）", "GSTRS_DATE": "计划开始日期（标准化）", "KUNNR_EX": "销售订单客户编号", "NAME1_EX": "销售订单客户名称",
 	"AUART": "订单类型", "KUNNR_1": "客户编号", "NAME1_X": "客户名称", "MAKTX_CP": "成品物料描述", "MATNR_CP": "成品物料号",
 	"PSMNG": "需求数量", "MATKL": "物料组", "CXFLG": "冲销标识", "WGBEZ": "物料组描述", "CPX": "公司",
 	"BU": "事业部", "MATNR_BI": "BOM物料号", "ZSTAT": "状态", "MBLNR": "物料凭证号", "MJAHR": "物料凭证年度",

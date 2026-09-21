@@ -75,7 +75,7 @@ func (s *Store) viewBOMStream(ctx context.Context, f ViewFilters, out io.Writer)
 		if err := cur.Decode(&doc); err != nil {
 			return err
 		}
-		row := []string{csvValue(doc["_source_key"]), csvValue(doc["AUFNR_1"]), csvValue(doc["VBELN_EX"]), csvValue(doc["GSTRS"]), csvValue(doc["MENGE_A"]), csvValue(doc["MATNR"]), csvValue(doc["LGORT"]), csvValue(doc["BUDAT_MKPF"])}
+		row := []string{csvValue(doc["_source_key"]), csvValue(doc["AUFNR_1"]), csvValue(doc["VBELN_EX"]), csvValue(doc["GSTRS"]), csvValue(doc["GSTRS_DATE"]), csvValue(doc["MENGE_A"]), csvValue(doc["MATNR"]), csvValue(doc["LGORT"]), csvValue(doc["BUDAT_MKPF"])}
 		for i := range row {
 			row[i] = tsvSanitizer.Replace(row[i])
 		}

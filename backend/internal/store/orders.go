@@ -36,6 +36,30 @@ func (s *Store) OrderModels(ctx context.Context, keyword string) (OrderModelsRes
 	sort.Strings(items)
 	return OrderModelsResult{Items: items}, nil
 }
+
+func (s *Store) OrderCustomerIDs(ctx context.Context) (OrderCustomerIDsResult, error) {
+	filter := bson.M{"data.KID": bson.M{"$exists": true, "$nin": bson.A{"", nil}}}
+	values, err := s.orders.Distinct(ctx, "data.KID", filter)
+	if err != nil {
+		return OrderCustomerIDsResult{}, err
+	}
+	items := make([]string, 0, len(values))
+	seen := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		text := strings.TrimSpace(fmt.Sprint(value))
+		if text == "" || text == "<nil>" {
+			continue
+		}
+		if _, ok := seen[text]; ok {
+			continue
+		}
+		seen[text] = struct{}{}
+		items = append(items, text)
+	}
+	sort.Strings(items)
+	return OrderCustomerIDsResult{Items: items}, nil
+}
+
 func (s *Store) Orders(ctx context.Context, f OrderFilters, page, pageSize int) (OrderListResult, error) {
 	filter := orderFilter(f)
 	total, err := s.orders.CountDocuments(ctx, filter)

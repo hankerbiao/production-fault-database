@@ -3,8 +3,9 @@
 
 The sales-order collection is the authoritative local source for GSTRS. A BOM
 row is matched by AUFNR_1 first and VBELN_EX second. Numeric production-order
-keys are compared after removing SAP left padding zeros. Existing GSTRS values
-are never overwritten; rows without both order numbers are ignored.
+keys are compared after removing SAP left padding zeros. Existing values are
+corrected only when a unique authoritative date is found; rows without both
+order numbers are ignored.
 
 The default mode is a read-only preview. Cron should pass ``--apply``.
 """
@@ -49,23 +50,31 @@ def text(value: Any) -> str:
     return str(value).strip()
 
 
+def normalize_planned_date(value: Any) -> str:
+    """Return a canonical ISO date without accepting malformed source values."""
+    raw = text(value)
+    if not raw:
+        return ""
+    for layout in (
+        "%Y-%m-%d",
+        "%Y%m%d",
+        "%Y/%m/%d",
+        "%Y-%m-%d %H:%M:%S",
+        "%Y%m%d%H%M%S",
+    ):
+        try:
+            return datetime.strptime(raw, layout).date().isoformat()
+        except ValueError:
+            continue
+    return ""
+
+
 def order_key(value: Any) -> str:
     """Normalize SAP numeric order numbers while preserving alphanumeric IDs."""
     value = text(value)
     if value.isdigit():
         return value.lstrip("0") or "0"
     return value
-
-
-def missing_text_filter(field: str) -> dict[str, Any]:
-    return {
-        "$or": [
-            {field: {"$exists": False}},
-            {field: None},
-            {field: ""},
-            {field: {"$regex": r"^\s*$"}},
-        ]
-    }
 
 
 def add_candidate(index: dict[str, set[str]], key: str, value: str) -> None:
@@ -132,7 +141,7 @@ def build_source_indexes(
             stats["source_rows_scanned"] += 1
             progress and progress.report("构建销售订单索引", stats["source_rows_scanned"], total)
             data = document.get("data") if isinstance(document.get("data"), Mapping) else {}
-            planned_start = text(data.get("GSTRS") or document.get("gstrs_date"))
+            planned_start = normalize_planned_date(data.get("GSTRS") or document.get("gstrs_date"))
             if not planned_start:
                 stats["source_rows_without_planned_start"] += 1
                 continue
@@ -181,70 +190,100 @@ def backfill(
         "matched_by_sales_order": 0,
         "unmatched_orders": 0,
         "ambiguous_orders": 0,
+        "missing_gstrs": 0,
+        "unchanged": 0,
+        "normalized": 0,
+        "corrected": 0,
         "write_attempted": 0,
         "write_matched": 0,
         "write_modified": 0,
         "preview": [],
     }
     operations: list[UpdateOne] = []
-    total = bom.count_documents(missing_text_filter("GSTRS"))
-    progress.report("扫描待补充 BOM 明细", 0, total, force=True)
+    total = bom.count_documents({})
+    progress.report("扫描并规范化 BOM 计划开始时间", 0, total, force=True)
     cursor = bom.find(
-        missing_text_filter("GSTRS"),
-        {"_id": 1, "AUFNR_1": 1, "VBELN_EX": 1, "GSTRS": 1},
+        {},
+        {"_id": 1, "AUFNR_1": 1, "VBELN_EX": 1, "GSTRS": 1, "GSTRS_DATE": 1},
     )
     try:
         for document in cursor:
             summary["bom_rows_scanned"] += 1
-            progress.report("扫描待补充 BOM 明细", summary["bom_rows_scanned"], total)
+            progress.report("扫描并规范化 BOM 计划开始时间", summary["bom_rows_scanned"], total)
             production_order_raw = text(document.get("AUFNR_1"))
             sales_order_raw = text(document.get("VBELN_EX"))
             production_order = order_key(production_order_raw)
             sales_order = order_key(sales_order_raw)
+            existing_raw = text(document.get("GSTRS"))
+            existing_date = normalize_planned_date(document.get("GSTRS_DATE"))
+            if not existing_date:
+                existing_date = normalize_planned_date(existing_raw)
+            if not existing_raw:
+                summary["missing_gstrs"] += 1
             if not production_order and not sales_order:
                 summary["skipped_empty_orders"] += 1
+                if existing_date and existing_date != text(document.get("GSTRS_DATE")):
+                    operations.append(UpdateOne({"_id": document["_id"]}, {"$set": {"GSTRS_DATE": existing_date}}))
+                    summary["normalized"] += 1
                 continue
 
             planned_start = ""
             match_type = ""
+            production_status = "unmatched"
+            sales_status = "unmatched"
             if production_order:
-                planned_start, status = unique_value(production_index, production_order)
-                if status == "matched":
+                planned_start, production_status = unique_value(production_index, production_order)
+                if production_status == "matched":
                     match_type = "production_order"
-                elif status == "ambiguous":
-                    summary["ambiguous_orders"] += 1
             if not planned_start and sales_order:
-                planned_start, status = unique_value(sales_index, sales_order)
-                if status == "matched":
+                planned_start, sales_status = unique_value(sales_index, sales_order)
+                if sales_status == "matched":
                     match_type = "sales_order"
-                elif status == "ambiguous":
-                    summary["ambiguous_orders"] += 1
 
             if not planned_start:
-                if production_order or sales_order:
-                    if not (
-                        production_order in production_index
-                        or sales_order in sales_index
-                    ):
+                if "ambiguous" in {production_status, sales_status}:
+                    summary["ambiguous_orders"] += 1
+                elif production_order or sales_order:
+                    if production_order not in production_index and sales_order not in sales_index:
                         summary["unmatched_orders"] += 1
+                if existing_date and existing_date != text(document.get("GSTRS_DATE")):
+                    operations.append(UpdateOne({"_id": document["_id"]}, {"$set": {"GSTRS_DATE": existing_date}}))
+                    summary["normalized"] += 1
                 continue
 
             if match_type == "production_order":
                 summary["matched_by_production_order"] += 1
             else:
                 summary["matched_by_sales_order"] += 1
+            if existing_raw and normalize_planned_date(existing_raw) != planned_start:
+                status = "corrected"
+                summary["corrected"] += 1
+            elif not existing_raw:
+                status = "missing"
+            elif text(document.get("GSTRS_DATE")) != planned_start:
+                status = "normalized"
+                summary["normalized"] += 1
+            else:
+                status = "unchanged"
+                summary["unchanged"] += 1
             if len(summary["preview"]) < preview_limit:
                 summary["preview"].append({
                     "id": str(document["_id"]),
                     "AUFNR_1": production_order_raw,
                     "VBELN_EX": sales_order_raw,
+                    "before_GSTRS": existing_raw,
                     "GSTRS": planned_start,
+                    "GSTRS_DATE": planned_start,
                     "matched_by": match_type,
+                    "status": status,
                 })
+            fields = {"GSTRS_DATE": planned_start}
+            if existing_raw != planned_start:
+                fields["GSTRS"] = planned_start
             operations.append(
                 UpdateOne(
-                    {"_id": document["_id"], **missing_text_filter("GSTRS")},
-                    {"$set": {"GSTRS": planned_start}},
+                    {"_id": document["_id"]},
+                    {"$set": fields},
                 )
             )
             if len(operations) >= batch_size:

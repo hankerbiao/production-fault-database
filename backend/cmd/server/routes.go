@@ -21,6 +21,7 @@ func registerRoutes(h *server) *http.ServeMux {
 	mux.HandleFunc("GET /api/orders/detail", h.orderDetail)
 	mux.HandleFunc("GET /api/orders/stats", h.orderStats)
 	mux.HandleFunc("GET /api/orders/models", h.orderModels)
+	mux.HandleFunc("GET /api/orders/customer-ids", h.orderCustomerIDs)
 	mux.HandleFunc("GET /api/views/{viewID}", h.viewList)
 	mux.HandleFunc("GET /api/views/{viewID}/all", h.viewListAll)
 	mux.HandleFunc("GET /api/views/{viewID}/stream", h.viewStream)

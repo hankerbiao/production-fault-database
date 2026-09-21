@@ -39,9 +39,9 @@ func New(ctx context.Context, uri, database, repairCollection, orderCollection s
 			{Keys: bson.D{{Key: "aufnr", Value: 1}}},
 		})
 		_, _ = db.Collection("order_bom_postings_sap").Indexes().CreateMany(indexCtx, []mongo.IndexModel{
-			{Keys: bson.D{{Key: "GSTRS", Value: 1}}},
-			{Keys: bson.D{{Key: "AUFNR_1", Value: 1}, {Key: "GSTRS", Value: 1}}},
-			{Keys: bson.D{{Key: "VBELN_EX", Value: 1}, {Key: "GSTRS", Value: 1}}},
+			{Keys: bson.D{{Key: "GSTRS_DATE", Value: 1}}},
+			{Keys: bson.D{{Key: "AUFNR_1", Value: 1}, {Key: "GSTRS_DATE", Value: 1}}},
+			{Keys: bson.D{{Key: "VBELN_EX", Value: 1}, {Key: "GSTRS_DATE", Value: 1}}},
 		})
 	}()
 	views := make(map[string]*mongo.Collection, len(documentedViews))
@@ -215,7 +215,7 @@ func viewFilter(viewID string, f ViewFilters, searchFields []string, dateField s
 		}
 		if dateField == "BUDAT_MKPF" {
 			from, to = strings.ReplaceAll(from, "-", ""), strings.ReplaceAll(to, "-", "")
-		} else if dateField == "GSTRS" {
+		} else if dateField == "GSTRS" || dateField == "GSTRS_DATE" {
 			if from != "" || to != "" {
 				conditions = append(conditions, plannedDateRangeFilter(from, to))
 			}
@@ -320,25 +320,6 @@ func viewFilter(viewID string, f ViewFilters, searchFields []string, dateField s
 		return bson.M{}
 	}
 	return bson.M{"$and": conditions}
-}
-
-func plannedDateRangeFilter(dateFrom, dateTo string) bson.M {
-	isoFrom, isoTo := dateFrom, dateTo
-	compactFrom, compactTo := strings.ReplaceAll(isoFrom, "-", ""), strings.ReplaceAll(isoTo, "-", "")
-	bounds := func(from, to string) bson.M {
-		result := bson.M{}
-		if from != "" {
-			result["$gte"] = from
-		}
-		if to != "" {
-			result["$lte"] = to
-		}
-		return result
-	}
-	return bson.M{"$or": bson.A{
-		bson.M{"GSTRS": bounds(isoFrom, isoTo)},
-		bson.M{"GSTRS": bounds(compactFrom, compactTo)},
-	}}
 }
 
 func parseBoolFilter(value string) bool {

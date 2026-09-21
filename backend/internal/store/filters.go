@@ -72,7 +72,7 @@ func repairTimeField(f Filters) string {
 	return "repair"
 }
 
-// repairPlannedDateRangeFilter accepts both the ISO dates written by the repair
+// repairPlannedDateRangeFilter accepts both ISO dates written by the repair
 // cleanup script and historical SAP values without separators.
 func repairPlannedDateRangeFilter(dateFrom, dateTo string) bson.M {
 	isoFrom, isoTo := isoDate(dateFrom), isoDate(dateTo)
@@ -88,6 +88,28 @@ func repairPlannedDateRangeFilter(dateFrom, dateTo string) bson.M {
 		return result
 	}
 	return bson.M{"$or": bson.A{
+		bson.M{"GSTRS": bounds(isoFrom, isoTo)},
+		bson.M{"GSTRS": bounds(compactFrom, compactTo)},
+	}}
+}
+
+// plannedDateRangeFilter uses the normalized date first and keeps exact-format
+// legacy branches for BOM rows that predate GSTRS_DATE.
+func plannedDateRangeFilter(dateFrom, dateTo string) bson.M {
+	isoFrom, isoTo := isoDate(dateFrom), isoDate(dateTo)
+	compactFrom, compactTo := strings.ReplaceAll(isoFrom, "-", ""), strings.ReplaceAll(isoTo, "-", "")
+	bounds := func(from, to string) bson.M {
+		result := bson.M{}
+		if from != "" {
+			result["$gte"] = from
+		}
+		if to != "" {
+			result["$lte"] = to
+		}
+		return result
+	}
+	return bson.M{"$or": bson.A{
+		bson.M{"GSTRS_DATE": bounds(isoFrom, isoTo)},
 		bson.M{"GSTRS": bounds(isoFrom, isoTo)},
 		bson.M{"GSTRS": bounds(compactFrom, compactTo)},
 	}}
@@ -115,7 +137,12 @@ func orderFilter(f OrderFilters) bson.M {
 		conditions = append(conditions, bson.M{"$or": bson.A{bson.M{"data.MAKTX_TH": f.ProductModel}, bson.M{"data.CPXH": f.ProductModel}, bson.M{"data.MAKTX": f.ProductModel}}})
 	}
 	if f.Customer != "" {
-		conditions = append(conditions, bson.M{"$or": bson.A{bson.M{"data.KID": f.Customer}, bson.M{"data.NAME1_ZU": f.Customer}}})
+		customerIDs := splitFilterValues(f.Customer)
+		if len(customerIDs) == 1 {
+			conditions = append(conditions, bson.M{"data.KID": customerIDs[0]})
+		} else if len(customerIDs) > 1 {
+			conditions = append(conditions, bson.M{"data.KID": bson.M{"$in": customerIDs}})
+		}
 	}
 	if f.Base != "" {
 		conditions = append(conditions, bson.M{"$or": bson.A{bson.M{"data.LGORT": f.Base}, bson.M{"data.WERKS": f.Base}}})
@@ -153,6 +180,24 @@ func orderFilter(f OrderFilters) bson.M {
 		return bson.M{}
 	}
 	return bson.M{"$and": conditions}
+}
+
+func splitFilterValues(value string) []string {
+	parts := strings.Split(value, ",")
+	items := make([]string, 0, len(parts))
+	seen := make(map[string]struct{}, len(parts))
+	for _, part := range parts {
+		item := strings.TrimSpace(part)
+		if item == "" {
+			continue
+		}
+		if _, ok := seen[item]; ok {
+			continue
+		}
+		seen[item] = struct{}{}
+		items = append(items, item)
+	}
+	return items
 }
 
 // orderDateRangeFilter supports both the current ISO `GSTRS` values and

@@ -7,7 +7,7 @@ import { OrdersPage } from './pages/OrdersPage';
 import { ViewDashboardPage } from './pages/ViewDashboardPage';
 import { SyncManagementPage } from './pages/SyncManagementPage';
 import { AgentGuide } from './components/AgentGuide';
-import { orderModels } from './api/orders';
+import { orderCustomerIDs, orderModels } from './api/orders';
 import { startSync, syncStatus } from './api/sync';
 import { ApiError } from './api/client';
 import { viewConfigs } from './config/views';
@@ -20,8 +20,10 @@ export function App() {
   const [refreshToken, setRefreshToken] = useState(0);
   const [status, setStatus] = useState({ state: 'idle', message: '等待同步' });
   const [modelOptions, setModelOptions] = useState([]);
+  const [customerIDOptions, setCustomerIDOptions] = useState([]);
   useEffect(() => { syncStatus().then(setStatus).catch(() => {}); }, []);
   useEffect(() => { orderModels().then(result => setModelOptions(Array.isArray(result?.items) ? result.items : [])).catch(() => {}); }, []);
+  useEffect(() => { orderCustomerIDs().then(result => setCustomerIDOptions(Array.isArray(result?.items) ? result.items : [])).catch(() => {}); }, []);
   useEffect(() => {
     if (status.state !== 'running') return undefined;
     const timer = setInterval(async () => {
@@ -35,7 +37,7 @@ export function App() {
       setStatus({ state: 'failed', message: error.message || '同步启动失败' });
     }
   }
-  const pageProps = { modelOptions, setConnected, setRefreshing, refreshToken };
+  const pageProps = { modelOptions, customerIDOptions, setConnected, setRefreshing, refreshToken };
   return <div className="app"><Header view={view} setView={setView} connected={connected} refreshing={refreshing} syncStatus={status} onSync={runSync} onRefresh={() => setRefreshToken(token => token + 1)} />
     {view === 'api-docs' ? <ApiDocs /> : view === 'sync-management' ? <SyncManagementPage onStarted={setStatus} /> : view === 'repairs' ? <RepairsPage {...pageProps} /> : view === 'orders' ? <OrdersPage {...pageProps} /> : <ViewDashboardPage key={view} {...pageProps} config={viewConfigs[view]} />}
     <footer><span>Production Fault Gateway · v0.1.0</span><span>MongoDB 数据源</span></footer>

@@ -223,10 +223,15 @@ func facetMaps(values bson.A) []bson.M {
 }
 
 func viewStatsPipeline(viewID string, filter bson.M, dateField string) mongo.Pipeline {
+	dateValue := any("$" + dateField)
+	if viewID == "ZSGV_ZSD124" {
+		// Keep statistics meaningful while older BOM rows are waiting for backfill.
+		dateValue = bson.M{"$ifNull": bson.A{"$GSTRS_DATE", "$GSTRS"}}
+	}
 	group := bson.M{
 		"_id":            nil,
-		"dataStartDate":  bson.M{"$min": "$" + dateField},
-		"dataEndDate":    bson.M{"$max": "$" + dateField},
+		"dataStartDate":  bson.M{"$min": dateValue},
+		"dataEndDate":    bson.M{"$max": dateValue},
 		"latestSyncedAt": bson.M{"$max": "$_synced_at"},
 	}
 	project := bson.M{

@@ -51,6 +51,15 @@ func TestOrderFilterAndMissingField(t *testing.T) {
 	}
 }
 
+func TestOrderFilterSupportsMultipleCustomerIDs(t *testing.T) {
+	filter := orderFilter(OrderFilters{Customer: " C-1, C-2, C-1 "})
+	conditions := filter["$and"].(primitive.A)
+	customer := conditions[0].(bson.M)["data.KID"].(bson.M)["$in"].([]string)
+	if len(customer) != 2 || customer[0] != "C-1" || customer[1] != "C-2" {
+		t.Fatalf("customer filter=%v", filter)
+	}
+}
+
 func TestOrderDateRangeFilterSupportsISOAndSAPDates(t *testing.T) {
 	filter := orderFilter(OrderFilters{DateFrom: "2026-08-04", DateTo: "20260902"})
 	conditions := filter["$and"].(primitive.A)
@@ -123,12 +132,15 @@ func TestBOMViewFilterUsesPlannedStartDate(t *testing.T) {
 	filter := viewFilter("ZSGV_ZSD124", ViewFilters{DateFrom: "2026-01-01", DateTo: "2026-01-31"}, nil, "GSTRS")
 	conditions := filter["$and"].(primitive.A)
 	branches := conditions[0].(bson.M)["$or"].(primitive.A)
-	if len(branches) != 2 {
+	if len(branches) != 3 {
 		t.Fatalf("date branches=%v", branches)
 	}
-	for _, branch := range branches {
+	if _, ok := branches[0].(bson.M)["GSTRS_DATE"]; !ok {
+		t.Fatalf("missing normalized date branch=%v", branches[0])
+	}
+	for _, branch := range branches[1:] {
 		if _, ok := branch.(bson.M)["GSTRS"]; !ok {
-			t.Fatalf("date branch=%v", branch)
+			t.Fatalf("missing legacy date branch=%v", branch)
 		}
 	}
 }
@@ -259,6 +271,32 @@ func TestNormalizeOrderExposesActualShipmentContractWithoutFallbacks(t *testing.
 	}
 }
 
+func TestOptionalParsersDoNotTurnInvalidValuesIntoValidDefaults(t *testing.T) {
+	if value := optionalNumber("not-a-number", true); value != nil {
+		t.Fatalf("invalid number=%v, want nil", *value)
+	}
+	if value := optionalNumber("0", true); value == nil || *value != 0 {
+		t.Fatalf("zero number=%v, want explicit zero", value)
+	}
+	if value := optionalBool("unknown", true); value != nil {
+		t.Fatalf("unknown bool=%v, want nil", *value)
+	}
+	for _, test := range []struct {
+		input any
+		want  bool
+	}{
+		{input: "true", want: true},
+		{input: "否", want: false},
+		{input: 1, want: true},
+		{input: 0, want: false},
+	} {
+		value := optionalBool(test.input, true)
+		if value == nil || *value != test.want {
+			t.Fatalf("optionalBool(%v)=%v, want %v", test.input, value, test.want)
+		}
+	}
+}
+
 func TestDetailFieldsOrderingAndFallbacks(t *testing.T) {
 	fields := detailFields(bson.M{"ZZRFL": "责任", "PCODE": "PC", "CUSTOM": "v", "_id": "ignored", "_source_key": "ignored"})
 	if len(fields) != 3 || fields[0].Key != "PCODE" || fields[1].Key != "ZZRFL" || fields[2].Key != "CUSTOM" {
@@ -327,7 +365,7 @@ func TestBOMPostingDetailFieldsUseChineseLabelsAndOrder(t *testing.T) {
 		t.Fatalf("fields=%+v", fields)
 	}
 	want := []struct{ key, label string }{
-		{"MATNR", "物料号"}, {"MENGE_A", "过账数量"}, {"AUFNR_1", "生产订单"}, {"VBELN_EX", "销售订单"}, {"GSTRS", "计划开始时间"},
+		{"MATNR", "物料号"}, {"MENGE_A", "过账数量"}, {"AUFNR_1", "生产订单"}, {"VBELN_EX", "销售订单"}, {"GSTRS", "计划开始时间（源值）"},
 		{"MBLNR", "物料凭证号"}, {"_source_key", "源记录键"}, {"_synced_at", "同步时间"},
 	}
 	for index, expected := range want {

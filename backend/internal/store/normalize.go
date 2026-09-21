@@ -2,7 +2,9 @@ package store
 
 import (
 	"fmt"
+	"math"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -101,7 +103,10 @@ func optionalNumber(value any, ok bool) *float64 {
 	if !ok {
 		return nil
 	}
-	parsed := number(value)
+	parsed, valid := parseOptionalNumber(value)
+	if !valid {
+		return nil
+	}
 	return &parsed
 }
 
@@ -109,29 +114,70 @@ func optionalBool(value any, ok bool) *bool {
 	if !ok {
 		return nil
 	}
-	if text := strings.TrimSpace(strings.ToLower(fmt.Sprint(value))); text == "" || text == "<nil>" {
+	parsed, valid := parseOptionalBool(value)
+	if !valid {
 		return nil
-	}
-	parsed := false
-	switch typed := value.(type) {
-	case bool:
-		parsed = typed
-	case int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64, float32, float64:
-		parsed = number(value) != 0
-	default:
-		parsed = textIn(value, "1", "true", "yes", "y", "是")
 	}
 	return &parsed
 }
 
-func textIn(value any, values ...string) bool {
-	text := strings.TrimSpace(strings.ToLower(fmt.Sprint(value)))
-	for _, candidate := range values {
-		if text == candidate {
-			return true
-		}
+func parseOptionalNumber(value any) (float64, bool) {
+	switch typed := value.(type) {
+	case int:
+		return float64(typed), true
+	case int8:
+		return float64(typed), true
+	case int16:
+		return float64(typed), true
+	case int32:
+		return float64(typed), true
+	case int64:
+		return float64(typed), true
+	case uint:
+		return float64(typed), true
+	case uint8:
+		return float64(typed), true
+	case uint16:
+		return float64(typed), true
+	case uint32:
+		return float64(typed), true
+	case uint64:
+		return float64(typed), true
+	case float32:
+		parsed := float64(typed)
+		return parsed, !math.IsNaN(parsed) && !math.IsInf(parsed, 0)
+	case float64:
+		return typed, !math.IsNaN(typed) && !math.IsInf(typed, 0)
 	}
-	return false
+	text := strings.TrimSpace(fmt.Sprint(value))
+	if text == "" || text == "<nil>" {
+		return 0, false
+	}
+	parsed, err := strconv.ParseFloat(text, 64)
+	return parsed, err == nil && !math.IsNaN(parsed) && !math.IsInf(parsed, 0)
+}
+
+func parseOptionalBool(value any) (bool, bool) {
+	if typed, ok := value.(bool); ok {
+		return typed, true
+	}
+	if parsed, ok := parseOptionalNumber(value); ok {
+		if parsed == 0 {
+			return false, true
+		}
+		if parsed == 1 {
+			return true, true
+		}
+		return false, false
+	}
+	switch strings.TrimSpace(strings.ToLower(fmt.Sprint(value))) {
+	case "true", "yes", "y", "是":
+		return true, true
+	case "false", "no", "n", "否":
+		return false, true
+	default:
+		return false, false
+	}
 }
 
 func cloneDocument(doc bson.M) bson.M {

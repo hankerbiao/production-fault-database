@@ -281,8 +281,8 @@ func exactBatch(field, input string, leadingZeroCompatible bool) bson.M {
 	}
 	patterns := bson.A{}
 	for _, value := range values {
-		if leadingZeroCompatible {
-			trimmed := strings.TrimLeft(value, "0")
+		if leadingZeroCompatible && isNumericOrder(value) {
+			trimmed := normalizeOrderNumber(value)
 			if trimmed == "" {
 				trimmed = "0"
 			}

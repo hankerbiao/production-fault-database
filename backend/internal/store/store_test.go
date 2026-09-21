@@ -97,14 +97,45 @@ func TestBatchAndLeadingZeroFilters(t *testing.T) {
 }
 
 func TestNormalizedOrderCandidatesHandleLeadingZeroes(t *testing.T) {
-	values := normalizedOrderCandidates([]any{"000010349862", "10349862", ""})
-	want := map[string]bool{"000010349862": true}
+	values := normalizedOrderCandidates([]any{"000010349862", "10349862", "PO-1", ""})
+	want := map[string]bool{"000010349862": true, "10349862": true, "PO-1": true}
 	for _, value := range values {
 		delete(want, value)
 	}
 	if len(want) != 0 {
 		t.Fatalf("candidates=%v", values)
 	}
+}
+
+func TestFaultLookupFilterNormalizesSalesAndProductionOrders(t *testing.T) {
+	filter := faultLookupFilter(Filters{ProductionOrders: "30226290", SalesOrders: "41002881"})
+	conditions := filter["$and"].(primitive.A)
+	production := conditions[0].(bson.M)["AUFNR"].(bson.M)["$in"].([]string)
+	sales := conditions[1].(bson.M)["VBELN"].(bson.M)["$in"].([]string)
+	if !containsString(production, "000030226290") || !containsString(production, "30226290") {
+		t.Fatalf("production candidates=%v", production)
+	}
+	if !containsString(sales, "0041002881") || !containsString(sales, "41002881") {
+		t.Fatalf("sales candidates=%v", sales)
+	}
+}
+
+func TestRepairStatsNormalizeOrderValues(t *testing.T) {
+	group := repairStatsPipeline(bson.M{}, "repair")[1].Map()["$group"].(bson.M)
+	sales := group["salesOrderValues"].(bson.M)["$addToSet"].(bson.M)
+	production := group["productionOrderValues"].(bson.M)["$addToSet"].(bson.M)
+	if sales["$let"] == nil || production["$let"] == nil {
+		t.Fatalf("order values are not normalized: sales=%v production=%v", sales, production)
+	}
+}
+
+func containsString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
 }
 
 func TestViewFilterIncludesEndDateForStationDatetimes(t *testing.T) {

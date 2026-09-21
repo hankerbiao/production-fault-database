@@ -2,7 +2,6 @@ package store
 
 import (
 	"context"
-	"fmt"
 	"strings"
 	"time"
 
@@ -81,27 +80,6 @@ func (s *Store) companyOrderCandidates(ctx context.Context) ([]string, error) {
 	return result, nil
 }
 
-func normalizedOrderCandidates(items []any) []string {
-	values := make([]string, 0, len(items)*3)
-	for _, item := range items {
-		value := strings.TrimSpace(fmt.Sprint(item))
-		if value == "" || value == "<nil>" {
-			continue
-		}
-		trimmed := strings.TrimLeft(value, "0")
-		if trimmed == "" {
-			trimmed = "0"
-		}
-		padded := strings.Repeat("0", max(0, 12-len(trimmed))) + trimmed
-		if padded != "" {
-			values = append(values, padded)
-		} else {
-			values = append(values, value)
-		}
-	}
-	return values
-}
-
 // FaultSNs returns only the order/SN relationship needed by RTY joins.
 // Keeping this projection at the gateway avoids transferring full repair rows.
 func (s *Store) FaultSNs(ctx context.Context, f Filters) ([]FaultSN, error) {
@@ -121,15 +99,17 @@ func (s *Store) FaultSNs(ctx context.Context, f Filters) ([]FaultSN, error) {
 		if err := cur.Decode(&row); err != nil {
 			return nil, err
 		}
-		if row.AUFNR == "" || row.PCODE == "" {
+		productionOrder := normalizeOrderNumber(row.AUFNR)
+		serialNumber := strings.TrimSpace(row.PCODE)
+		if productionOrder == "" || serialNumber == "" {
 			continue
 		}
-		key := row.AUFNR + "\x00" + row.PCODE
+		key := productionOrder + "\x00" + serialNumber
 		if _, ok := seen[key]; ok {
 			continue
 		}
 		seen[key] = struct{}{}
-		result = append(result, FaultSN{ProductionOrder: row.AUFNR, SerialNumber: row.PCODE})
+		result = append(result, FaultSN{ProductionOrder: productionOrder, SerialNumber: serialNumber})
 	}
 	if err := cur.Err(); err != nil {
 		return nil, err
@@ -191,12 +171,7 @@ func faultLookupFilter(f Filters) bson.M {
 		values := make([]string, 0)
 		seen := make(map[string]struct{})
 		for _, value := range splitValues(f.ProductionOrders) {
-			trimmed := strings.TrimLeft(value, "0")
-			if trimmed == "" {
-				trimmed = "0"
-			}
-			padded := strings.Repeat("0", max(0, 12-len(trimmed))) + trimmed
-			for _, candidate := range []string{value, trimmed, padded} {
+			for _, candidate := range orderCandidates(value, productionOrderWidth) {
 				if _, ok := seen[candidate]; !ok {
 					seen[candidate] = struct{}{}
 					values = append(values, candidate)
@@ -208,7 +183,17 @@ func faultLookupFilter(f Filters) bson.M {
 		}
 	}
 	if f.SalesOrders != "" {
-		values := splitValues(f.SalesOrders)
+		values := make([]string, 0)
+		seen := make(map[string]struct{})
+		for _, value := range splitValues(f.SalesOrders) {
+			for _, candidate := range orderCandidates(value, salesOrderWidth) {
+				if _, ok := seen[candidate]; ok {
+					continue
+				}
+				seen[candidate] = struct{}{}
+				values = append(values, candidate)
+			}
+		}
 		if len(values) > 0 {
 			conditions = append(conditions, bson.M{"VBELN": bson.M{"$in": values}})
 		}

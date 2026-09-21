@@ -2,6 +2,9 @@ package store
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"log"
 	"regexp"
 	"strings"
 	"sync"
@@ -28,21 +31,11 @@ func New(ctx context.Context, uri, database, repairCollection, orderCollection s
 	go func() {
 		indexCtx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 		defer cancel()
-		_, _ = db.Collection(repairCollection).Indexes().CreateMany(indexCtx, []mongo.IndexModel{
-			{Keys: bson.D{{Key: "AUFNR", Value: 1}, {Key: "ZDATE_WX", Value: 1}}},
-			{Keys: bson.D{{Key: "PCODE", Value: 1}}},
-			{Keys: bson.D{{Key: "VBELN", Value: 1}}},
-		})
-		_, _ = db.Collection(orderCollection).Indexes().CreateMany(indexCtx, []mongo.IndexModel{
-			{Keys: bson.D{{Key: "gstrs_date", Value: 1}, {Key: "data.IF_L6", Value: 1}}},
-			{Keys: bson.D{{Key: "data.VBELN", Value: 1}}},
-			{Keys: bson.D{{Key: "aufnr", Value: 1}}},
-		})
-		_, _ = db.Collection("order_bom_postings_sap").Indexes().CreateMany(indexCtx, []mongo.IndexModel{
-			{Keys: bson.D{{Key: "GSTRS_DATE", Value: 1}}},
-			{Keys: bson.D{{Key: "AUFNR_1", Value: 1}, {Key: "GSTRS_DATE", Value: 1}}},
-			{Keys: bson.D{{Key: "VBELN_EX", Value: 1}, {Key: "GSTRS_DATE", Value: 1}}},
-		})
+		if err := ensureCoreIndexes(indexCtx, db, repairCollection, orderCollection); err != nil {
+			log.Printf("api indexes initialization failed: %v", err)
+			return
+		}
+		log.Printf("api indexes initialized")
 	}()
 	views := make(map[string]*mongo.Collection, len(documentedViews))
 	for id, config := range documentedViews {
@@ -54,11 +47,13 @@ func New(ctx context.Context, uri, database, repairCollection, orderCollection s
 		}
 		// Index creation can take minutes on a large remote collection. Keep it
 		// out of the startup critical path; MongoDB will use it once complete.
-		go func(collection *mongo.Collection, keys bson.D) {
+		go func(viewID string, collection *mongo.Collection, keys bson.D) {
 			indexCtx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 			defer cancel()
-			_, _ = collection.Indexes().CreateOne(indexCtx, mongo.IndexModel{Keys: keys, Options: options.Index().SetName(viewListIndexName)})
-		}(collection, keys)
+			if _, err := collection.Indexes().CreateOne(indexCtx, mongo.IndexModel{Keys: keys, Options: options.Index().SetName(viewListIndexName)}); err != nil {
+				log.Printf("api view index initialization failed: view=%s error=%v", viewID, err)
+			}
+		}(id, collection, keys)
 	}
 	result := &Store{
 		client: client, db: db, repairs: db.Collection(repairCollection), orders: db.Collection(orderCollection), views: views,
@@ -70,6 +65,31 @@ func New(ctx context.Context, uri, database, repairCollection, orderCollection s
 	go result.prewarmBOMStream()
 	go result.prewarmStationStream()
 	return result, nil
+}
+
+func ensureCoreIndexes(ctx context.Context, db *mongo.Database, repairCollection, orderCollection string) error {
+	var errs []error
+	create := func(collection, label string, models []mongo.IndexModel) {
+		if _, err := db.Collection(collection).Indexes().CreateMany(ctx, models); err != nil {
+			errs = append(errs, fmt.Errorf("%s: %w", label, err))
+		}
+	}
+	create(repairCollection, "repairs", []mongo.IndexModel{
+		{Keys: bson.D{{Key: "AUFNR", Value: 1}, {Key: "ZDATE_WX", Value: 1}}},
+		{Keys: bson.D{{Key: "PCODE", Value: 1}}},
+		{Keys: bson.D{{Key: "VBELN", Value: 1}}},
+	})
+	create(orderCollection, "orders", []mongo.IndexModel{
+		{Keys: bson.D{{Key: "gstrs_date", Value: 1}, {Key: "data.IF_L6", Value: 1}}},
+		{Keys: bson.D{{Key: "data.VBELN", Value: 1}}},
+		{Keys: bson.D{{Key: "aufnr", Value: 1}}},
+	})
+	create("order_bom_postings_sap", "bom", []mongo.IndexModel{
+		{Keys: bson.D{{Key: "GSTRS_DATE", Value: 1}}},
+		{Keys: bson.D{{Key: "AUFNR_1", Value: 1}, {Key: "GSTRS_DATE", Value: 1}}},
+		{Keys: bson.D{{Key: "VBELN_EX", Value: 1}, {Key: "GSTRS_DATE", Value: 1}}},
+	})
+	return errors.Join(errs...)
 }
 
 func (s *Store) SyncRun(ctx context.Context, id string) (SyncRun, error) {

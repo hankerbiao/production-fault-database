@@ -24,7 +24,7 @@ func repairStatsPipeline(filter bson.M, timeField string) mongo.Pipeline {
 			"withRepairPerson":       bson.M{"$sum": bson.M{"$cond": bson.A{nonEmpty("U_FIX"), 1, 0}}},
 			"missingSalesOrder":      bson.M{"$sum": bson.M{"$cond": bson.A{missing("VBELN"), 1, 0}}},
 			"missingProductionOrder": bson.M{"$sum": bson.M{"$cond": bson.A{missing("AUFNR"), 1, 0}}},
-			"salesOrderValues":       bson.M{"$addToSet": "$VBELN"}, "productionOrderValues": bson.M{"$addToSet": "$AUFNR"}, "hostBarcodeValues": bson.M{"$addToSet": "$PCODE"},
+			"salesOrderValues":       bson.M{"$addToSet": normalizedOrderExpression("VBELN")}, "productionOrderValues": bson.M{"$addToSet": normalizedOrderExpression("AUFNR")}, "hostBarcodeValues": bson.M{"$addToSet": "$PCODE"},
 			"dataStartDate": bson.M{"$min": dateField}, "dataEndDate": bson.M{"$max": dateField}, "latestSyncedAt": bson.M{"$max": "$_synced_at"},
 		}}},
 		{{Key: "$project", Value: bson.M{
@@ -38,7 +38,7 @@ func repairStatsPipeline(filter bson.M, timeField string) mongo.Pipeline {
 }
 
 func orderStatsPipeline(filter bson.M) mongo.Pipeline {
-	normalizedVBELN := bson.M{"$trim": bson.M{"input": bson.M{"$convert": bson.M{"input": "$data.VBELN", "to": "string", "onError": "", "onNull": ""}}}}
+	normalizedVBELN := normalizedOrderExpression("data.VBELN")
 	return mongo.Pipeline{
 		{{Key: "$match", Value: filter}},
 		{{Key: "$group", Value: bson.M{

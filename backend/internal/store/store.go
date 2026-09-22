@@ -215,6 +215,13 @@ func (s *Store) OrderStats(ctx context.Context, f OrderFilters) (OrderStatsResul
 	return OrderStatsResult{Total: int64(number(row["total"])), SalesOrders: int64(number(row["salesOrders"])), DataStartDate: firstText(row, "dataStartDate"), DataEndDate: firstText(row, "dataEndDate"), LatestSyncedAt: firstText(row, "latestSyncedAt"), SG: int64(number(row["sg"])), KK: int64(number(row["kk"])), OrderQuantity: orderQuantity, MachineQuantity: machineQuantity, StorageQuantity: number(row["storageQuantity"])}, nil
 }
 
+func viewDateField(viewID string, f ViewFilters, defaultField string) string {
+	if viewID == "Z_V_ZMES_T_001" && strings.EqualFold(strings.TrimSpace(f.TimeField), "planned") {
+		return "GSTRS"
+	}
+	return defaultField
+}
+
 func viewFilter(viewID string, f ViewFilters, searchFields []string, dateField string) bson.M {
 	conditions := bson.A{}
 	if f.Keyword != "" {

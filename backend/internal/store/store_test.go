@@ -147,6 +147,20 @@ func TestViewFilterIncludesEndDateForStationDatetimes(t *testing.T) {
 	}
 }
 
+func TestStationViewFilterUsesPlannedStartWhenRequested(t *testing.T) {
+	filters := ViewFilters{DateFrom: "2026-05-01", DateTo: "2026-05-31", TimeField: "planned"}
+	dateField := viewDateField("Z_V_ZMES_T_001", filters, "ACTUAL_START_TIME")
+	if dateField != "GSTRS" {
+		t.Fatalf("date field=%q, want GSTRS", dateField)
+	}
+	filter := viewFilter("Z_V_ZMES_T_001", filters, nil, dateField)
+	conditions := filter["$and"].(primitive.A)
+	branches := conditions[0].(bson.M)["$or"].(primitive.A)
+	if _, ok := branches[0].(bson.M)["GSTRS_DATE"]; !ok {
+		t.Fatalf("planned date filter missing normalized branch=%v", branches[0])
+	}
+}
+
 func TestBOMViewFilterIncludesEmptySalesOrders(t *testing.T) {
 	filter := viewFilter("ZSGV_ZSD124", ViewFilters{MissingSalesOrder: true}, nil, "GSTRS")
 	conditions := filter["$and"].(primitive.A)
@@ -248,6 +262,13 @@ func TestBOMStreamIncludesPlannedStart(t *testing.T) {
 	joined := strings.Join(bomStreamFields, ",")
 	if !strings.Contains(joined, "GSTRS") {
 		t.Fatalf("BOM stream missing GSTRS: %s", joined)
+	}
+}
+
+func TestStationStreamIncludesPlannedStart(t *testing.T) {
+	joined := strings.Join(stationStreamFields, ",")
+	if !strings.Contains(joined, "GSTRS") {
+		t.Fatalf("station stream missing GSTRS: %s", joined)
 	}
 }
 

@@ -179,7 +179,7 @@ func (s *Store) viewStationStream(ctx context.Context, f ViewFilters, out io.Wri
 	if !ok {
 		return fmt.Errorf("unknown view: Z_V_ZMES_T_001")
 	}
-	filter := viewFilter("Z_V_ZMES_T_001", f, config.searchFields, config.dateField)
+	filter := viewFilter("Z_V_ZMES_T_001", f, config.searchFields, viewDateField("Z_V_ZMES_T_001", f, config.dateField))
 	cacheKey := stationStreamCacheKey(f)
 	now := time.Now()
 	s.stationCacheMu.RLock()
@@ -244,7 +244,7 @@ func bomStreamCacheKey(f ViewFilters) string {
 }
 
 func stationStreamCacheKey(f ViewFilters) string {
-	return strings.Join([]string{f.Keyword, f.From, f.To, f.DateFrom, f.DateTo, f.StationCode, f.SN, f.ProductionOrder, f.SalesOrder, f.Base, f.ProductModel}, "\x00")
+	return strings.Join([]string{f.Keyword, f.From, f.To, f.DateFrom, f.DateTo, f.TimeField, f.StationCode, f.SN, f.ProductionOrder, f.SalesOrder, f.Base, f.ProductModel}, "\x00")
 }
 
 func isEmptyBOMFilter(f ViewFilters) bool {

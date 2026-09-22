@@ -15,7 +15,8 @@ func (s *Store) ViewList(ctx context.Context, viewID string, f ViewFilters, page
 	if !ok {
 		return ViewListResult{}, fmt.Errorf("unknown view: %s", viewID)
 	}
-	filter := viewFilter(viewID, f, config.searchFields, config.dateField)
+	dateField := viewDateField(viewID, f, config.dateField)
+	filter := viewFilter(viewID, f, config.searchFields, dateField)
 	sortFields := bson.D{}
 	for _, field := range config.orderFields {
 		sortFields = append(sortFields, bson.E{Key: field, Value: -1})
@@ -86,7 +87,8 @@ func (s *Store) ViewListAll(ctx context.Context, viewID string, f ViewFilters) (
 	if !ok {
 		return ViewListResult{}, fmt.Errorf("unknown view: %s", viewID)
 	}
-	filter := viewFilter(viewID, f, config.searchFields, config.dateField)
+	dateField := viewDateField(viewID, f, config.dateField)
+	filter := viewFilter(viewID, f, config.searchFields, dateField)
 	total, err := s.views[viewID].CountDocuments(ctx, filter)
 	if err != nil {
 		return ViewListResult{}, err
@@ -131,16 +133,17 @@ func (s *Store) ViewStats(ctx context.Context, viewID string, f ViewFilters) (Vi
 	if !ok {
 		return ViewStatsResult{}, fmt.Errorf("unknown view: %s", viewID)
 	}
-	filter := viewFilter(viewID, f, config.searchFields, config.dateField)
+	dateField := viewDateField(viewID, f, config.dateField)
+	filter := viewFilter(viewID, f, config.searchFields, dateField)
 	total, err := s.views[viewID].CountDocuments(ctx, filter)
 	if err != nil {
 		return ViewStatsResult{}, err
 	}
 	result := ViewStatsResult{Total: total}
-	if config.dateField == "" {
+	if dateField == "" {
 		return result, nil
 	}
-	cur, err := s.views[viewID].Aggregate(ctx, viewStatsPipeline(viewID, filter, config.dateField))
+	cur, err := s.views[viewID].Aggregate(ctx, viewStatsPipeline(viewID, filter, dateField))
 	if err != nil {
 		return ViewStatsResult{}, err
 	}

@@ -144,7 +144,7 @@ const MaxOrderQueryRows = MaxBulkQueryRows
 const MaxViewQueryRows = MaxBulkQueryRows
 
 var bomStreamFields = []string{"id", "AUFNR_1", "VBELN_EX", "GSTRS", "GSTRS_DATE", "MENGE_A", "MATNR", "LGORT", "BUDAT_MKPF"}
-var stationStreamFields = []string{"id", "PCODE", "AUFNR", "KDAUF", "SPEC", "SPEC_DESC", "OPERATION", "ACTUAL_START_TIME", "ACTUAL_END_TIME", "MAKTX_TH", "LGORT", "LINE_CODE"}
+var stationStreamFields = []string{"id", "PCODE", "AUFNR", "KDAUF", "GSTRS", "SPEC", "SPEC_DESC", "OPERATION", "ACTUAL_START_TIME", "ACTUAL_END_TIME", "MAKTX_TH", "LGORT", "LINE_CODE"}
 var tsvSanitizer = strings.NewReplacer("\t", " ", "\r", " ", "\n", " ")
 
 type OrderStatsResult struct {
@@ -170,6 +170,7 @@ type OrderCustomerIDsResult struct {
 type ViewFilters struct {
 	Keyword, From, To                                                                  string
 	DateFrom, DateTo, StationCode, SN, ProductionOrder, SalesOrder, Base, ProductModel string
+	TimeField                                                                          string
 	HeadOrder, ItemOrder, HeadSN, ItemSN, MaterialCode                                 string
 	MissingSalesOrder                                                                  bool
 	DOACode, DOAType, Status, Customer, ServiceOrder                                   string
@@ -238,7 +239,7 @@ var viewAllProjections = map[string]bson.M{
 	},
 	"Z_V_ZMES_T_001": {
 		"_id": 1, "_source_key": 1, "PCODE": 1, "AUFNR": 1, "KDAUF": 1,
-		"SPEC": 1, "SPEC_DESC": 1, "OPERATION": 1, "ACTUAL_START_TIME": 1,
+		"GSTRS": 1, "SPEC": 1, "SPEC_DESC": 1, "OPERATION": 1, "ACTUAL_START_TIME": 1,
 		"ACTUAL_END_TIME": 1, "MAKTX_TH": 1, "LGORT": 1, "LINE_CODE": 1,
 	},
 }

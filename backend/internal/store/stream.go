@@ -98,7 +98,8 @@ func (s *Store) viewBOMStream(ctx context.Context, f ViewFilters, out io.Writer)
 }
 
 // ViewStationStream exposes the narrow station projection used by station RTY.
-// It avoids JSON map reflection for the large raw station result set.
+// It avoids JSON map reflection while preserving every matching station row;
+// callers are responsible for applying selective model/base/SN filters.
 func (s *Store) ViewStationStream(ctx context.Context, f ViewFilters, out io.Writer) error {
 	if f == defaultStationStreamFilters() && s.stationWarmDone != nil {
 		select {
@@ -198,7 +199,7 @@ func (s *Store) viewStationStream(ctx context.Context, f ViewFilters, out io.Wri
 	for _, field := range stationStreamFields[1:] {
 		projection[field] = 1
 	}
-	cur, err := s.views["Z_V_ZMES_T_001"].Find(ctx, filter, options.Find().SetProjection(projection).SetLimit(MaxViewQueryRows).SetBatchSize(10000))
+	cur, err := s.views["Z_V_ZMES_T_001"].Find(ctx, filter, options.Find().SetProjection(projection).SetBatchSize(10000))
 	if err != nil {
 		return err
 	}

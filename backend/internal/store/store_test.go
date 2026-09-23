@@ -23,6 +23,23 @@ func TestRepairFilterEscapesRegexAndCombinesConditions(t *testing.T) {
 	}
 }
 
+func TestRepairFilterMatchesNonCriticalMaterialSerial(t *testing.T) {
+	filter := repairFilter(Filters{NonCriticalMaterialSerial: "37001343，K5000090"})
+	conditions, ok := filter["$and"].(primitive.A)
+	if !ok || len(conditions) != 1 {
+		t.Fatalf("filter=%v", filter)
+	}
+	branches, ok := conditions[0].(bson.M)["$or"].(primitive.A)
+	if !ok || len(branches) != 2 {
+		t.Fatalf("serial filter=%v", conditions[0])
+	}
+	first := branches[0].(bson.M)["RECORD01REPAIRM"].(bson.M)
+	second := branches[1].(bson.M)["RECORD01REPAIRM"].(bson.M)
+	if first["$regex"] != "^37001343$" || second["$regex"] != "^K5000090$" || first["$options"] != "i" {
+		t.Fatalf("serial patterns=%v %v", first, second)
+	}
+}
+
 func TestRepairPlannedDateRangeFilterSupportsISOAndSAPDates(t *testing.T) {
 	filter := repairFilter(Filters{TimeField: "planned", DateFrom: "2026-08-04", DateTo: "20260902"})
 	conditions := filter["$and"].(primitive.A)
@@ -144,6 +161,22 @@ func TestViewFilterIncludesEndDateForStationDatetimes(t *testing.T) {
 	dateCondition := conditions[0].(bson.M)["ACTUAL_START_TIME"].(bson.M)
 	if dateCondition["$lte"] != "2026-03-31 23:59:59" {
 		t.Fatalf("end date=%v", dateCondition["$lte"])
+	}
+}
+
+func TestStationViewDateFilterUsesPlannedStartByDefault(t *testing.T) {
+	config := documentedViews["Z_V_ZMES_T_001"]
+	if config.dateField != "GSTRS" {
+		t.Fatalf("date field=%q, want GSTRS", config.dateField)
+	}
+	filters := ViewFilters{From: "2026-05-01", To: "2026-05-31"}
+	dateField := viewDateField("Z_V_ZMES_T_001", filters, config.dateField)
+	filter := viewFilter("Z_V_ZMES_T_001", filters, nil, dateField)
+	conditions := filter["$and"].(primitive.A)
+	branches := conditions[0].(bson.M)["$or"].(primitive.A)
+	compact := branches[2].(bson.M)["GSTRS"].(bson.M)
+	if compact["$gte"] != "20260501" || compact["$lte"] != "20260531" {
+		t.Fatalf("planned range=%v", compact)
 	}
 }
 

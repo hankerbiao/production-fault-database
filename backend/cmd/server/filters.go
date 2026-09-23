@@ -28,7 +28,7 @@ func repairFilters(q url.Values) store.Filters {
 		Keyword: query(q, "keyword"), HostBarcode: query(q, "hostBarcode"), DefectResponsibility: query(q, "defectResponsibility"), NGStation: query(q, "ngStation"),
 		SalesOrder: query(q, "salesOrder"), ProductionOrder: query(q, "productionOrder"), SNS: query(q, "sns"), ProductionOrders: query(q, "productionOrders"), SalesOrders: query(q, "salesOrders"),
 		DateFrom: query(q, "dateFrom"), DateTo: query(q, "dateTo"), Station: query(q, "station"), ProductModel: query(q, "productModel"), TimeField: query(q, "timeField"),
-		Company5000: company5000Filter(query(q, "company5000")),
+		Company5000: company5000Filter(query(q, "company5000")), NonCriticalMaterialSerial: query(q, "nonCriticalMaterialSerial"),
 	}
 }
 

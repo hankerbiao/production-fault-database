@@ -21,7 +21,7 @@ var stationFieldLabels = map[string]string{
 	"KDAUF": "销售订单", "KDPOS": "行项目", "LGORT": "基地", "MAKTX_TH": "生产机型", "LEAD_CYCLE": "生产周期（小时）",
 	"AUFNR_CYCLE": "订单类型周期（小时）", "CUSTOMIZE_CYCLE": "定制化周期（小时）", "OEMBZ": "是否定制化", "SPEC": "操作工序",
 	"OPERATION": "操作说明", "SPEC_DESC": "工序描述", "UNAME": "操作员", "LASTSPEC_TIME": "上一工序时间", "SPEC_TIME": "操作时间",
-	"GSTRS": "计划开始日期", "PLAN_END_TIME": "计划结束时间", "ACTUAL_START_TIME": "实际开始时间", "ACTUAL_END_TIME": "实际结束时间",
+	"GSTRS": "计划开始时间", "PLAN_END_TIME": "计划结束时间", "ACTUAL_START_TIME": "实际开始时间", "ACTUAL_END_TIME": "实际结束时间",
 	"HADE1": "预留字段1", "HADE2": "预留字段2", "HADE3": "预留字段3", "HADE4": "预留字段4", "HADE5": "预留字段5",
 	"HADE6": "预留字段6", "HADE7": "预留字段7", "HADE8": "预留字段8", "STATU": "返回状态", "MESS": "返回值",
 	"CLASSCODE": "班次编码", "EQUIPMENTNUMBER": "设备编号", "ERR_FLAG": "检验结果", "LINE_CODE": "生产线", "NEXT_SECTION": "下一工序",

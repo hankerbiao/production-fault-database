@@ -133,6 +133,7 @@ GET /api/data-status
 | `pageSize` | integer | 每页条数，1-100，默认 20 |
 | `keyword` | string | 匹配 `ERROR_CODE`、`ERROR_MSG`、`ZGZMS`、`RPDESC`、`ZMCOD1`、`PCODE`、`VBELN`、`AUFNR` |
 | `hostBarcode` | string | 精确匹配主机条码 `PCODE` |
+| `nonCriticalMaterialSerial` | string | 精确匹配非关键件物料序号 `RECORD01REPAIRM`；可用逗号或中文逗号批量传值 |
 | `defectResponsibility` | string | 精确匹配缺陷责任分类 `ZZRFL` |
 | `ngStation` | string | 精确匹配 NG 工站 `ZNGGZ` |
 | `salesOrder` | string | 精确匹配销售订单 `VBELN` |
@@ -213,7 +214,7 @@ GET /api/views/{viewID}/detail?id={id}
 |---|---|---|---|
 | `ZSGV_ZSD124` | `order_bom_postings_sap` | `GSTRS` | `MBLNR`, `MJAHR`, `ZEILE`, `MATNR`, `WERKS`, `BWART`, `MENGE_A`, `AUFNR_1`, `VBELN_EX`, `GSTRS`, `BUDAT_MKPF` |
 | `ZSGV_ZPP_SERNOLIST` | `serial_bindings_sap` | 无 | `ZCODE_HEAD`, `ZCODE_ITEM`, `AUFNR_HEAD`, `AUFNR_ITEM`, `PRODH` |
-| `Z_V_ZMES_T_001` | `station_records_sap` | `ACTUAL_START_TIME` | `HISTROYID`, `PCODE`, `OCODE`, `AUFNR`, `SPEC`, `OPERATION`, `GSTRS`, `ACTUAL_START_TIME`, `ACTUAL_END_TIME` |
+| `Z_V_ZMES_T_001` | `station_records_sap` | `GSTRS` | `HISTROYID`, `PCODE`, `OCODE`, `AUFNR`, `SPEC`, `OPERATION`, `GSTRS`, `ACTUAL_START_TIME`, `ACTUAL_END_TIME` |
 | `SCS_DOA` | `scs_doa_records` | `declare_time` | `doa_code`, `doa_type`, `service_uid`, `status`, `doa_judge`, `customer_uid`, `sugon_sn`, `spare_part_sn`, `product_name`, `sales_order`, `is_5000_company` |
 | `SCS_CHANGE` | `scs_change_records` | `create_time` | `so_code`, `customer_name`, `device_sn`, `change_type`, `part_number`, `part_sn`, `part_name`, `operator`, `create_time`, `is_revoked`, `is_5000_company` |
 
@@ -242,7 +243,7 @@ GET /api/views/{viewID}/detail?id={id}
 | `needReturn` / `revoked` | string | 仅 `SCS_CHANGE`：按是否归还、是否撤销精确匹配 |
 | `company5000` | string | SCS 视图：传 `true`、`1`、`yes`、`是` 筛选 `is_5000_company=true`，其他值筛选 false |
 
-日期行为：`ZSGV_ZSD124` 使用新增的计划开始时间 `GSTRS` 筛选，同时兼容 `YYYY-MM-DD` 和 `YYYYMMDD` 存量格式；`Z_V_ZMES_T_001` 直接使用 `ACTUAL_START_TIME` 比较。上下限均为包含关系。
+日期行为：`ZSGV_ZSD124` 与 `Z_V_ZMES_T_001` 都按计划开始时间 `GSTRS` 筛选，同时兼容 `YYYY-MM-DD` 和 `YYYYMMDD` 存量格式。上下限均为包含关系。
 
 响应示例：
 

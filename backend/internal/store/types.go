@@ -38,7 +38,7 @@ type bomStreamCacheEntry struct {
 type Filters struct {
 	Keyword, HostBarcode, DefectResponsibility, NGStation, SalesOrder, ProductionOrder string
 	SNS, ProductionOrders, SalesOrders, DateFrom, DateTo, Station, ProductModel        string
-	TimeField, Company5000                                                             string
+	TimeField, Company5000, NonCriticalMaterialSerial                                  string
 }
 type OrderFilters struct {
 	Keyword, Source, GSTRSFrom, GSTRSTo                                                                   string
@@ -227,7 +227,7 @@ var documentedViews = map[string]struct {
 }{
 	"ZSGV_ZSD124":        {"order_bom_postings_sap", "GSTRS_DATE", []string{"MBLNR", "MJAHR", "ZEILE", "MATNR", "AUFNR_1", "VBELN_EX", "KUNNR", "NAME1"}, []string{"GSTRS_DATE", "GSTRS", "MBLNR", "MJAHR", "ZEILE"}},
 	"ZSGV_ZPP_SERNOLIST": {"serial_bindings_sap", "", []string{"ZCODE_HEAD", "ZCODE_ITEM", "AUFNR_HEAD", "AUFNR_ITEM", "PRODH"}, []string{"ZCODE_HEAD", "ZCODE_ITEM", "AUFNR_HEAD", "AUFNR_ITEM"}},
-	"Z_V_ZMES_T_001":     {"station_records_sap", "ACTUAL_START_TIME", []string{"HISTROYID", "PCODE", "OCODE", "AUFNR", "SPEC", "OPERATION", "GSTRS", "ACTUAL_START_TIME", "ACTUAL_END_TIME"}, []string{"ACTUAL_START_TIME", "HISTROYID", "SPEC_TIME"}},
+	"Z_V_ZMES_T_001":     {"station_records_sap", "GSTRS", []string{"HISTROYID", "PCODE", "OCODE", "AUFNR", "SPEC", "OPERATION", "GSTRS", "ACTUAL_START_TIME", "ACTUAL_END_TIME"}, []string{"ACTUAL_START_TIME", "HISTROYID", "SPEC_TIME"}},
 	"SCS_DOA":            {"scs_doa_records", "declare_time", []string{"doa_code", "doa_type", "declare_reason", "service_uid", "status", "doa_judge", "customer_uid", "sugon_sn", "spare_part_sn", "product_name", "review_name", "detail_problem", "problem_conclusion", "declare_uid", "business_unit", "acceptance_uid"}, []string{"declare_time", "doa_code"}},
 	"SCS_CHANGE":         {"scs_change_records", "create_time", []string{"so_code", "customer_name", "device_sn", "change_type", "part_number", "part_sn", "part_name", "original_code", "remark", "operator", "is_5000_company"}, []string{"create_time", "so_code"}},
 }

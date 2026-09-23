@@ -116,6 +116,50 @@ describe('operations workbench', () => {
     await waitFor(() => expect(fetchMock.mock.calls.some(([url]) => String(url).includes('company5000=yes'))).toBe(true));
   });
 
+  it('filters repair records by non-critical material serial', async () => {
+    const fetchMock = mockFetch();
+    vi.stubGlobal('fetch', fetchMock);
+    render(<App />);
+    await screen.findByRole('heading', { name: '维修故障记录' });
+    fireEvent.change(screen.getByLabelText('非关键件物料序号'), { target: { value: '37001343' } });
+    fireEvent.click(screen.getByRole('button', { name: /筛选/ }));
+    await waitFor(() => expect(fetchMock.mock.calls.some(([url]) => String(url).includes('nonCriticalMaterialSerial=37001343'))).toBe(true));
+  });
+
+  it('exports every field of the current repair result', async () => {
+    const baseFetch = mockFetch();
+    const fetchMock = vi.fn(async (url, options) => {
+      if (String(url).startsWith('/api/faults?') && String(url).includes('pageSize=100')) {
+        return { ok: true, json: async () => ({ items: [{ id: 'r1', raw: { PCODE: 'PC-1', RECORD01REPAIRM: '37001343', CUSTOM_FIELD: '额外' } }], total: 1 }) };
+      }
+      return baseFetch(url, options);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const blobs = [];
+    const createObjectURL = vi.spyOn(URL, 'createObjectURL').mockImplementation(blob => { blobs.push(blob); return 'blob:repairs'; });
+    const revokeObjectURL = vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {});
+    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+    render(<App />);
+    await screen.findByRole('heading', { name: '维修故障记录' });
+    fireEvent.change(screen.getByLabelText('非关键件物料序号'), { target: { value: '37001343' } });
+    fireEvent.click(screen.getByRole('button', { name: /筛选/ }));
+    await waitFor(() => expect(fetchMock.mock.calls.some(([url]) => String(url).includes('nonCriticalMaterialSerial=37001343') && String(url).includes('pageSize=20'))).toBe(true));
+    fireEvent.click(screen.getByRole('button', { name: /导出数据/ }));
+    await waitFor(() => expect(blobs.length).toBe(1));
+    const bytes = new Uint8Array(await blobs[0].arrayBuffer());
+    expect([...bytes.slice(0, 3)]).toEqual([0xef, 0xbb, 0xbf]);
+    const csv = new TextDecoder().decode(bytes);
+    expect(csv).toContain('非关键件物料序号');
+    expect(csv).toContain('37001343');
+    expect(csv).toContain('CUSTOM_FIELD');
+    expect(csv).toContain('额外');
+    expect(fetchMock.mock.calls.some(([url]) => String(url).includes('/api/faults?') && String(url).includes('pageSize=100') && String(url).includes('nonCriticalMaterialSerial=37001343'))).toBe(true);
+    expect(click).toHaveBeenCalled();
+    createObjectURL.mockRestore();
+    revokeObjectURL.mockRestore();
+    click.mockRestore();
+  });
+
   it('offers searchable model options from the order model list', async () => {
     vi.stubGlobal('fetch', mockFetch());
     render(<App />);

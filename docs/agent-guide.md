@@ -60,7 +60,7 @@ GET /api/orders?productionOrder=PO001&source=SG&page=1&pageSize=20
 GET /api/orders/detail?id=SG:PO001
 ```
 
-维修故障列表允许叠加 `dateFrom`、`dateTo`、`station`、`timeField` 和 `company5000`。`company5000=yes` 表示维修记录的生产订单号存在于销售订单看板，`company5000=no` 表示不存在。按 SN 的批量 POST 接口单次不应超过 10,000 个 SN。故障列表逐条返回，不按序列号去重；需要去重时应在结果层明确使用的键和规则。
+维修故障列表允许叠加 `dateFrom`、`dateTo`、`station`、`timeField`、`company5000` 和 `nonCriticalMaterialSerial`。`company5000=yes` 表示维修记录的生产订单号存在于销售订单看板，`company5000=no` 表示不存在。`nonCriticalMaterialSerial` 精确匹配非关键件物料序号 `RECORD01REPAIRM`，多个值用逗号分隔。按 SN 的批量 POST 接口单次不应超过 10,000 个 SN。故障列表逐条返回，不按序列号去重；需要去重时应在结果层明确使用的键和规则。
 
 ### 工位、BOM 与序列号绑定
 
@@ -71,7 +71,7 @@ GET /api/views/ZSGV_ZPP_SERNOLIST?headSn=HEAD001
 GET /api/views/ZSGV_ZPP_SERNOLIST?itemSn=ITEM001
 ```
 
-`Z_V_ZMES_T_001` 用于工位过程记录，`ZSGV_ZSD124` 用于 BOM 过账，`ZSGV_ZPP_SERNOLIST` 用于机头/部件序列号映射。BOM、工位和 SCS 视图支持 `GET /api/views/{viewID}/stream` 的 TSV 流式输出，适用于服务端批量计算，不适用于浏览器端无边界加载。
+`Z_V_ZMES_T_001` 用于工位过程记录，`dateFrom` / `dateTo` 按计划开始时间 `GSTRS` 筛选，兼容 `YYYY-MM-DD` 和 `YYYYMMDD`。`ZSGV_ZSD124` 用于 BOM 过账，`ZSGV_ZPP_SERNOLIST` 用于机头/部件序列号映射。BOM、工位和 SCS 视图支持 `GET /api/views/{viewID}/stream` 的 TSV 流式输出，适用于服务端批量计算，不适用于浏览器端无边界加载。
 
 ### SCS 数据
 

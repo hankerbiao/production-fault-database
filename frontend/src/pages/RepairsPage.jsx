@@ -13,11 +13,12 @@ import { ModelSelect } from '../components/ModelSelect';
 import { Pagination } from '../components/Pagination';
 import { Stat, Stats } from '../components/Stats';
 import { downloadCsv } from '../utils/export';
+import { repairExportColumns } from '../utils/repairExport';
 import { formatBusinessDate, formatDate, formatDateRange, formatNumber } from '../utils/formatters';
 
-const initialFilters = { keyword: '', hostBarcode: '', defectResponsibility: '', ngStation: '', salesOrder: '', productionOrder: '', productModel: '', dateFrom: '', dateTo: '', timeField: 'planned', company5000: '' };
+const initialFilters = { keyword: '', hostBarcode: '', nonCriticalMaterialSerial: '', defectResponsibility: '', ngStation: '', salesOrder: '', productionOrder: '', productModel: '', dateFrom: '', dateTo: '', timeField: 'planned', company5000: '' };
 const initialStats = { total: 0, withError: 0, withRepairPerson: 0, salesOrders: 0, productionOrders: 0, hostBarcodes: 0, missingSalesOrder: 0, missingProductionOrder: 0, dataStartDate: '', dataEndDate: '', latestSyncedAt: '' };
-const filterLabels = { productionOrder: '生产订单', salesOrder: '销售订单', productModel: '机型', dateFrom: '开始日期', dateTo: '结束日期', timeField: '时间字段', keyword: '关键字', hostBarcode: '主机条码', ngStation: 'NG工站', defectResponsibility: '责任分类', company5000: '5000公司' };
+const filterLabels = { productionOrder: '生产订单', salesOrder: '销售订单', nonCriticalMaterialSerial: '非关键件物料序号', productModel: '机型', dateFrom: '开始日期', dateTo: '结束日期', timeField: '时间字段', keyword: '关键字', hostBarcode: '主机条码', ngStation: 'NG工站', defectResponsibility: '责任分类', company5000: '5000公司' };
 
 export function RepairsPage({ modelOptions = [], setConnected, setRefreshing, refreshToken = 0 }) {
   const resource = usePagedResource({ loadPage: useCallback((filters, page, size) => listFaults(filters, page, size), []), loadStats: useCallback(filters => faultStats(filters), []), initialFilters, initialStats, refreshToken, onConnectionChange: setConnected, onRefreshing: setRefreshing });
@@ -32,14 +33,14 @@ export function RepairsPage({ modelOptions = [], setConnected, setRefreshing, re
     { key: 'hostBarcode', label: '主机条码', render: item => <code>{item.hostBarcode || '-'}</code> },
     { key: 'salesOrder', label: '销售订单', render: item => <code>{item.salesOrder || '-'}</code> },
     { key: 'productionOrder', label: '生产订单', render: item => <code>{item.productionOrder || '-'}</code> },
-    { key: 'plannedStartDate', label: '计划生产时间', render: item => formatBusinessDate(item.plannedStartDate), exportValue: item => formatBusinessDate(item.plannedStartDate) },
+    { key: 'plannedStartDate', label: '计划生产时间', render: item => formatBusinessDate(item.plannedStartDate) },
     { key: 'materialCode', label: '物料号', render: item => <code>{item.materialCode || '-'}</code> },
     { key: 'materialDescription', label: '物料描述', render: item => item.materialDescription || '-' },
-    { key: 'faultDescription', label: '故障描述', render: item => item.faultDescription || item.errorDescription || item.reviewProblem || '-', exportValue: item => item.faultDescription || item.errorDescription || item.reviewProblem || '' },
+    { key: 'faultDescription', label: '故障描述', render: item => item.faultDescription || item.errorDescription || item.reviewProblem || '-' },
     { key: 'ngStation', label: 'NG工站', render: item => item.ngStation || '-' },
-    { key: 'repairAt', label: '维修日期时间', render: item => formatDate(item.repairAt), exportValue: item => formatDate(item.repairAt) },
+    { key: 'repairAt', label: '维修日期时间', render: item => formatDate(item.repairAt) },
   ];
-  const exportData = async () => { setExporting(true); try { await downloadCsv({ endpoint: '/api/faults', filters: resource.filters, filename: '维修故障明细.csv', columns: columns.map(column => ({ key: column.key, label: column.label, value: column.exportValue })) }); } finally { setExporting(false); } };
+  const exportData = async () => { setExporting(true); try { await downloadCsv({ endpoint: '/api/faults', filters: resource.appliedFilters, filename: '维修故障明细.csv', resolveColumns: repairExportColumns }); } finally { setExporting(false); } };
   const stats = resource.stats;
   return <main>
     <Hero title="维修故障记录" detail="追踪错误信息、维修措施与订单关联。" meta={[{ label: '数据来源', value: 'SAP HANA 视图 ZSGV_ZZT_WLJL' }, { label: '数据区间', value: formatDateRange(stats.dataStartDate, stats.dataEndDate) }, { label: '最新同步', value: formatDate(stats.latestSyncedAt) }]} />
@@ -49,6 +50,7 @@ export function RepairsPage({ modelOptions = [], setConnected, setRefreshing, re
         <div className="filter-form-body">
           <label className="filter-field"><span>生产订单</span><input className="filter-text" aria-label="生产订单" placeholder="AUFNR" value={resource.filters.productionOrder} onChange={event => update('productionOrder', event.target.value)} /></label>
           <label className="filter-field"><span>销售订单</span><input className="filter-text" aria-label="销售订单" placeholder="VBELN" value={resource.filters.salesOrder} onChange={event => update('salesOrder', event.target.value)} /></label>
+          <label className="filter-field"><span>非关键件物料序号</span><input className="filter-text" aria-label="非关键件物料序号" placeholder="RECORD01REPAIRM" value={resource.filters.nonCriticalMaterialSerial} onChange={event => update('nonCriticalMaterialSerial', event.target.value)} /></label>
           <div className="filter-field"><span>机型</span><ModelSelect options={modelOptions} value={resource.filters.productModel} onChange={value => update('productModel', value)} placeholder="机型 / ZJXMC" /></div>
           <div className="filter-field"><span>时间字段</span><div className="time-field-selector" role="group" aria-label="筛选时间字段"><button className={resource.filters.timeField === 'planned' ? 'active' : ''} type="button" onClick={() => update('timeField', 'planned')}>计划生产时间</button><button className={resource.filters.timeField === 'repair' ? 'active' : ''} type="button" onClick={() => update('timeField', 'repair')}>维修时间</button></div></div>
           <div className="filter-field filter-field-compact"><span>5000 公司</span><div className="company-filter-selector" role="group" aria-label="是否为5000公司"><button className={resource.filters.company5000 === '' ? 'active' : ''} type="button" onClick={() => update('company5000', '')}>全部</button><button className={resource.filters.company5000 === 'yes' ? 'active' : ''} type="button" onClick={() => update('company5000', 'yes')}>是</button><button className={resource.filters.company5000 === 'no' ? 'active' : ''} type="button" onClick={() => update('company5000', 'no')}>否</button></div></div>

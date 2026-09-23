@@ -1,7 +1,7 @@
 import { fetchPage } from '../api/client';
 import { createCsv } from './formatters';
 
-export async function downloadCsv({ endpoint, filters, filename, columns, pageSize = 100 }) {
+export async function downloadCsv({ endpoint, filters, filename, columns, resolveColumns, pageSize = 100 }) {
   let page = 1;
   let total = Infinity;
   const rows = [];
@@ -13,7 +13,7 @@ export async function downloadCsv({ endpoint, filters, filename, columns, pageSi
     if (items.length === 0 || items.length < pageSize) break;
     page += 1;
   }
-  const csv = createCsv(rows, columns);
+  const csv = createCsv(rows, resolveColumns ? resolveColumns(rows) : columns);
   const blob = new Blob([`\uFEFF${csv}`], { type: 'text/csv;charset=utf-8' });
   const url = URL.createObjectURL(blob);
   const link = document.createElement('a');

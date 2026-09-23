@@ -96,6 +96,36 @@ func repairPlannedDateRangeFilter(dateFrom, dateTo string) bson.M {
 	}}
 }
 
+// stationIndexedPlannedFilter keeps model and planned-date predicates in one
+// indexable branch. Station documents store the model on MAKTX_TH and GSTRS as
+// YYYYMMDD; they do not carry GSTRS_DATE, PRODH, or CPXH.
+func stationIndexedPlannedFilter(model, dateFrom, dateTo string) bson.M {
+	model = strings.TrimSpace(model)
+	isoFrom, isoTo := isoDate(dateFrom), isoDate(dateTo)
+	compactFrom, compactTo := strings.ReplaceAll(isoFrom, "-", ""), strings.ReplaceAll(isoTo, "-", "")
+	bounds := func(from, to string) bson.M {
+		result := bson.M{}
+		if from != "" {
+			result["$gte"] = from
+		}
+		if to != "" {
+			result["$lte"] = to
+		}
+		return result
+	}
+	hasDate := compactFrom != "" || compactTo != ""
+	if !hasDate {
+		return bson.M{"MAKTX_TH": model}
+	}
+	compact := bson.M{"GSTRS": bounds(compactFrom, compactTo)}
+	iso := bson.M{"GSTRS": bounds(isoFrom, isoTo)}
+	if model != "" {
+		compact["MAKTX_TH"] = model
+		iso["MAKTX_TH"] = model
+	}
+	return bson.M{"$or": bson.A{compact, iso}}
+}
+
 // plannedDateRangeFilter uses the normalized date first and keeps exact-format
 // legacy branches for BOM rows that predate GSTRS_DATE.
 func plannedDateRangeFilter(dateFrom, dateTo string) bson.M {

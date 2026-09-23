@@ -113,7 +113,7 @@ func (f *fakeStore) SyncRuns(context.Context, int) ([]store.SyncRun, error) { re
 func (f *fakeStore) FaultSNs(context.Context, store.Filters) ([]store.FaultSN, error) {
 	return nil, f.err
 }
-func (f *fakeStore) FaultRowsBySNS(context.Context, []string, string, string, string) ([]bson.M, error) {
+func (f *fakeStore) FaultRowsBySNS(context.Context, []string, string, string, string, string) ([]bson.M, error) {
 	return nil, f.err
 }
 func (f *fakeStore) ViewList(_ context.Context, viewID string, filters store.ViewFilters, page, pageSize int, preview bool) (store.ViewListResult, error) {

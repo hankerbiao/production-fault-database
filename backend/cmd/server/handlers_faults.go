@@ -44,10 +44,11 @@ func (s *server) faultLookup(w http.ResponseWriter, r *http.Request) {
 
 func (s *server) faultRowsBySNS(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		SNS      []string `json:"sns"`
-		DateFrom string   `json:"dateFrom"`
-		DateTo   string   `json:"dateTo"`
-		Station  string   `json:"station"`
+		SNS       []string `json:"sns"`
+		DateFrom  string   `json:"dateFrom"`
+		DateTo    string   `json:"dateTo"`
+		Station   string   `json:"station"`
+		TimeField string   `json:"timeField"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON body"})
@@ -57,7 +58,7 @@ func (s *server) faultRowsBySNS(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusRequestEntityTooLarge, map[string]string{"error": "too many SN values"})
 		return
 	}
-	items, err := s.store.FaultRowsBySNS(r.Context(), body.SNS, body.DateFrom, body.DateTo, body.Station)
+	items, err := s.store.FaultRowsBySNS(r.Context(), body.SNS, body.DateFrom, body.DateTo, body.Station, body.TimeField)
 	if err != nil {
 		writeStoreError(w, err)
 		return

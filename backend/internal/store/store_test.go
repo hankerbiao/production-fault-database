@@ -174,14 +174,17 @@ func TestStationViewDateFilterUsesPlannedStartByDefault(t *testing.T) {
 	filter := viewFilter("Z_V_ZMES_T_001", filters, nil, dateField)
 	conditions := filter["$and"].(primitive.A)
 	branches := conditions[0].(bson.M)["$or"].(primitive.A)
-	compact := branches[2].(bson.M)["GSTRS"].(bson.M)
+	compact := branches[0].(bson.M)["GSTRS"].(bson.M)
 	if compact["$gte"] != "20260501" || compact["$lte"] != "20260531" {
 		t.Fatalf("planned range=%v", compact)
+	}
+	if _, ok := branches[0].(bson.M)["GSTRS_DATE"]; ok {
+		t.Fatalf("station date filter should not scan the unindexed GSTRS_DATE branch")
 	}
 }
 
 func TestStationViewFilterUsesPlannedStartWhenRequested(t *testing.T) {
-	filters := ViewFilters{DateFrom: "2026-05-01", DateTo: "2026-05-31", TimeField: "planned"}
+	filters := ViewFilters{DateFrom: "2026-05-01", DateTo: "2026-05-31", TimeField: "planned", ProductModel: "6210 C21"}
 	dateField := viewDateField("Z_V_ZMES_T_001", filters, "ACTUAL_START_TIME")
 	if dateField != "GSTRS" {
 		t.Fatalf("date field=%q, want GSTRS", dateField)
@@ -189,8 +192,13 @@ func TestStationViewFilterUsesPlannedStartWhenRequested(t *testing.T) {
 	filter := viewFilter("Z_V_ZMES_T_001", filters, nil, dateField)
 	conditions := filter["$and"].(primitive.A)
 	branches := conditions[0].(bson.M)["$or"].(primitive.A)
-	if _, ok := branches[0].(bson.M)["GSTRS_DATE"]; !ok {
-		t.Fatalf("planned date filter missing normalized branch=%v", branches[0])
+	compact := branches[0].(bson.M)
+	if compact["MAKTX_TH"] != "6210 C21" {
+		t.Fatalf("model predicate=%v", compact)
+	}
+	rangeFilter := compact["GSTRS"].(bson.M)
+	if rangeFilter["$gte"] != "20260501" || rangeFilter["$lte"] != "20260531" {
+		t.Fatalf("planned range=%v", rangeFilter)
 	}
 }
 

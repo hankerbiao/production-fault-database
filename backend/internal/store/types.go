@@ -255,7 +255,7 @@ const companyOrderCacheTTL = 60 * time.Second
 // the complete source document separately.
 var repairListProjection = bson.M{
 	"_source_key": 1, "PCODE": 1, "ZMCOD1": 1, "ERROR_CODE": 1, "ZGZMS": 1, "ERROR_MSG": 1, "RPDESC": 1, "ZZRFL": 1,
-	"ZWXDT": 1, "ZDATE_WX": 1, "ZDATE": 1, "ZTIME": 1, "ZUSER": 1, "U_FIX": 1, "VBELN": 1, "AUFNR": 1, "MATNR": 1, "MAKTX": 1, "ZNGGZ": 1, "RETEST_STATION": 1, "FIX_REMARKS": 1, "_synced_at": 1,
+	"ZWXDT": 1, "ZDATE_WX": 1, "ZDATE": 1, "ZTIME": 1, "ZUSER": 1, "U_FIX": 1, "VBELN": 1, "AUFNR": 1, "GSTRS": 1, "MATNR": 1, "MAKTX": 1, "ZNGGZ": 1, "RETEST_STATION": 1, "FIX_REMARKS": 1, "_synced_at": 1,
 }
 
 var orderListProjection = bson.M{

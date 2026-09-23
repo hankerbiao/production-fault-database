@@ -89,6 +89,10 @@ func ensureCoreIndexes(ctx context.Context, db *mongo.Database, repairCollection
 		{Keys: bson.D{{Key: "AUFNR_1", Value: 1}, {Key: "GSTRS_DATE", Value: 1}}},
 		{Keys: bson.D{{Key: "VBELN_EX", Value: 1}, {Key: "GSTRS_DATE", Value: 1}}},
 	})
+	create("station_records_sap", "station", []mongo.IndexModel{
+		{Keys: bson.D{{Key: "MAKTX_TH", Value: 1}, {Key: "GSTRS", Value: 1}}, Options: options.Index().SetName("station_model_gstrs")},
+		{Keys: bson.D{{Key: "GSTRS", Value: 1}}, Options: options.Index().SetName("station_gstrs")},
+	})
 	return errors.Join(errs...)
 }
 
@@ -240,7 +244,15 @@ func viewFilter(viewID string, f ViewFilters, searchFields []string, dateField s
 		if f.DateTo != "" {
 			to = f.DateTo
 		}
-		if dateField == "BUDAT_MKPF" {
+		if viewID == "Z_V_ZMES_T_001" && (dateField == "GSTRS" || dateField == "GSTRS_DATE") {
+			// Station rows keep GSTRS as YYYYMMDD and the model on MAKTX_TH.
+			// The generic three-way date $or cannot use that compound index.
+			if from != "" || to != "" || strings.TrimSpace(f.ProductModel) != "" {
+				conditions = append(conditions, stationIndexedPlannedFilter(f.ProductModel, from, to))
+			}
+			from, to = "", ""
+			f.ProductModel = ""
+		} else if dateField == "BUDAT_MKPF" {
 			from, to = strings.ReplaceAll(from, "-", ""), strings.ReplaceAll(to, "-", "")
 		} else if dateField == "GSTRS" || dateField == "GSTRS_DATE" {
 			if from != "" || to != "" {

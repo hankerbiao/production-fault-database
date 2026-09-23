@@ -119,7 +119,8 @@ func (s *Store) FaultSNs(ctx context.Context, f Filters) ([]FaultSN, error) {
 
 // FaultRowsBySNS returns the projected repair rows needed by station RTY.
 // A POST body avoids the URL-size limit of the generic list endpoint.
-func (s *Store) FaultRowsBySNS(ctx context.Context, sns []string, dateFrom, dateTo, station string) ([]bson.M, error) {
+// timeField "planned" filters GSTRS; the default keeps the repair date ZDATE_WX.
+func (s *Store) FaultRowsBySNS(ctx context.Context, sns []string, dateFrom, dateTo, station, timeField string) ([]bson.M, error) {
 	values := make([]string, 0, len(sns))
 	seen := make(map[string]struct{}, len(sns))
 	for _, value := range sns {
@@ -136,21 +137,25 @@ func (s *Store) FaultRowsBySNS(ctx context.Context, sns []string, dateFrom, date
 	if len(values) == 0 {
 		return []bson.M{}, nil
 	}
-	filter := bson.M{"PCODE": bson.M{"$in": values}}
-	dateBounds := bson.M{}
-	if dateFrom != "" {
-		dateBounds["$gte"] = strings.ReplaceAll(dateFrom, "-", "")
-	}
-	if dateTo != "" {
-		dateBounds["$lte"] = strings.ReplaceAll(dateTo, "-", "")
-	}
-	if len(dateBounds) > 0 {
-		filter["ZDATE_WX"] = dateBounds
+	conditions := bson.A{bson.M{"PCODE": bson.M{"$in": values}}}
+	if strings.EqualFold(strings.TrimSpace(timeField), "planned") {
+		if dateFrom != "" || dateTo != "" {
+			conditions = append(conditions, repairPlannedDateRangeFilter(dateFrom, dateTo))
+		}
+	} else if dateFrom != "" || dateTo != "" {
+		dateBounds := bson.M{}
+		if dateFrom != "" {
+			dateBounds["$gte"] = strings.ReplaceAll(dateFrom, "-", "")
+		}
+		if dateTo != "" {
+			dateBounds["$lte"] = strings.ReplaceAll(dateTo, "-", "")
+		}
+		conditions = append(conditions, bson.M{"ZDATE_WX": dateBounds})
 	}
 	if strings.TrimSpace(station) != "" {
-		filter["ZNGGZ"] = strings.TrimSpace(station)
+		conditions = append(conditions, bson.M{"ZNGGZ": strings.TrimSpace(station)})
 	}
-	cur, err := s.repairs.Find(ctx, filter, options.Find().SetProjection(repairListProjection).SetLimit(MaxBulkQueryRows).SetBatchSize(10000))
+	cur, err := s.repairs.Find(ctx, bson.M{"$and": conditions}, options.Find().SetProjection(repairListProjection).SetLimit(MaxBulkQueryRows).SetBatchSize(10000))
 	if err != nil {
 		return nil, err
 	}

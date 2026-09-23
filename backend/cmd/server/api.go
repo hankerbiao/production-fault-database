@@ -19,7 +19,7 @@ type storeAPI interface {
 	SyncRuns(context.Context, int) ([]store.SyncRun, error)
 	List(context.Context, store.Filters, int, int) (store.ListResult, error)
 	FaultSNs(context.Context, store.Filters) ([]store.FaultSN, error)
-	FaultRowsBySNS(context.Context, []string, string, string, string) ([]bson.M, error)
+	FaultRowsBySNS(context.Context, []string, string, string, string, string) ([]bson.M, error)
 	FaultDetail(context.Context, string) (store.FaultDetail, error)
 	Stats(context.Context, store.Filters) (store.StatsResult, error)
 	Orders(context.Context, store.OrderFilters, int, int) (store.OrderListResult, error)

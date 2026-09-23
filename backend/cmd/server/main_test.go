@@ -371,8 +371,12 @@ func TestFilterHelpers(t *testing.T) {
 	if filters.SNS != "SN1,SN2" || filters.ProductionOrders != "00012,13" || filters.DateFrom != "2026-01-01" || filters.Station != "ST-1" || filters.TimeField != "planned" || filters.Company5000 != "yes" {
 		t.Fatalf("extended filters=%+v", filters)
 	}
-	if !viewFilters(url.Values{"missingSalesOrder": {" true "}}).MissingSalesOrder {
+	parsedViewFilters := viewFilters(url.Values{"missingSalesOrder": {" true "}, "orderType": {" ZP01 "}})
+	if !parsedViewFilters.MissingSalesOrder {
 		t.Fatal("missingSalesOrder was not parsed")
+	}
+	if parsedViewFilters.OrderType != "ZP01" {
+		t.Fatalf("orderType=%q", parsedViewFilters.OrderType)
 	}
 }
 

@@ -312,6 +312,7 @@ func viewFilter(viewID string, f ViewFilters, searchFields []string, dateField s
 	case "ZSGV_ZSD124":
 		addExactCompat("AUFNR_1", f.ProductionOrder, true)
 		addExactCompat("VBELN_EX", f.SalesOrder, true)
+		addExactCompat("AUART", f.OrderType, false)
 		addExactCompat("MATNR", f.ProductModel, false)
 		if f.MissingSalesOrder {
 			conditions = append(conditions, bson.M{"$expr": emptyViewField("VBELN_EX")})

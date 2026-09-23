@@ -190,6 +190,18 @@ func TestBOMViewFilterUsesPlannedStartDate(t *testing.T) {
 	}
 }
 
+func TestBOMViewFilterUsesOrderType(t *testing.T) {
+	filter := viewFilter("ZSGV_ZSD124", ViewFilters{OrderType: "ZP01"}, nil, "GSTRS")
+	conditions := filter["$and"].(primitive.A)
+	if len(conditions) != 1 {
+		t.Fatalf("filter=%v", filter)
+	}
+	condition, ok := conditions[0].(bson.M)["AUART"].(bson.M)
+	if !ok || condition["$regex"] != "^ZP01$" {
+		t.Fatalf("order type condition=%v", conditions[0])
+	}
+}
+
 func TestStatsUseSingleAggregationPipeline(t *testing.T) {
 	for name, pipeline := range map[string]mongo.Pipeline{
 		"repairs": repairStatsPipeline(repairFilter(Filters{HostBarcode: "PC-1"}), "repair"),
@@ -262,6 +274,9 @@ func TestBOMStreamIncludesPlannedStart(t *testing.T) {
 	joined := strings.Join(bomStreamFields, ",")
 	if !strings.Contains(joined, "GSTRS") {
 		t.Fatalf("BOM stream missing GSTRS: %s", joined)
+	}
+	if !strings.Contains(joined, "AUART") {
+		t.Fatalf("BOM stream missing AUART: %s", joined)
 	}
 }
 

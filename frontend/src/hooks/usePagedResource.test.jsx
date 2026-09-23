@@ -19,4 +19,19 @@ describe('usePagedResource pagination', () => {
     expect(loadStats).toHaveBeenCalledTimes(1);
     await waitFor(() => expect(result.current.items).toEqual([{ page: 2 }]));
   });
+
+  it('keeps draft filters separate until search is submitted', async () => {
+    const loadPage = vi.fn(async (filters) => ({ items: [], total: filters.keyword ? 1 : 0 }));
+    const loadStats = vi.fn(async () => ({ total: 0 }));
+    const { result } = renderHook(() => usePagedResource({ loadPage, loadStats, initialFilters: { keyword: '' } }));
+
+    await waitFor(() => expect(loadPage).toHaveBeenCalledTimes(1));
+    act(() => result.current.setFilters({ keyword: 'AUFNR-1' }));
+    expect(result.current.appliedFilters).toEqual({ keyword: '' });
+    expect(loadPage).toHaveBeenCalledTimes(1);
+
+    await act(async () => { await result.current.applyFilters({ keyword: 'AUFNR-1' }); });
+    expect(result.current.appliedFilters).toEqual({ keyword: 'AUFNR-1' });
+    expect(loadPage).toHaveBeenLastCalledWith({ keyword: 'AUFNR-1' }, 1, 20);
+  });
 });

@@ -22,7 +22,10 @@ export const viewConfigs = {
         tone: "red",
       },
     ],
-    advancedFields: [{ key: "materialCode", placeholder: "物料号 / Material" }],
+    advancedFields: [
+      { key: "orderType", placeholder: "订单类型 / AUART" },
+      { key: "materialCode", placeholder: "物料号 / Material" },
+    ],
     columns: [
       "MBLNR",
       "MJAHR",
@@ -32,6 +35,7 @@ export const viewConfigs = {
       "BWART",
       "MENGE_A",
       "AUFNR_1",
+      "AUART",
       "VBELN_EX",
       "GSTRS",
       "GSTRS_DATE",
@@ -46,6 +50,7 @@ export const viewConfigs = {
       BWART: "移动类型",
       MENGE_A: "数量",
       AUFNR_1: "生产订单",
+      AUART: "订单类型",
       VBELN_EX: "销售订单",
       GSTRS: "计划开始时间（源值）",
       GSTRS_DATE: "计划开始日期（标准化）",

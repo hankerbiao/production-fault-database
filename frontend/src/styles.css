@@ -35,6 +35,32 @@ th.column-judgment,td.column-judgment{width:78px;min-width:78px;max-width:78px;p
 .company-filter-selector button:last-child{border-right:0}
 .company-filter-selector button.active{background:var(--amber-soft);color:var(--amber);font-weight:650}
 @media(max-width:720px){.company-filter-selector{grid-column:1/-1}.company-filter-selector span{padding-left:10px;padding-right:10px}}
+
+.filter-form{display:block;margin-bottom:14px;padding:14px;background:var(--surface);border:1px solid var(--line);border-radius:8px;box-shadow:0 2px 6px rgba(22,33,43,.035)}
+.filter-form-body{display:grid;grid-template-columns:repeat(12,minmax(0,1fr));gap:11px 12px}
+.filter-field{grid-column:span 3;display:grid;align-content:start;gap:6px;min-width:0}
+.filter-field>span{font-size:10px;line-height:1.2;color:var(--ink-muted);font-weight:650}
+.filter-field>.filter-text,.filter-field>select,.filter-field>.model-select,.filter-field>.customer-select,.filter-field>.date-range-picker,.filter-field>.time-field-selector,.filter-field>.company-filter-selector{grid-column:auto;width:100%;min-width:0}
+.filter-field>.filter-text,.filter-field>select{height:40px}
+.filter-field .model-select-input,.filter-field .date-range-trigger,.filter-field .time-field-selector,.filter-field .company-filter-selector{height:40px}
+.filter-field-date{grid-column:span 3}
+.filter-field-compact{grid-column:span 2}
+.filter-field-compact .company-filter-selector{grid-column:auto}
+.filter-actions{display:flex;align-items:center;gap:9px;margin-top:13px;padding-top:13px;border-top:1px solid var(--line)}
+.filter-actions .filter-btn{min-width:108px;height:40px}
+.filter-actions .advanced-btn{min-width:150px;height:40px}
+.filter-actions .reset-btn{height:40px;padding:0 9px}
+.filter-actions .export-btn{height:40px;min-width:126px;margin-left:auto}
+.advanced-filters{display:block;grid-column:auto;margin-top:12px;padding:12px;background:var(--surface-muted);border:1px dashed var(--line-strong);border-radius:7px}
+.advanced-filters-head{display:flex;align-items:baseline;gap:9px;margin-bottom:10px}
+.advanced-filters-head strong{font-size:11px}
+.advanced-filters-head span{font-size:10px;color:var(--ink-muted)}
+.advanced-filters-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:9px}
+.advanced-filters-grid .filter-text,.advanced-filters-grid select,.advanced-filters-grid .filter-checkbox{width:100%;min-width:0;grid-column:auto}
+.advanced-filters-grid .filter-checkbox{height:40px}
+
+@media(max-width:1080px){.filter-form-body{grid-template-columns:repeat(8,minmax(0,1fr))}.filter-field,.filter-field-date{grid-column:span 2}.filter-field-compact{grid-column:span 2}.advanced-filters-grid{grid-template-columns:repeat(3,minmax(0,1fr))}}
+@media(max-width:720px){.filter-form{padding:11px}.filter-form-body{grid-template-columns:repeat(2,minmax(0,1fr));gap:10px 8px}.filter-field,.filter-field-date,.filter-field-compact{grid-column:span 1}.filter-field:nth-child(odd):last-child{grid-column:1/-1}.filter-field:nth-child(4),.filter-field-date{grid-column:1/-1}.filter-actions{flex-wrap:wrap;gap:7px}.filter-actions .filter-btn,.filter-actions .advanced-btn{flex:1;min-width:0}.filter-actions .reset-btn{margin-left:0}.filter-actions .export-btn{width:100%;margin-left:0}.advanced-filters-grid{grid-template-columns:1fr}.advanced-filters-head{display:grid;gap:3px}.filter-field .time-field-selector button{font-size:11px}.filter-field-compact{grid-column:1/-1}}
 .date-range-months{padding:11px 0 12px;border-bottom:1px solid var(--line)}
 .date-range-months-head{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:9px}
 .date-range-months-head strong{font-size:11px;color:var(--ink)}

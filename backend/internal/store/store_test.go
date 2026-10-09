@@ -319,6 +319,9 @@ func TestBOMStreamIncludesPlannedStart(t *testing.T) {
 	if !strings.Contains(joined, "AUART") {
 		t.Fatalf("BOM stream missing AUART: %s", joined)
 	}
+	if !strings.Contains(joined, "MAKTX") {
+		t.Fatalf("BOM stream missing MAKTX: %s", joined)
+	}
 }
 
 func TestStationStreamIncludesPlannedStart(t *testing.T) {
@@ -497,6 +500,24 @@ func TestSCSDOAFilterUsesSCSFields(t *testing.T) {
 	}
 	if strings.Contains(encoded, "PCODE") {
 		t.Fatalf("unexpected SCS filter: %+v", filter)
+	}
+}
+
+func TestSCSChangeFilterUsesCompanyFlag(t *testing.T) {
+	filter := viewFilter("SCS_CHANGE", ViewFilters{Company5000: "true", SN: "SN-1"}, nil, "create_time")
+	raw, ok := filter["$and"].(bson.A)
+	if !ok {
+		t.Fatalf("expected conjunction filter: %+v", filter)
+	}
+	encoded := fmt.Sprint(raw)
+	for _, expected := range []string{"device_sn", "is_5000_company", "true"} {
+		if !strings.Contains(encoded, expected) {
+			t.Fatalf("missing %s in SCS change filter: %+v", expected, filter)
+		}
+	}
+	withoutCompany := viewFilter("SCS_CHANGE", ViewFilters{SN: "SN-1"}, nil, "create_time")
+	if strings.Contains(fmt.Sprint(withoutCompany), "is_5000_company") {
+		t.Fatalf("company flag should stay optional: %+v", withoutCompany)
 	}
 }
 

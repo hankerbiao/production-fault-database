@@ -93,6 +93,9 @@ func ensureCoreIndexes(ctx context.Context, db *mongo.Database, repairCollection
 		{Keys: bson.D{{Key: "MAKTX_TH", Value: 1}, {Key: "GSTRS", Value: 1}}, Options: options.Index().SetName("station_model_gstrs")},
 		{Keys: bson.D{{Key: "GSTRS", Value: 1}}, Options: options.Index().SetName("station_gstrs")},
 	})
+	create("scs_change_records", "scs_change", []mongo.IndexModel{
+		{Keys: bson.D{{Key: "is_5000_company", Value: 1}, {Key: "create_time", Value: -1}}, Options: options.Index().SetName("scs_change_company_time")},
+	})
 	return errors.Join(errs...)
 }
 
@@ -305,6 +308,9 @@ func viewFilter(viewID string, f ViewFilters, searchFields []string, dateField s
 		addExact("operator", f.Operator)
 		addExact("need_return", f.NeedReturn)
 		addExact("is_revoked", f.Revoked)
+		if strings.TrimSpace(f.Company5000) != "" {
+			conditions = append(conditions, bson.M{"is_5000_company": parseBoolFilter(f.Company5000)})
+		}
 	}
 	addExactCompat := func(field, value string, zeroCompat bool) {
 		if strings.TrimSpace(value) != "" {

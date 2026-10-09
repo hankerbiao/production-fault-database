@@ -143,7 +143,7 @@ const MaxBulkQueryRows = 10000
 const MaxOrderQueryRows = MaxBulkQueryRows
 const MaxViewQueryRows = MaxBulkQueryRows
 
-var bomStreamFields = []string{"id", "AUFNR_1", "AUART", "VBELN_EX", "GSTRS", "GSTRS_DATE", "MENGE_A", "MATNR", "LGORT", "BUDAT_MKPF"}
+var bomStreamFields = []string{"id", "AUFNR_1", "AUART", "VBELN_EX", "GSTRS", "GSTRS_DATE", "MENGE_A", "MATNR", "LGORT", "BUDAT_MKPF", "MAKTX"}
 var stationStreamFields = []string{"id", "PCODE", "AUFNR", "KDAUF", "GSTRS", "SPEC", "SPEC_DESC", "OPERATION", "ACTUAL_START_TIME", "ACTUAL_END_TIME", "MAKTX_TH", "LGORT", "LINE_CODE"}
 var tsvSanitizer = strings.NewReplacer("\t", " ", "\r", " ", "\n", " ")
 
@@ -235,7 +235,7 @@ var documentedViews = map[string]struct {
 var viewAllProjections = map[string]bson.M{
 	"ZSGV_ZSD124": {
 		"_id": 1, "_source_key": 1, "AUFNR_1": 1, "AUART": 1, "VBELN_EX": 1, "GSTRS": 1, "GSTRS_DATE": 1, "MENGE_A": 1,
-		"MATNR": 1, "LGORT": 1, "WERKS": 1, "BUDAT_MKPF": 1, "KUNNR": 1, "NAME1": 1,
+		"MATNR": 1, "MAKTX": 1, "LGORT": 1, "WERKS": 1, "BUDAT_MKPF": 1, "KUNNR": 1, "NAME1": 1,
 	},
 	"Z_V_ZMES_T_001": {
 		"_id": 1, "_source_key": 1, "PCODE": 1, "AUFNR": 1, "KDAUF": 1,

@@ -74,9 +74,28 @@ npm install
 npm run dev
 ```
 
-浏览器打开 <http://localhost:5173>。前端只展示网关返回的 MongoDB 数据；MongoDB 未连接时显示连接错误和空结果。
+浏览器打开 <http://localhost:5174>。前端只展示网关返回的 MongoDB 数据；MongoDB 未连接时显示连接错误和空结果。
 
-开发环境中，访问后端根地址也会自动跳转到前端；若后端使用 `18080` 端口，请打开 <http://127.0.0.1:5173> 或 <http://127.0.0.1:18080>。
+## 一键启停前后端
+
+也可以使用统一脚本管理两个开发服务。脚本会在 `.run/` 保存 PID、日志和后端构建文件：
+
+```bash
+./scripts/devctl.sh start
+./scripts/devctl.sh status
+./scripts/devctl.sh logs backend
+./scripts/devctl.sh stop
+```
+
+可单独操作 `backend` 或 `frontend`，也支持 `restart`。默认后端端口从根目录 `.env` 的 `PORT` 读取，没有配置时使用 `18080`；前端默认使用 `5174`。需要覆盖端口时可执行：
+
+```bash
+BACKEND_PORT=18080 FRONTEND_PORT=5174 ./scripts/devctl.sh restart
+```
+
+首次使用前仍需执行 `./scripts/prepare_env.sh`，确保 Go 模块和前端依赖已安装。
+
+开发环境中，访问后端根地址也会自动跳转到前端；若后端使用 `18080` 端口，请打开 <http://127.0.0.1:5174> 或 <http://127.0.0.1:18080>。
 
 ## SAP 数据同步
 

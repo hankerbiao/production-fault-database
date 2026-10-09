@@ -46,3 +46,4 @@ docs/*.xlsx
 
 .prepare-env.lock
 .sales_orders_sync.lock
+.run/

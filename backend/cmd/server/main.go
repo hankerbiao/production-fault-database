@@ -48,7 +48,7 @@ func (s *server) root(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	http.Redirect(w, r, getenv("FRONTEND_URL", "http://127.0.0.1:5173/"), http.StatusTemporaryRedirect)
+	http.Redirect(w, r, getenv("FRONTEND_URL", "http://127.0.0.1:5174/"), http.StatusTemporaryRedirect)
 }
 
 func (s *server) health(w http.ResponseWriter, r *http.Request) {

@@ -35,6 +35,7 @@ usage() {
   BACKEND_PORT                   后端端口，默认读取 .env 的 PORT 或 18080
   FRONTEND_PORT                  前端端口，默认 5174
   VITE_API_TARGET                前端代理地址，默认 http://127.0.0.1:${BACKEND_PORT}
+  FRONTEND_HOST                 前端监听地址，默认 0.0.0.0（允许外部机器访问）
   ENV_FILE                       后端环境文件，默认项目根目录 .env
   RUNTIME_DIR                    PID、日志和后端构建文件目录，默认项目根目录 .run
 
@@ -69,7 +70,7 @@ ENV_PORT="$(env_value PORT "$ENV_FILE")"
 BACKEND_PORT="${BACKEND_PORT:-${PORT:-${ENV_PORT:-18080}}}"
 FRONTEND_PORT="${FRONTEND_PORT:-5174}"
 BACKEND_HOST="${BACKEND_HOST:-127.0.0.1}"
-FRONTEND_HOST="${FRONTEND_HOST:-127.0.0.1}"
+FRONTEND_HOST="${FRONTEND_HOST:-0.0.0.0}"
 VITE_API_TARGET="${VITE_API_TARGET:-http://${BACKEND_HOST}:${BACKEND_PORT}}"
 
 mkdir -p "$RUNTIME_DIR"
@@ -204,7 +205,7 @@ start_frontend() {
   local pid=$!
   printf '%s\n' "$pid" > "$FRONTEND_PID_FILE"
 
-  if ! wait_for_url "http://${FRONTEND_HOST}:${FRONTEND_PORT}/" 20; then
+  if ! wait_for_url "http://127.0.0.1:${FRONTEND_PORT}/" 20; then
     rm -f "$FRONTEND_PID_FILE"
     printf '前端启动失败，请查看 %s\n' "$FRONTEND_LOG" >&2
     return 1

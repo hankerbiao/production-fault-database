@@ -20,6 +20,22 @@ describe('usePagedResource pagination', () => {
     await waitFor(() => expect(result.current.items).toEqual([{ page: 2 }]));
   });
 
+  it('reloads page one with the selected page size', async () => {
+    const loadPage = vi.fn(async (_filters, page, pageSize) => ({ items: [{ page, pageSize }], total: 41 }));
+    const loadStats = vi.fn(async () => ({}));
+    const { result } = renderHook(() => usePagedResource({ loadPage, loadStats }));
+
+    await waitFor(() => expect(loadPage).toHaveBeenCalledTimes(1));
+    act(() => result.current.setPage(3));
+    await waitFor(() => expect(loadPage).toHaveBeenCalledTimes(2));
+    act(() => result.current.setPageSize(50));
+    await waitFor(() => expect(loadPage).toHaveBeenCalledTimes(3));
+
+    expect(result.current.page).toBe(1);
+    expect(result.current.pageSize).toBe(50);
+    expect(loadPage).toHaveBeenLastCalledWith({}, 1, 50);
+  });
+
   it('keeps draft filters separate until search is submitted', async () => {
     const loadPage = vi.fn(async (filters) => ({ items: [], total: filters.keyword ? 1 : 0 }));
     const loadStats = vi.fn(async () => ({ total: 0 }));

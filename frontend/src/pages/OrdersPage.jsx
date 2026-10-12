@@ -56,7 +56,7 @@ export function OrdersPage({ modelOptions = [], customerIDOptions = [], setConne
       </form>
       <ActiveFilters filters={resource.appliedFilters} labels={filterLabels} initialFilters={initialFilters} onRemove={removeFilter} onClear={reset} />
       <DataTable pageId="orders" columns={columns} items={resource.items} loading={resource.loading} error={resource.error} onOpen={detail.open} />
-      <Pagination page={resource.page} total={resource.total} pageSize={20} setPage={resource.setPage} />
+      <Pagination page={resource.page} total={resource.total} pageSize={resource.pageSize} setPage={resource.setPage} setPageSize={resource.setPageSize} />
     </section>
     {(detail.loading || detail.detail) && <DetailPanel detail={detail.detail} loading={detail.loading} close={detail.close} title="销售订单详情" heading={detail.detail?.order?.aufnr || '销售订单详情'} />}
   </main>;

@@ -74,3 +74,6 @@ th.column-judgment,td.column-judgment{width:78px;min-width:78px;max-width:78px;p
 .date-range-month-grid button.selected{border-color:var(--blue);background:var(--blue);color:#fff;font-weight:650}
 .date-range-panel{left:0;right:auto;width:min(330px,calc(100vw - 32px));max-height:calc(100vh - 32px);overflow:auto}
 .record-table.scs-table-shell .record-row td:first-child{position:static;left:auto;z-index:auto}
+
+.pagination{min-height:54px;height:auto}.pagination b{white-space:nowrap}.pagination-size{display:flex;align-items:center;gap:5px;font-size:11px}.pagination-size select{width:auto;height:30px;border:1px solid var(--line);border-radius:5px;background:#fff;padding:0 22px 0 7px;color:var(--ink);cursor:pointer}@media(max-width:720px){.pagination{gap:10px;align-items:flex-start;flex-wrap:wrap;padding:10px 0}.pagination>div{width:100%;justify-content:flex-end;gap:7px}.pagination-size{margin-right:auto}}
+.advanced-filters-grid>.repair-company-advanced{grid-column:auto}.repair-company-advanced{gap:6px}.repair-company-advanced>.company-filter-selector{grid-column:auto;width:100%}

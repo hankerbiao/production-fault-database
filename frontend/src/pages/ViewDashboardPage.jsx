@@ -59,7 +59,7 @@ export function ViewDashboardPage({ config, modelOptions = [], setConnected, set
       </form>
       <ActiveFilters filters={resource.appliedFilters} labels={filterLabels} initialFilters={initialFilters} onRemove={removeFilter} onClear={reset} />
       <DataTable pageId={config.id} columns={columns} items={resource.items} loading={resource.loading} error={resource.error} onOpen={detail.open} loadingMessage={`正在加载${config.title}数据`} bilingual={bilingual} />
-      <Pagination page={resource.page} total={resource.total} pageSize={20} setPage={resource.setPage} bilingual={bilingual} preview={resource.preview} hasMore={resource.hasMore} />
+      <Pagination page={resource.page} total={resource.total} pageSize={resource.pageSize} setPage={resource.setPage} setPageSize={resource.setPageSize} bilingual={bilingual} preview={resource.preview} hasMore={resource.hasMore} />
     </section>
     {(detail.loading || detail.detail) && <DetailPanel detail={detail.detail} loading={detail.loading} close={detail.close} title={bilingual ? '视图记录详情 / View Record Details' : '视图记录详情'} heading={bilingual ? '完整数据库字段 / All database fields' : '完整数据库字段'} />}
   </main>;

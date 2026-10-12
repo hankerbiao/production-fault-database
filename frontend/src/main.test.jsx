@@ -79,6 +79,8 @@ describe('operations workbench', () => {
     render(<App />);
     expect(await screen.findByRole('heading', { name: '维修故障记录' })).toBeInTheDocument();
     expect(screen.getByText('SAP HANA 视图 ZSGV_ZZT_WLJL', { exact: false })).toBeInTheDocument();
+    expect(screen.queryByText('已登记维修人员')).not.toBeInTheDocument();
+    expect(screen.queryByText('含错误码或错误码描述')).not.toBeInTheDocument();
     expect(screen.getByRole('columnheader', { name: '计划生产时间' })).toBeInTheDocument();
     expect(screen.getByRole('columnheader', { name: '物料号' })).toBeInTheDocument();
     expect(screen.getByText('主机条码数量（去重）')).toBeInTheDocument();
@@ -91,21 +93,29 @@ describe('operations workbench', () => {
     await waitFor(() => expect(screen.queryByText('SN-1')).not.toBeInTheDocument());
   });
 
-  it('filters repair records by planned or repair time', async () => {
+  it('shows total pages and reloads records when page size changes', async () => {
     const fetchMock = mockFetch();
     vi.stubGlobal('fetch', fetchMock);
     render(<App />);
     await screen.findByRole('heading', { name: '维修故障记录' });
+
+    expect(screen.getByText('第 1 / 1 页')).toBeInTheDocument();
+    fireEvent.change(screen.getByRole('combobox', { name: '每页数量' }), { target: { value: '50' } });
+    await waitFor(() => expect(fetchMock.mock.calls.some(([url]) => String(url).includes('/api/faults?') && String(url).includes('page=1') && String(url).includes('pageSize=50'))).toBe(true));
+  });
+
+  it('filters repair records by planned time by default', async () => {
+    const fetchMock = mockFetch();
+    vi.stubGlobal('fetch', fetchMock);
+    render(<App />);
+    await screen.findByRole('heading', { name: '维修故障记录' });
+    expect(screen.queryByRole('group', { name: '筛选时间字段' })).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: /计划生产时间周期/ })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /计划生产时间周期/ }));
     fireEvent.change(screen.getByLabelText('开始日期'), { target: { value: '2026-03-01' } });
     fireEvent.change(screen.getByLabelText('结束日期'), { target: { value: '2026-03-31' } });
     fireEvent.click(screen.getByRole('button', { name: /筛选/ }));
     await waitFor(() => expect(fetchMock.mock.calls.some(([url]) => String(url).includes('timeField=planned') && String(url).includes('dateFrom=2026-03-01') && String(url).includes('dateTo=2026-03-31'))).toBe(true));
-    fireEvent.click(screen.getByRole('button', { name: '维修时间' }));
-    expect(screen.getByRole('button', { name: /维修时间周期/ })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: /筛选/ }));
-    await waitFor(() => expect(fetchMock.mock.calls.some(([url]) => String(url).includes('timeField=repair'))).toBe(true));
   });
 
   it('filters repair records by 5000 company order membership', async () => {
@@ -113,6 +123,9 @@ describe('operations workbench', () => {
     vi.stubGlobal('fetch', fetchMock);
     render(<App />);
     await screen.findByRole('heading', { name: '维修故障记录' });
+    expect(screen.queryByRole('group', { name: '是否为5000公司' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /高级条件/ }));
+    expect(screen.getByRole('group', { name: '是否为5000公司' })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: '是', exact: true }));
     fireEvent.click(screen.getByRole('button', { name: /筛选/ }));
     await waitFor(() => expect(fetchMock.mock.calls.some(([url]) => String(url).includes('company5000=yes'))).toBe(true));
@@ -123,6 +136,8 @@ describe('operations workbench', () => {
     vi.stubGlobal('fetch', fetchMock);
     render(<App />);
     await screen.findByRole('heading', { name: '维修故障记录' });
+    expect(screen.queryByLabelText('非关键件物料序号')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /高级条件/ }));
     fireEvent.change(screen.getByLabelText('非关键件物料序号'), { target: { value: '37001343' } });
     fireEvent.click(screen.getByRole('button', { name: /筛选/ }));
     await waitFor(() => expect(fetchMock.mock.calls.some(([url]) => String(url).includes('nonCriticalMaterialSerial=37001343'))).toBe(true));
@@ -143,6 +158,7 @@ describe('operations workbench', () => {
     const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
     render(<App />);
     await screen.findByRole('heading', { name: '维修故障记录' });
+    fireEvent.click(screen.getByRole('button', { name: /高级条件/ }));
     fireEvent.change(screen.getByLabelText('非关键件物料序号'), { target: { value: '37001343' } });
     fireEvent.click(screen.getByRole('button', { name: /筛选/ }));
     await waitFor(() => expect(fetchMock.mock.calls.some(([url]) => String(url).includes('nonCriticalMaterialSerial=37001343') && String(url).includes('pageSize=20'))).toBe(true));
@@ -179,7 +195,7 @@ describe('operations workbench', () => {
     fireEvent.click(screen.getAllByRole('button', { name: /销售订单看板/ })[0]);
     expect(await screen.findByRole('heading', { name: '销售订单看板' })).toBeInTheDocument();
     expect(await screen.findByText('机器数量汇总：3')).toBeInTheDocument();
-    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'SG' } });
+    fireEvent.change(screen.getByRole('combobox', { name: '订单来源' }), { target: { value: 'SG' } });
     fireEvent.click(screen.getByRole('button', { name: '客户 ID' }));
     fireEvent.click(await screen.findByRole('option', { name: 'CUST-001' }));
     fireEvent.click(screen.getByRole('button', { name: /筛选/ }));
@@ -195,7 +211,7 @@ describe('operations workbench', () => {
     render(<App />);
     fireEvent.click(screen.getAllByRole('button', { name: /销售订单看板/ })[0]);
     await screen.findByRole('heading', { name: '销售订单看板' });
-    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'SG' } });
+    fireEvent.change(screen.getByRole('combobox', { name: '订单来源' }), { target: { value: 'SG' } });
     fireEvent.click(screen.getByRole('button', { name: /导出数据/ }));
     await waitFor(() => expect(fetchMock.mock.calls.some(([url]) => String(url).includes('source=SG') && String(url).includes('pageSize=100'))).toBe(true));
     expect(createObjectURL).toHaveBeenCalled();

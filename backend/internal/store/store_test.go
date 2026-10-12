@@ -146,6 +146,20 @@ func TestRepairStatsNormalizeOrderValues(t *testing.T) {
 	}
 }
 
+func TestRepairStatsCountMaterialFields(t *testing.T) {
+	pipeline := repairStatsPipeline(bson.M{}, "repair")
+	group := pipeline[1].Map()["$group"].(bson.M)
+	project := pipeline[2].Map()["$project"].(bson.M)
+	for _, key := range []string{"withMaterialCode", "withNonCriticalMaterialSerial"} {
+		if _, ok := group[key]; !ok {
+			t.Fatalf("group missing %q: %v", key, group)
+		}
+		if project[key] != 1 {
+			t.Fatalf("project[%q]=%v", key, project[key])
+		}
+	}
+}
+
 func containsString(values []string, want string) bool {
 	for _, value := range values {
 		if value == want {

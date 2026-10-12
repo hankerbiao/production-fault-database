@@ -197,7 +197,7 @@ func (s *Store) Stats(ctx context.Context, f Filters) (StatsResult, error) {
 		return StatsResult{}, nil
 	}
 	row := rows[0]
-	return StatsResult{Total: int64(number(row["total"])), WithError: int64(number(row["withError"])), WithRepairPerson: int64(number(row["withRepairPerson"])), SalesOrders: int64(number(row["salesOrders"])), ProductionOrders: int64(number(row["productionOrders"])), HostBarcodes: int64(number(row["hostBarcodes"])), MissingSalesOrder: int64(number(row["missingSalesOrder"])), MissingProductionOrder: int64(number(row["missingProductionOrder"])), DataStartDate: firstText(row, "dataStartDate"), DataEndDate: firstText(row, "dataEndDate"), LatestSyncedAt: firstText(row, "latestSyncedAt")}, nil
+	return StatsResult{Total: int64(number(row["total"])), WithError: int64(number(row["withError"])), WithRepairPerson: int64(number(row["withRepairPerson"])), WithMaterialCode: int64(number(row["withMaterialCode"])), WithNonCriticalMaterialSerial: int64(number(row["withNonCriticalMaterialSerial"])), SalesOrders: int64(number(row["salesOrders"])), ProductionOrders: int64(number(row["productionOrders"])), HostBarcodes: int64(number(row["hostBarcodes"])), MissingSalesOrder: int64(number(row["missingSalesOrder"])), MissingProductionOrder: int64(number(row["missingProductionOrder"])), DataStartDate: firstText(row, "dataStartDate"), DataEndDate: firstText(row, "dataEndDate"), LatestSyncedAt: firstText(row, "latestSyncedAt")}, nil
 }
 
 func (s *Store) OrderStats(ctx context.Context, f OrderFilters) (OrderStatsResult, error) {

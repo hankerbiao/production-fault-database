@@ -92,17 +92,19 @@ type ListResult struct {
 	Total    int64   `json:"total"`
 }
 type StatsResult struct {
-	Total                  int64  `json:"total"`
-	WithError              int64  `json:"withError"`
-	WithRepairPerson       int64  `json:"withRepairPerson"`
-	SalesOrders            int64  `json:"salesOrders"`
-	ProductionOrders       int64  `json:"productionOrders"`
-	HostBarcodes           int64  `json:"hostBarcodes"`
-	MissingSalesOrder      int64  `json:"missingSalesOrder"`
-	MissingProductionOrder int64  `json:"missingProductionOrder"`
-	DataStartDate          string `json:"dataStartDate"`
-	DataEndDate            string `json:"dataEndDate"`
-	LatestSyncedAt         string `json:"latestSyncedAt"`
+	Total                         int64  `json:"total"`
+	WithError                     int64  `json:"withError"`
+	WithRepairPerson              int64  `json:"withRepairPerson"`
+	WithMaterialCode              int64  `json:"withMaterialCode"`
+	WithNonCriticalMaterialSerial int64  `json:"withNonCriticalMaterialSerial"`
+	SalesOrders                   int64  `json:"salesOrders"`
+	ProductionOrders              int64  `json:"productionOrders"`
+	HostBarcodes                  int64  `json:"hostBarcodes"`
+	MissingSalesOrder             int64  `json:"missingSalesOrder"`
+	MissingProductionOrder        int64  `json:"missingProductionOrder"`
+	DataStartDate                 string `json:"dataStartDate"`
+	DataEndDate                   string `json:"dataEndDate"`
+	LatestSyncedAt                string `json:"latestSyncedAt"`
 }
 
 type Order struct {

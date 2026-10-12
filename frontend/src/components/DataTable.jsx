@@ -21,6 +21,7 @@ export function DataTable({ pageId, columns, items, loading, error, onOpen, empt
   const [columnsOpen, setColumnsOpen] = useState(false);
   const menuRef = useRef(null);
   const visibleColumns = columns.filter(column => !hidden.includes(column.key));
+  const scsTable = pageId === 'SCS_DOA' || pageId === 'SCS_CHANGE';
 
   useEffect(() => {
     try { window.localStorage.setItem(preferenceKey(pageId), JSON.stringify({ density, hidden })); } catch { /* Storage may be unavailable. */ }
@@ -32,7 +33,7 @@ export function DataTable({ pageId, columns, items, loading, error, onOpen, empt
   }, []);
 
   const toggleColumn = key => setHidden(current => current.includes(key) ? current.filter(item => item !== key) : [...current, key]);
-  return <section className={`record-table ${pageId === 'ZSGV_ZSD124' ? 'bom-table-shell' : ''} ${density === 'compact' ? 'is-compact' : ''}`}>
+  return <section className={`record-table ${pageId === 'ZSGV_ZSD124' ? 'bom-table-shell' : ''} ${scsTable ? 'scs-table-shell' : ''} ${density === 'compact' ? 'is-compact' : ''}`}>
     <div className="table-toolbar">
       <span>{loading ? '正在更新结果' : `显示 ${items.length} 条当前结果`}</span>
       <div className="table-toolbar-actions">

@@ -289,6 +289,19 @@ describe('operations workbench', () => {
     expect(screen.getByText('北京示例科技有限公司')).toBeInTheDocument();
   });
 
+  it('does not pin the first column in either SCS dashboard table', async () => {
+    vi.stubGlobal('fetch', mockFetch());
+    render(<App />);
+    for (const [buttonName, headingName] of [
+      ['SCS 换上换下', 'SCS 换上换下明细'],
+      ['SCS DOA 申报', 'SCS DOA 申报明细'],
+    ]) {
+      fireEvent.click(screen.getByRole('button', { name: buttonName }));
+      const heading = await screen.findByRole('heading', { name: headingName });
+      expect(heading.closest('main').querySelector('.record-table')).toHaveClass('scs-table-shell');
+    }
+  });
+
   it('filters SCS change records with the 5000 company checkbox', async () => {
     const fetchMock = mockFetch();
     vi.stubGlobal('fetch', fetchMock);

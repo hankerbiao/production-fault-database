@@ -72,4 +72,5 @@ th.column-judgment,td.column-judgment{width:78px;min-width:78px;max-width:78px;p
 .date-range-month-grid button{height:34px;border:1px solid var(--line);border-radius:6px;background:#fff;color:var(--ink-muted);cursor:pointer;font-size:12px}
 .date-range-month-grid button:hover{border-color:#9fc8e3;background:var(--blue-soft);color:var(--blue)}
 .date-range-month-grid button.selected{border-color:var(--blue);background:var(--blue);color:#fff;font-weight:650}
-.date-range-panel{max-height:calc(100vh - 32px);overflow:auto}
+.date-range-panel{left:0;right:auto;width:min(330px,calc(100vw - 32px));max-height:calc(100vh - 32px);overflow:auto}
+.record-table.scs-table-shell .record-row td:first-child{position:static;left:auto;z-index:auto}

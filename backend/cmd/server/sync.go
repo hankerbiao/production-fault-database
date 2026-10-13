@@ -48,6 +48,7 @@ var managedSyncTasks = []syncTaskDefinition{
 	{ID: "order_bom_postings", Label: "订单 BOM 过账", Dependencies: []string{"sales_orders"}, FullSupported: true},
 	{ID: "order_bom_planned_start", Label: "BOM 计划开始时间回填", Dependencies: []string{"sales_orders", "order_bom_postings"}, FullSupported: true},
 	{ID: "serial_bindings", Label: "序列号绑定", FullSupported: true},
+	{ID: "sales_order_delivery_records", Label: "销售订单交付明细", FullSupported: true},
 	{ID: "scs_doa", Label: "SCS DOA", Dependencies: []string{"sales_orders"}, FullSupported: true},
 	{ID: "scs_change", Label: "SCS 换上换下", Dependencies: []string{"scs_doa"}, FullSupported: true},
 }

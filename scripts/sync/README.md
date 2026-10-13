@@ -9,6 +9,7 @@
 | `增量同步和清洗维修故障记录.py` | 维修记录 `repair_records_sap` | `python scripts/sync/增量同步和清洗维修故障记录.py --apply` |
 | `order_bom_postings.py` | BOM 过账 `order_bom_postings_sap` | `python scripts/sync/order_bom_postings.py --mode incremental --apply` |
 | `serial_bindings.py` | 序列号绑定 `serial_bindings_sap` | `python scripts/sync/serial_bindings.py --mode incremental --apply` |
+| `sales_order_delivery_records.py` | 2026 销售订单交付明细 `sales_order_delivery_records_sap` | `python scripts/sync/sales_order_delivery_records.py --mode incremental --apply` |
 
 ## 执行顺序
 
@@ -17,10 +18,15 @@
 ```bash
 .venv/bin/python scripts/sync/syncctl.py run --mode incremental
 .venv/bin/python scripts/sync/syncctl.py run --mode full --tasks repair_records --start-date 2026-01-01
+.venv/bin/python scripts/sync/syncctl.py run --mode full --tasks sales_order_delivery_records --start-date 2026-01-01 --end-date 2026-12-31
 .venv/bin/python scripts/sync/syncctl.py tasks
 ```
 
+销售订单交付明细任务的日期边界固定为 `ERDAT` 2026 全年，编排器的其他日期参数不会扩大或缩小该数据集。首次可先运行 `python scripts/sync/sales_order_delivery_records.py --mode full --dry-run` 核对读取量，再通过同步管理页执行全量写入；日常编排使用增量模式并回看 7 天。源视图没有修改时间字段，因此超过回看期的历史更正需通过全量任务重新对账。
+
 销售订单全量默认只在 `start-date` 不晚于 `2026-01-01` 且结束日期覆盖当天时清理范围外旧单。从更晚日期重建只会 upsert，不会删除历史月份。强制整表替换需直接调用脚本并同时传入 `--replace-collection --confirm-delete`。
+
+维修记录按月重同步直接调用维修脚本，不通过 `syncctl.py`：先确认该月销售订单和过站数据已就绪，再执行 `--mode monthly --start-date 2026-09-01 --sync-end-date 2026-09-30 --dry-run`，确认后将 `--dry-run` 改为 `--apply`。月度模式只清理该月内未被本次 HANA 结果覆盖的维修记录，且不会推进全局维修增量水位。
 
 首次验证建议先对每个脚本使用 `--dry-run`。销售订单脚本的 `--dry-run` 只读；其余三个 HANA 视图脚本使用 `--mode incremental --dry-run`。维修数据仅重跑回填时使用 `--apply --skip-hana-sync`。
 

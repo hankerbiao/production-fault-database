@@ -25,6 +25,9 @@ function mockFetch({ fail = false } = {}) {
     if (String(url).startsWith('/api/views/ZSGV_ZSD124?')) return { ok: true, json: async () => ({ items: [{ id: 'bom-1', MATNR: 'MAT-1', AUART: 'ZP01' }], total: 2 }) };
     if (String(url).startsWith('/api/views/ZSGV_ZSD124/stats')) return { ok: true, json: async () => ({ total: 2, salesOrders: 1, productionOrders: 2, missingSalesOrder: 3, missingProductionOrder: 4, missingProductionOrderDistinct: 2, dataStartDate: '20260102', dataEndDate: '20260102', latestSyncedAt: '2026-01-02T03:04:05Z' }) };
     if (String(url).startsWith('/api/views/ZSGV_ZSD124/detail')) return { ok: true, json: async () => ({ fields: [{ key: 'MATNR', label: '物料号', value: 'MAT-1' }] }) };
+    if (String(url).startsWith('/api/views/ZSGV_ZSD46N_SO_KK?')) return { ok: true, json: async () => ({ items: [{ id: 'delivery-1', ERDAT: '20260102', VBELN: 'SO-1', POSNR: '10', VBELN_L: 'DL-1', POSNR_L: '10', MATNR: 'MAT-1', MAKTX: '物料', SERNR: 'SN-1', KWMENG: 2, LFIMG: 1, STRAS: 'private address', TELF1: 'private phone', ORT01: 'private city' }], total: 1 }) };
+    if (String(url).startsWith('/api/views/ZSGV_ZSD46N_SO_KK/stats')) return { ok: true, json: async () => ({ total: 1, dataStartDate: '20260102', dataEndDate: '20260102', latestSyncedAt: '2026-01-02T03:04:05Z' }) };
+    if (String(url).startsWith('/api/views/ZSGV_ZSD46N_SO_KK/detail')) return { ok: true, json: async () => ({ fields: [{ key: 'VBELN', label: '销售订单', value: 'SO-1' }] }) };
     if (String(url).startsWith('/api/views/ZSGV_ZPP_SERNOLIST?')) return { ok: true, json: async () => ({ items: [{ id: 'serial-1', ZCODE_HEAD: 'HEAD-1', ZCODE_ITEM: 'ITEM-1', AUFNR_HEAD: 'PO-H', AUFNR_ITEM: 'PO-I', PRODH: '00100' }], total: 1 }) };
     if (String(url).startsWith('/api/views/ZSGV_ZPP_SERNOLIST/stats')) return { ok: true, json: async () => ({ total: 1, dataStartDate: '', dataEndDate: '', latestSyncedAt: '' }) };
     if (String(url).startsWith('/api/views/ZSGV_ZPP_SERNOLIST/detail')) return { ok: true, json: async () => ({ fields: [{ key: 'ZCODE_HEAD', label: '大刀/机头序列号（ZCODE_HEAD）', value: 'HEAD-1' }] }) };
@@ -37,6 +40,39 @@ function mockFetch({ fail = false } = {}) {
 }
 
 describe('operations workbench', () => {
+  it('queries sales-order delivery rows and exports only the configured public columns', async () => {
+    const fetchMock = mockFetch();
+    vi.stubGlobal('fetch', fetchMock);
+    const blobs = [];
+    const createObjectURL = vi.spyOn(URL, 'createObjectURL').mockImplementation(blob => { blobs.push(blob); return 'blob:delivery'; });
+    const revokeObjectURL = vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {});
+    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+    render(<App />);
+    fireEvent.click(screen.getAllByRole('button', { name: /销售订单交付明细/ })[0]);
+    expect(await screen.findByRole('heading', { name: '销售订单交付明细' })).toBeInTheDocument();
+    for (const column of ['创建日期', '销售订单', '交货单', '物料号', '序列号', '交货日期']) {
+      expect(screen.getByRole('columnheader', { name: column })).toBeInTheDocument();
+    }
+    expect(screen.queryByRole('columnheader', { name: '地址' })).not.toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('销售订单'), { target: { value: 'SO-1' } });
+    fireEvent.click(screen.getByRole('button', { name: /高级条件/ }));
+    fireEvent.change(screen.getByPlaceholderText('交货单 / VBELN_L'), { target: { value: 'DL-1' } });
+    fireEvent.change(screen.getByPlaceholderText('客户编号 / KUNNR'), { target: { value: 'C-1' } });
+    fireEvent.click(screen.getByRole('button', { name: /筛选/ }));
+    await waitFor(() => expect(fetchMock.mock.calls.some(([url]) => String(url).includes('/api/views/ZSGV_ZSD46N_SO_KK?') && String(url).includes('salesOrder=SO-1') && String(url).includes('deliveryOrder=DL-1') && String(url).includes('customerNumber=C-1'))).toBe(true));
+    fireEvent.click(screen.getByRole('button', { name: /导出数据/ }));
+    await waitFor(() => expect(blobs.length).toBe(1));
+    const csv = new TextDecoder().decode(await blobs[0].arrayBuffer());
+    expect(csv).toContain('SO-1');
+    expect(csv).not.toContain('private address');
+    expect(csv).not.toContain('private phone');
+    expect(csv).not.toContain('private city');
+    expect(click).toHaveBeenCalled();
+    createObjectURL.mockRestore();
+    revokeObjectURL.mockRestore();
+    click.mockRestore();
+  });
+
   it('opens the service configuration panel with redacted database metadata', async () => {
     vi.stubGlobal('fetch', mockFetch());
     render(<App />);

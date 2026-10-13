@@ -4,12 +4,18 @@ from scripts.sources.hana import hana_view_sync as sync
 
 
 def test_documented_view_specs_are_registered():
-    assert set(sync.VIEW_SPECS) == {"ZSGV_ZSD124", "ZSGV_ZPP_SERNOLIST", "Z_V_ZMES_T_001"}
+    assert set(sync.VIEW_SPECS) == {"ZSGV_ZSD124", "ZSGV_ZPP_SERNOLIST", "Z_V_ZMES_T_001", "ZSGV_ZSD46N_SO_KK"}
     assert sync.VIEW_SPECS["ZSGV_ZSD124"].collection == "order_bom_postings_sap"
     assert sync.VIEW_SPECS["ZSGV_ZPP_SERNOLIST"].watermark_fields == ()
     assert sync.VIEW_SPECS["Z_V_ZMES_T_001"].start_date_field == "ACTUAL_START_TIME"
     station_columns = sync.VIEW_SPECS["Z_V_ZMES_T_001"].columns
     assert station_columns[-4:] == ("HADE7", "HADE8", "STATU", "MESS")
+    delivery = sync.VIEW_SPECS["ZSGV_ZSD46N_SO_KK"]
+    assert delivery.qualified_name == '"_SYS_BIC"."BW_LOCAL.SD/ZSGV_ZSD46N_SO_KK"'
+    assert delivery.collection == "sales_order_delivery_records_sap"
+    assert len(delivery.columns) == 36
+    assert delivery.key_fields == ("VBELN", "POSNR", "VBELN_L", "POSNR_L", "SERNR", "DATUM")
+    assert delivery.fallback_to_full_row
 
 
 def test_queries_use_documented_watermarks():
@@ -23,12 +29,35 @@ def test_queries_use_documented_watermarks():
     assert '"ACTUAL_START_TIME" >= ?' in sql
     assert params == ["2026-01-01 00:00:00"]
 
+    spec = sync.VIEW_SPECS["ZSGV_ZSD46N_SO_KK"]
+    sql, params = sync.build_query(spec, None, "full", "20260101", 7, "20261231")
+    assert '"ERDAT" >= ?' in sql and '"ERDAT" <= ?' in sql
+    assert params == ["20260101", "20261231"]
+    sql, params = sync.build_query(spec, {"watermark": "20260115"}, "incremental", "20260101", 7, "20261231")
+    assert '"ERDAT" >= ?' in sql and '"ERDAT" <= ?' in sql
+    assert params == ["20260108", "20260101", "20261231"]
+
 
 def test_undated_view_uses_stable_full_row_key_when_business_key_missing():
     spec = sync.VIEW_SPECS["ZSGV_ZPP_SERNOLIST"]
     row = {field: None for field in spec.columns}
     key = sync.source_key(row, spec)
     assert key.startswith("full_row:")
+
+
+def test_delivery_source_key_uses_serial_and_hashes_incomplete_keys():
+    spec = sync.VIEW_SPECS["ZSGV_ZSD46N_SO_KK"]
+    row = {field: "x" for field in spec.columns}
+    row.update({"VBELN": "SO-1", "POSNR": "10", "VBELN_L": "DL-1", "POSNR_L": "10", "SERNR": "SN-1"})
+    first = sync.source_key(row, spec)
+    row["DATUM"] = "20260101"
+    first = sync.source_key(row, spec)
+    row["DATUM"] = "20260102"
+    assert sync.source_key(row, spec) != first
+    row["SERNR"] = "SN-2"
+    assert sync.source_key(row, spec) != first
+    row["SERNR"] = None
+    assert sync.source_key(row, spec).startswith("full_row:")
 
 
 def test_mongo_write_concern_options_are_configurable(monkeypatch):
@@ -177,6 +206,31 @@ def test_sync_view_closes_one_hana_session_cursor_and_mongo_client(monkeypatch):
     assert connection.closed is True
     assert connection.cursor_instance.closed is True
     assert FakeMongoClient.instance.closed is True
+
+
+def test_sync_view_dry_run_reports_duplicate_source_keys(monkeypatch):
+    row = ["x"] * len(sync.VIEW_SPECS["ZSGV_ZSD46N_SO_KK"].columns)
+    connection = FakeHanaConnection()
+    connection.cursor_instance.batches = [[tuple(row), tuple(row)], []]
+    monkeypatch.setitem(__import__("sys").modules, "hdbcli", SimpleNamespace(dbapi=SimpleNamespace(connect=lambda **_kwargs: connection)))
+    monkeypatch.setenv("HANA_ADDRESS", "localhost")
+    monkeypatch.setenv("HANA_USER", "user")
+    monkeypatch.setenv("HANA_PASSWORD", "password")
+    result = sync.sync_view(
+        sync.VIEW_SPECS["ZSGV_ZSD46N_SO_KK"],
+        mode="full",
+        start_date="20260101",
+        end_date="20261231",
+        batch_size=10,
+        lookback_days=7,
+        dry_run=True,
+        validate_source_keys=True,
+    )
+    assert result["success"] is False
+    assert result["source_rows"] == 2
+    assert result["duplicate_source_keys"] == 1
+    assert connection.closed is True
+    assert connection.cursor_instance.closed is True
 
 
 def test_full_sync_defers_old_row_deletion_until_cleanup_commits(monkeypatch):

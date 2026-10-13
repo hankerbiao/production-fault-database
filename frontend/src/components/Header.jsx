@@ -1,13 +1,13 @@
 import { useCallback, useState } from 'react';
-import { BookOpen, Boxes, ClipboardList, Database, ListChecks, Menu, PackageSearch, PanelLeftClose, RefreshCw, Settings2, UploadCloud, X } from 'lucide-react';
+import { BookOpen, Boxes, ClipboardList, Database, ListChecks, Menu, PackageSearch, PanelLeftClose, Settings2, UploadCloud, X } from 'lucide-react';
 import { ServiceConfigPanel } from './ServiceConfigPanel';
 const links = [
-  ['repairs', '维修故障记录', ClipboardList], ['orders', '销售订单看板', PackageSearch], ['zsd124', '订单过账', Boxes],
+  ['repairs', '维修故障记录', ClipboardList], ['orders', '销售订单看板', PackageSearch], ['salesOrderDelivery', '销售订单交付明细', PackageSearch], ['zsd124', '订单过账', Boxes],
   ['sernolist', '序列号绑定 / Serial Number Binding', Boxes], ['station', '工位记录', Boxes], ['scsDoa', 'SCS DOA 申报', ClipboardList],
   ['scsChange', 'SCS 换上换下', Boxes], ['sync-management', '同步管理', ListChecks], ['api-docs', 'API 文档', BookOpen],
 ];
 
-export function Header({ view, setView, connected, refreshing, syncStatus, onSync, onRefresh }) {
+export function Header({ view, setView, connected, syncStatus, onSync }) {
   const [configOpen, setConfigOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
@@ -21,7 +21,7 @@ export function Header({ view, setView, connected, refreshing, syncStatus, onSyn
       <div className="sidebar-foot"><span className={`connection-dot ${connected ? 'online' : ''}`} /><span>{connected ? 'MongoDB 已连接' : 'MongoDB 未连接'}</span></div>
     </aside>
     {menuOpen && <button className="sidebar-scrim" type="button" aria-label="关闭导航" onClick={() => setMenuOpen(false)} />}
-    <header className="app-topbar"><button className="mobile-menu" type="button" aria-label="打开导航" onClick={() => setMenuOpen(true)}><Menu size={20} /></button><div className="topbar-title"><span>{links.find(link => link[0] === view)?.[1]}</span></div><div className="topbar-actions"><span className={`connection-status ${connected ? 'online' : ''}`}>{connected ? '已连接' : '未连接'}</span><button className="utility-button" onClick={onRefresh} disabled={refreshing} title="刷新当前数据"><RefreshCw size={16} className={refreshing ? 'spin' : ''} /><span>刷新</span></button><button className="sync-button" onClick={onSync} disabled={syncing} title="立即执行增量同步"><UploadCloud size={16} className={syncing ? 'spin' : ''} /><span>{syncing ? '同步中' : '立即同步'}</span></button><button className="utility-button icon-only" onClick={() => setConfigOpen(true)} title="查看服务配置" aria-label="查看服务配置"><Settings2 size={17} /></button>{syncStatus?.state === 'failed' && <span className="sync-error" title={syncStatus.message}>同步失败</span>}</div></header>
+    <header className="app-topbar"><button className="mobile-menu" type="button" aria-label="打开导航" onClick={() => setMenuOpen(true)}><Menu size={20} /></button><div className="topbar-title"><span>{links.find(link => link[0] === view)?.[1]}</span></div><div className="topbar-actions"><span className={`connection-status ${connected ? 'online' : ''}`}>{connected ? '已连接' : '未连接'}</span><button className="sync-button" onClick={onSync} disabled={syncing} title="立即执行增量同步"><UploadCloud size={16} className={syncing ? 'spin' : ''} /><span>{syncing ? '同步中' : '立即同步'}</span></button><button className="utility-button icon-only" onClick={() => setConfigOpen(true)} title="查看服务配置" aria-label="查看服务配置"><Settings2 size={17} /></button>{syncStatus?.state === 'failed' && <span className="sync-error" title={syncStatus.message}>同步失败</span>}</div></header>
     <ServiceConfigPanel open={configOpen} onClose={closeConfig} />
   </>;
 }

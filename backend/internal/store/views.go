@@ -38,6 +38,7 @@ func (s *Store) ViewList(ctx context.Context, viewID string, f ViewFilters, page
 			docs = docs[:pageSize]
 		}
 		for _, doc := range docs {
+			hideSalesOrderDeliveryPrivateFields(viewID, doc)
 			normalizeViewID(doc)
 		}
 		return ViewListResult{Items: docs, Page: page, PageSize: pageSize, Total: int64(len(docs)), HasMore: hasMore, Preview: true}, nil
@@ -74,6 +75,7 @@ func (s *Store) ViewList(ctx context.Context, viewID string, f ViewFilters, page
 		return ViewListResult{}, findErr
 	}
 	for _, doc := range docs {
+		hideSalesOrderDeliveryPrivateFields(viewID, doc)
 		normalizeViewID(doc)
 	}
 	return ViewListResult{Items: docs, Page: page, PageSize: pageSize, Total: total}, nil
@@ -107,6 +109,9 @@ func (s *Store) ViewListAll(ctx context.Context, viewID string, f ViewFilters) (
 	if err := cur.All(ctx, &docs); err != nil {
 		return ViewListResult{}, err
 	}
+	for _, doc := range docs {
+		hideSalesOrderDeliveryPrivateFields(viewID, doc)
+	}
 	// Total intentionally remains the count before the hard query limit so API
 	// clients can detect truncation without fetching an unbounded result set.
 	return ViewListResult{Items: docs, Page: 1, PageSize: len(docs), Total: total}, nil
@@ -124,8 +129,17 @@ func (s *Store) ViewDetail(ctx context.Context, viewID, id string) (ViewDetailRe
 	if err != nil {
 		return ViewDetailResult{}, err
 	}
+	hideSalesOrderDeliveryPrivateFields(viewID, doc)
 	normalizeViewID(doc)
 	return ViewDetailResult{Item: doc, Fields: viewDetailFields(viewID, doc)}, nil
+}
+
+func hideSalesOrderDeliveryPrivateFields(viewID string, doc bson.M) {
+	if viewID == "ZSGV_ZSD46N_SO_KK" {
+		delete(doc, "STRAS")
+		delete(doc, "TELF1")
+		delete(doc, "ORT01")
+	}
 }
 
 func (s *Store) ViewStats(ctx context.Context, viewID string, f ViewFilters) (ViewStatsResult, error) {

@@ -38,7 +38,7 @@ export function App() {
     }
   }
   const pageProps = { modelOptions, customerIDOptions, setConnected, setRefreshing, refreshToken };
-  return <div className="app"><Header view={view} setView={setView} connected={connected} refreshing={refreshing} syncStatus={status} onSync={runSync} onRefresh={() => setRefreshToken(token => token + 1)} />
+  return <div className="app"><Header view={view} setView={setView} connected={connected} syncStatus={status} onSync={runSync} />
     {view === 'api-docs' ? <ApiDocs /> : view === 'sync-management' ? <SyncManagementPage onStarted={setStatus} /> : view === 'repairs' ? <RepairsPage {...pageProps} /> : view === 'orders' ? <OrdersPage {...pageProps} /> : <ViewDashboardPage key={view} {...pageProps} config={viewConfigs[view]} />}
     <footer><span>Production Fault Gateway · v0.1.0</span><span>MongoDB 数据源</span></footer>
   </div>;

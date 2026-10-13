@@ -107,6 +107,22 @@ VIEW_SPECS: dict[str, ViewSpec] = {
         start_date_field="ACTUAL_START_TIME",
         fallback_to_full_row=True,
     ),
+    "ZSGV_ZSD46N_SO_KK": ViewSpec(
+        view_id="ZSGV_ZSD46N_SO_KK",
+        qualified_name='"_SYS_BIC"."BW_LOCAL.SD/ZSGV_ZSD46N_SO_KK"',
+        columns=fields(
+            "MANDT VBELN POSNR MATNR MAKTX VBELN_L POSNR_L ERNAM ERDAT WADAT CMGST KUNNR BSTNK "
+            "WERKS LGORT VKBUR BEZEI_BGS KUNNR_SP NAME_SP KUNNR_ZU NAME_ZU BZIRK BZTXT VKORG "
+            "NAME1 STRAS TELF1 ORT01 NAME SERNR DATUM DATUM1 FPFHRQ KWMENG LFIMG KWMENG1"
+        ),
+        collection="sales_order_delivery_records_sap",
+        key_fields=("VBELN", "POSNR", "VBELN_L", "POSNR_L", "SERNR", "DATUM"),
+        order_by=("ERDAT", "VBELN", "POSNR", "SERNR"),
+        watermark_fields=("ERDAT",),
+        index_fields=("VBELN", "POSNR", "VBELN_L", "POSNR_L", "SERNR"),
+        start_date_field="ERDAT",
+        fallback_to_full_row=True,
+    ),
 }
 
 
@@ -334,7 +350,7 @@ def build_query(spec: ViewSpec, checkpoint: Mapping[str, Any] | None, mode: str,
     if mode == "incremental" and watermark is not None and spec.watermark_fields:
         field = spec.watermark_fields[0]
         conditions.append(f'"{field}" >= ?')
-        params.append(date_overlap(watermark, lookback_days) if field == "BUDAT_MKPF" else watermark)
+        params.append(date_overlap(watermark, lookback_days) if field in {"BUDAT_MKPF", "ERDAT"} else watermark)
     if start_date and spec.start_date_field:
         value = start_date
         if spec.start_date_field == "ACTUAL_START_TIME":
@@ -372,6 +388,7 @@ def sync_view(
     dry_run: bool,
     defer_finalize: bool = False,
     end_date: str | None = None,
+    validate_source_keys: bool = False,
 ) -> dict[str, Any]:
     if batch_size < 1 or lookback_days < 0:
         raise ValueError("batch-size 必须大于 0，lookback-days 不能为负数")
@@ -389,7 +406,9 @@ def sync_view(
         "modified": 0,
         "watermark": None,
         "finalized": False,
+        "duplicate_source_keys": 0,
     }
+    seen_source_keys: set[str] = set()
     mongo_client = None
     database = None
     try:
@@ -430,6 +449,11 @@ def sync_view(
                         row = dict(zip(spec.columns, values, strict=True))
                         watermark = max_watermark(spec, watermark, row)
                         key = source_key(row, spec)
+                        if validate_source_keys:
+                            if key in seen_source_keys:
+                                stats["duplicate_source_keys"] += 1
+                            else:
+                                seen_source_keys.add(key)
                         stats["source_rows"] += 1
                         if not dry_run:
                             document = {field: bson_value(value) for field, value in row.items()}
@@ -446,6 +470,9 @@ def sync_view(
             finally:
                 cursor.close()
         stats["watermark"] = watermark
+        if stats["duplicate_source_keys"]:
+            stats["error"] = f"发现 {stats['duplicate_source_keys']} 条重复源键"
+            return stats
         stats["success"] = True
         progress_log(f"[{spec.view_id}] 同步完成：rows={stats['source_rows']:,} batches={stats['batches']:,}")
         if not dry_run and not defer_finalize:

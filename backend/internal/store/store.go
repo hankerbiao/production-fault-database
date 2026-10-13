@@ -96,6 +96,13 @@ func ensureCoreIndexes(ctx context.Context, db *mongo.Database, repairCollection
 	create("scs_change_records", "scs_change", []mongo.IndexModel{
 		{Keys: bson.D{{Key: "is_5000_company", Value: 1}, {Key: "create_time", Value: -1}}, Options: options.Index().SetName("scs_change_company_time")},
 	})
+	create("sales_order_delivery_records_sap", "sales_order_delivery", []mongo.IndexModel{
+		{Keys: bson.D{{Key: "VBELN", Value: 1}, {Key: "POSNR", Value: 1}}},
+		{Keys: bson.D{{Key: "VBELN_L", Value: 1}, {Key: "POSNR_L", Value: 1}}},
+		{Keys: bson.D{{Key: "SERNR", Value: 1}}},
+		{Keys: bson.D{{Key: "MATNR", Value: 1}, {Key: "ERDAT", Value: -1}}},
+		{Keys: bson.D{{Key: "KUNNR", Value: 1}, {Key: "ERDAT", Value: -1}}},
+	})
 	return errors.Join(errs...)
 }
 
@@ -255,7 +262,7 @@ func viewFilter(viewID string, f ViewFilters, searchFields []string, dateField s
 			}
 			from, to = "", ""
 			f.ProductModel = ""
-		} else if dateField == "BUDAT_MKPF" {
+		} else if dateField == "BUDAT_MKPF" || dateField == "ERDAT" {
 			from, to = strings.ReplaceAll(from, "-", ""), strings.ReplaceAll(to, "-", "")
 		} else if dateField == "GSTRS" || dateField == "GSTRS_DATE" {
 			if from != "" || to != "" {
@@ -317,7 +324,7 @@ func viewFilter(viewID string, f ViewFilters, searchFields []string, dateField s
 			conditions = append(conditions, exactBatch(field, value, zeroCompat))
 		}
 	}
-	if viewID != "SCS_DOA" && viewID != "SCS_CHANGE" {
+	if viewID == "Z_V_ZMES_T_001" {
 		addExactCompat("PCODE", f.SN, false)
 	}
 	switch viewID {
@@ -335,6 +342,15 @@ func viewFilter(viewID string, f ViewFilters, searchFields []string, dateField s
 		if f.MissingSalesOrder {
 			conditions = append(conditions, bson.M{"$expr": emptyViewField("VBELN_EX")})
 		}
+	case "ZSGV_ZSD46N_SO_KK":
+		addExactCompat("VBELN", f.SalesOrder, false)
+		addExactCompat("VBELN_L", f.DeliveryOrder, false)
+		addExactCompat("BSTNK", f.CustomerPurchaseOrder, false)
+		addExactCompat("KUNNR", f.CustomerNumber, false)
+		addExactCompat("VKORG", f.SalesOrganization, false)
+		addExactCompat("VKBUR", f.SalesOffice, false)
+		addExactCompat("SERNR", f.SN, false)
+		addExactCompat("WERKS", f.Base, false)
 	case "ZSGV_ZPP_SERNOLIST":
 		if f.ProductionOrder != "" {
 			conditions = append(conditions, bson.M{"$or": bson.A{exactBatch("AUFNR_HEAD", f.ProductionOrder, true), exactBatch("AUFNR_ITEM", f.ProductionOrder, true)}})

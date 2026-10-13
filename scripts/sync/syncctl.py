@@ -59,6 +59,8 @@ class Task:
                 args.extend(["--start-date", start_date or ""])
             if end_date:
                 args.extend(["--end-date", end_date])
+        elif self.id == "sales_order_delivery_records":
+            args.extend(["--mode", mode, "--apply"])
         elif self.id == "order_bom_planned_start":
             args.append("--apply")
             if run_id:
@@ -82,6 +84,7 @@ TASKS: tuple[Task, ...] = (
     Task("order_bom_postings", "订单 BOM 过账", "scripts/sync/order_bom_postings.py", ("sales_orders",), 40),
     Task("order_bom_planned_start", "BOM 计划开始时间回填", "scripts/maintenance/backfill_order_bom_planned_start.py", ("sales_orders", "order_bom_postings"), 45),
     Task("serial_bindings", "序列号绑定", "scripts/sync/serial_bindings.py", priority=50),
+    Task("sales_order_delivery_records", "销售订单交付明细", "scripts/sync/sales_order_delivery_records.py", priority=55),
     Task("scs_doa", "SCS DOA", "scripts/sources/scs_doa_sync.py", ("sales_orders",), 60),
     Task("scs_change", "SCS 换上换下", "scripts/sources/scs_change_sync.py", ("scs_doa",), 70),
 )

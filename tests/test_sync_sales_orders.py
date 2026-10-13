@@ -142,10 +142,8 @@ class FakeCollection:
         self.docs.append(dict(doc))
 
     def delete_many(self, query):
-        sources = set(query.get("source", {}).get("$in", []))
-        scope = query.get("_scope_run_id", {}).get("$ne")
         before = len(self.docs)
-        self.docs = [doc for doc in self.docs if not (doc.get("source") in sources and doc.get("_scope_run_id") != scope)]
+        self.docs = [doc for doc in self.docs if not self._match(doc, query)]
         return SimpleNamespace(deleted_count=before - len(self.docs))
 
     def find(self, *_args, **_kwargs):
@@ -168,6 +166,10 @@ class FakeCollection:
                 if "$in" in expected and actual not in expected["$in"]:
                     return False
                 if "$ne" in expected and actual == expected["$ne"]:
+                    return False
+                if "$gte" in expected and actual < expected["$gte"]:
+                    return False
+                if "$lte" in expected and actual > expected["$lte"]:
                     return False
             elif actual != expected:
                 return False
@@ -446,6 +448,34 @@ def test_sync_repair_filters_sales_orders_retains_empty_and_advances_watermark(m
     assert len(db["repairs"].docs) == 2
     checkpoint = db["checkpoints"].find_one({"_id": "repair_records"})
     assert checkpoint["watermark"] == {"ZDATE": "20260102", "ZTIME": "030000"}
+
+
+def test_monthly_repair_cleanup_is_limited_to_the_selected_month_and_keeps_watermark():
+    db = FakeDB()
+    db["repairs"].docs = [
+        {"_id": "sep-stale", "_source_view": "ZSGV_ZZT_WLJL", "ZDATE": "20260910", "_scope_run_id": "old"},
+        {"_id": "sep-current", "_source_view": "ZSGV_ZZT_WLJL", "ZDATE": "20260911", "_scope_run_id": "run-1"},
+        {"_id": "oct-stale", "_source_view": "ZSGV_ZZT_WLJL", "ZDATE": "20261001", "_scope_run_id": "old"},
+        {"_id": "other-view", "_source_view": "other", "ZDATE": "20260910", "_scope_run_id": "old"},
+    ]
+    db["checkpoints"].docs = [{"_id": "repair_records", "watermark": {"ZDATE": "20261012", "ZTIME": "010000"}}]
+
+    result = sync.finalize_repair_run(
+        db, "repairs", "checkpoints",
+        {"success": True, "mode": "monthly", "range": {"start": "2026-09-01", "end": "2026-09-30"}},
+        "run-1",
+    )
+
+    assert result == {"deleted_out_of_scope": 1}
+    assert {doc["_id"] for doc in db["repairs"].docs} == {"sep-current", "oct-stale", "other-view"}
+    assert db["checkpoints"].find_one({"_id": "repair_records"})["watermark"]["ZDATE"] == "20261012"
+
+
+def test_monthly_repair_requires_a_complete_calendar_month():
+    assert sync.is_complete_month(date(2026, 2, 1), date(2026, 2, 28))
+    assert not sync.is_complete_month(date(2026, 2, 2), date(2026, 2, 28))
+    assert not sync.is_complete_month(date(2026, 2, 1), date(2026, 2, 27))
+    assert not sync.is_complete_month(date(2026, 2, 1), date(2026, 3, 31))
 
 
 @pytest.mark.parametrize(

@@ -378,6 +378,15 @@ func TestFilterHelpers(t *testing.T) {
 	if parsedViewFilters.OrderType != "ZP01" {
 		t.Fatalf("orderType=%q", parsedViewFilters.OrderType)
 	}
+	deliveryFilters := viewFilters(url.Values{
+		"deliveryOrder": {"DL-1"}, "customerPurchaseOrder": {"PO-1"}, "customerNumber": {"C-1"},
+		"salesOrganization": {"1000"}, "salesOffice": {"2000"},
+	})
+	if deliveryFilters.DeliveryOrder != "DL-1" || deliveryFilters.CustomerPurchaseOrder != "PO-1" ||
+		deliveryFilters.CustomerNumber != "C-1" || deliveryFilters.SalesOrganization != "1000" ||
+		deliveryFilters.SalesOffice != "2000" {
+		t.Fatalf("delivery filters=%+v", deliveryFilters)
+	}
 }
 
 func TestViewAndDataStatusRoutes(t *testing.T) {

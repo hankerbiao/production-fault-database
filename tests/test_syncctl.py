@@ -24,6 +24,15 @@ def test_planned_start_task_resolves_bom_dependency_and_reports_run_id():
     assert command[-3:] == ["--apply", "--run-id", "run-1"]
 
 
+def test_sales_order_delivery_task_is_registered_without_dependencies_and_has_fixed_scope():
+    task, = resolve_tasks(["sales_order_delivery_records"])
+    assert task.dependencies == ()
+    assert task.full_supported
+    command = task.command("python", "full", "2026-03-01", "2026-03-31")
+    assert command[-3:] == ["--mode", "full", "--apply"]
+    assert command[1].endswith("sales_order_delivery_records.py")
+
+
 def test_script_result_uses_last_json_line_and_preserves_contract():
     task = resolve_tasks(["sales_orders"])[0]
     result = json_result("diagnostic line\n{\"success\": true, \"run_id\": \"child\"}\n", task, "incremental")

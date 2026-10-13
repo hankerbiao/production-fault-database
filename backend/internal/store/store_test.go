@@ -178,6 +178,70 @@ func TestViewFilterIncludesEndDateForStationDatetimes(t *testing.T) {
 	}
 }
 
+func TestSalesOrderDeliveryFilterMapsDateAndBusinessFields(t *testing.T) {
+	filters := ViewFilters{
+		From: "2026-02-01", To: "2026-02-28", SalesOrder: "SO-1", DeliveryOrder: "DL-1",
+		CustomerPurchaseOrder: "PO-1", CustomerNumber: "C-1", SalesOrganization: "1000",
+		SalesOffice: "2000", MaterialCode: "MAT-1", SN: "SN-1",
+	}
+	filter := viewFilter("ZSGV_ZSD46N_SO_KK", filters, nil, "ERDAT")
+	conditions := filter["$and"].(primitive.A)
+	want := map[string]string{
+		"VBELN": "SO-1", "VBELN_L": "DL-1", "BSTNK": "PO-1", "KUNNR": "C-1",
+		"VKORG": "1000", "VKBUR": "2000", "MATNR": "MAT-1", "SERNR": "SN-1",
+	}
+	got := map[string]string{}
+	fromDate, toDate := false, false
+	for _, raw := range conditions {
+		condition := raw.(bson.M)
+		if date, ok := condition["ERDAT"].(bson.M); ok {
+			if date["$gte"] == "20260201" {
+				fromDate = true
+			}
+			if date["$lte"] == "20260228" {
+				toDate = true
+			}
+			if len(date) != 1 {
+				t.Fatalf("ERDAT range=%v", date)
+			}
+			continue
+		}
+		for field := range want {
+			if expression, ok := condition[field].(bson.M); ok {
+				got[field] = strings.Trim(expression["$regex"].(string), "^$")
+				if expression["$options"] != "i" {
+					t.Fatalf("%s options=%v", field, expression)
+				}
+			}
+		}
+	}
+	if !fromDate || !toDate {
+		t.Fatalf("ERDAT boundaries missing: from=%t to=%t", fromDate, toDate)
+	}
+	if len(got) != len(want) {
+		t.Fatalf("mapped filter fields=%v", got)
+	}
+	for field, value := range want {
+		if got[field] != value {
+			t.Errorf("%s=%q, want %q", field, got[field], value)
+		}
+	}
+}
+
+func TestSalesOrderDeliveryPrivateFieldsAreRemovedBeforeDetails(t *testing.T) {
+	doc := bson.M{"VBELN": "SO-1", "STRAS": "private", "TELF1": "private", "ORT01": "private"}
+	hideSalesOrderDeliveryPrivateFields("ZSGV_ZSD46N_SO_KK", doc)
+	if doc["STRAS"] != nil || doc["TELF1"] != nil || doc["ORT01"] != nil {
+		t.Fatalf("private values remain: %v", doc)
+	}
+	fields := viewDetailFields("ZSGV_ZSD46N_SO_KK", doc)
+	for _, field := range fields {
+		if field.Key == "STRAS" || field.Key == "TELF1" || field.Key == "ORT01" {
+			t.Errorf("private detail field returned: %s", field.Key)
+		}
+	}
+}
+
 func TestStationViewDateFilterUsesPlannedStartByDefault(t *testing.T) {
 	config := documentedViews["Z_V_ZMES_T_001"]
 	if config.dateField != "GSTRS" {

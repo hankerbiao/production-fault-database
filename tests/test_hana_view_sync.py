@@ -1,5 +1,7 @@
 from types import SimpleNamespace
 
+from pymongo.errors import OperationFailure
+
 from scripts.sources.hana import hana_view_sync as sync
 
 
@@ -68,6 +70,17 @@ def test_mongo_write_concern_options_are_configurable(monkeypatch):
     assert options["w"] == 1
     assert options["journal"] is False
     assert options["wTimeoutMS"] == 30000
+
+
+def test_ensure_index_reuses_legacy_name_for_same_key_pattern():
+    class Collection:
+        def create_index(self, *_args, **_kwargs):
+            raise OperationFailure("Index already exists with a different name", code=85)
+
+        def list_indexes(self):
+            return iter([{"name": "SERNR_1", "key": {"SERNR": 1}}])
+
+    assert sync.ensure_index(Collection(), "SERNR", name="source_sernr") == "SERNR_1"
 
 
 def test_stream_nonempty_field_values_uses_cursor_not_distinct():

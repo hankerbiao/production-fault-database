@@ -23,7 +23,7 @@ if str(PROJECT_ROOT) not in __import__("sys").path:
 
 try:
     from pymongo import MongoClient, ReturnDocument, UpdateOne
-    from pymongo.errors import DuplicateKeyError
+    from pymongo.errors import DuplicateKeyError, OperationFailure
 except ImportError as exc:  # pragma: no cover - deployment error
     raise SystemExit(f"missing dependency: {exc.name}; install pymongo") from exc
 
@@ -42,6 +42,31 @@ def install_graceful_shutdown() -> None:
 
 def progress_log(message: str) -> None:
     print(f"[{datetime.now().astimezone():%Y-%m-%d %H:%M:%S}] {message}", file=sys.stderr, flush=True)
+
+
+def ensure_index(collection: Any, keys: str | Sequence[tuple[str, int]], *, name: str, unique: bool = False) -> str:
+    """Create an index, reusing a legacy index with the same key pattern.
+
+    MongoDB rejects equivalent indexes when only their names differ.  This is
+    common when the backend creates default names (for example ``SERNR_1``)
+    before a sync script asks for a descriptive name.  Reuse is allowed only
+    when the key pattern matches and, for unique indexes, uniqueness is also
+    preserved.
+    """
+    key_items = [(keys, 1)] if isinstance(keys, str) else list(keys)
+    try:
+        return collection.create_index(key_items if len(key_items) > 1 else key_items[0][0], name=name, unique=unique)
+    except OperationFailure as exc:
+        if exc.code != 85:
+            raise
+        for existing in collection.list_indexes():
+            existing_keys = list(existing.get("key", {}).items())
+            if existing_keys != key_items:
+                continue
+            if unique and not existing.get("unique", False):
+                break
+            return str(existing.get("name", name))
+        raise
 
 
 @dataclass(frozen=True)
@@ -428,11 +453,11 @@ def sync_view(
             # duplicates must be scanned and removed by its cleanup stage before a
             # unique source-key constraint could be safely introduced.
             if spec.view_id != "ZSGV_ZPP_SERNOLIST":
-                collection.create_index("_source_key", unique=True, name="source_key_unique")
+                ensure_index(collection, "_source_key", unique=True, name="source_key_unique")
             else:
-                collection.create_index("_source_key", name="source_key_lookup")
+                ensure_index(collection, "_source_key", name="source_key_lookup")
             for field in spec.index_fields:
-                collection.create_index(field, name=f"source_{field.lower()}")
+                ensure_index(collection, field, name=f"source_{field.lower()}")
             runs.insert_one({"_id": f"{run_id}:{spec.view_id}", "view_id": spec.view_id, "collection": spec.collection, "status": "running", "started_at": datetime.now(timezone.utc)})
             checkpoint = checkpoints.find_one({"_id": CHECKPOINT_PREFIX + spec.view_id}) if mode == "incremental" else None
         else:

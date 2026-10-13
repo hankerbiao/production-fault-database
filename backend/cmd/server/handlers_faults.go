@@ -25,6 +25,7 @@ func (s *server) faultLookup(w http.ResponseWriter, r *http.Request) {
 		SalesOrders      []string `json:"salesOrders"`
 		DateFrom         string   `json:"dateFrom"`
 		DateTo           string   `json:"dateTo"`
+		TimeField        string   `json:"timeField"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON body"})
@@ -34,7 +35,7 @@ func (s *server) faultLookup(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"items": []store.FaultSN{}})
 		return
 	}
-	items, err := s.store.FaultSNs(r.Context(), store.Filters{ProductionOrders: strings.Join(body.ProductionOrders, ","), SalesOrders: strings.Join(body.SalesOrders, ","), DateFrom: body.DateFrom, DateTo: body.DateTo})
+	items, err := s.store.FaultSNs(r.Context(), store.Filters{ProductionOrders: strings.Join(body.ProductionOrders, ","), SalesOrders: strings.Join(body.SalesOrders, ","), DateFrom: body.DateFrom, DateTo: body.DateTo, TimeField: body.TimeField})
 	if err != nil {
 		writeStoreError(w, err)
 		return

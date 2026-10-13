@@ -204,14 +204,18 @@ func faultLookupFilter(f Filters) bson.M {
 		}
 	}
 	if f.DateFrom != "" || f.DateTo != "" {
-		bounds := bson.M{}
-		if f.DateFrom != "" {
-			bounds["$gte"] = strings.ReplaceAll(f.DateFrom, "-", "")
+		if strings.EqualFold(strings.TrimSpace(f.TimeField), "planned") {
+			conditions = append(conditions, repairPlannedDateRangeFilter(f.DateFrom, f.DateTo))
+		} else {
+			bounds := bson.M{}
+			if f.DateFrom != "" {
+				bounds["$gte"] = strings.ReplaceAll(f.DateFrom, "-", "")
+			}
+			if f.DateTo != "" {
+				bounds["$lte"] = strings.ReplaceAll(f.DateTo, "-", "")
+			}
+			conditions = append(conditions, bson.M{"ZDATE_WX": bounds})
 		}
-		if f.DateTo != "" {
-			bounds["$lte"] = strings.ReplaceAll(f.DateTo, "-", "")
-		}
-		conditions = append(conditions, bson.M{"ZDATE_WX": bounds})
 	}
 	if len(conditions) == 0 {
 		return bson.M{"_id": bson.M{"$exists": false}}

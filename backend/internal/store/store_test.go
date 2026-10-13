@@ -57,6 +57,20 @@ func TestRepairPlannedDateRangeFilterSupportsISOAndSAPDates(t *testing.T) {
 	}
 }
 
+func TestFaultLookupFilterUsesPlannedDateWhenRequested(t *testing.T) {
+	filter := faultLookupFilter(Filters{
+		ProductionOrders: "30226290",
+		DateFrom:         "2026-09-01",
+		DateTo:           "2026-09-30",
+		TimeField:        "planned",
+	})
+	conditions := filter["$and"].(primitive.A)
+	dateBranches := conditions[1].(bson.M)["$or"].(primitive.A)
+	if _, ok := dateBranches[0].(bson.M)["GSTRS"]; !ok {
+		t.Fatalf("planned lookup date filter=%v", filter)
+	}
+}
+
 func TestOrderFilterAndMissingField(t *testing.T) {
 	filter := orderFilter(OrderFilters{Source: "SG", GSTRSFrom: "2026-01-01", GSTRSTo: "2026-01-31", Keyword: "SO"})
 	if len(filter["$and"].(primitive.A)) != 3 {

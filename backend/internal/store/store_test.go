@@ -431,6 +431,14 @@ func TestBOMViewFilterUsesOrderType(t *testing.T) {
 	}
 }
 
+func TestBulkRepairProjectionKeepsBothLRRMaterialFields(t *testing.T) {
+	for _, field := range []string{"MATNR", "RECORD01REPAIRM", "GSTRS", "AUFNR", "VBELN"} {
+		if repairListProjection[field] != 1 {
+			t.Errorf("bulk repair rows omit LRR matching field %s", field)
+		}
+	}
+}
+
 func TestStatsUseSingleAggregationPipeline(t *testing.T) {
 	for name, pipeline := range map[string]mongo.Pipeline{
 		"repairs": repairStatsPipeline(repairFilter(Filters{HostBarcode: "PC-1"}), "repair"),

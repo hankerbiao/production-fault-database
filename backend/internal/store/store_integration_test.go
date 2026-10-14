@@ -39,7 +39,7 @@ func TestMongoQueriesWithTemporaryDatabase(t *testing.T) {
 	now := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
 	_, err = db.Collection(repairName).InsertMany(ctx, []any{
 		bson.M{"_id": "r1", "_source_key": "r1", "_legacy_ids": bson.A{"old-source-key", "merged-document-id"}, "PCODE": "PC-1", "VBELN": "SO-1", "AUFNR": "PO-1", "ERROR_CODE": "E1", "ZDATE_WX": "20260102", "ZTIME": "030405", "_synced_at": now},
-		bson.M{"_id": "r2", "_source_key": "r2", "PCODE": "PC-2", "VBELN": "SO-1", "AUFNR": "PO-2", "ZDATE_WX": "20260101", "ZTIME": "020000", "_synced_at": now},
+		bson.M{"_id": "r2", "_source_key": "r2", "PCODE": "PC-2", "VBELN": "SO-1", "AUFNR": "PO-2", "ZDATE_WX": "20260101", "GSTRS": "2026-01-01", "MATNR": "B5000051", "RECORD01REPAIRM": "57000766", "ZTIME": "020000", "_synced_at": now},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -57,6 +57,10 @@ func TestMongoQueriesWithTemporaryDatabase(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer s.Close(context.Background())
+	repairs, err := s.FaultRowsBySNS(ctx, []string{"PC-2"}, "2026-01-01", "2026-01-31", "", "planned")
+	if err != nil || len(repairs) != 1 || repairs[0]["MATNR"] != "B5000051" || repairs[0]["RECORD01REPAIRM"] != "57000766" {
+		t.Fatalf("bulk repairs lose LRR material fields: rows=%v err=%v", repairs, err)
+	}
 	for _, id := range []string{"r1", "old-source-key", "merged-document-id"} {
 		detail, err := s.FaultDetail(ctx, id)
 		if err != nil || detail.Fault.ID != "r1" {

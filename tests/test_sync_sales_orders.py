@@ -101,17 +101,18 @@ def test_watermark_and_aggregate():
 
 def test_repair_query_modes():
     sql, params = sync.repair_query("full", None, date(2026, 1, 1), date(2026, 1, 31))
-    assert '"ZDATE" >= ?' in sql and '"ZDATE" <= ?' in sql
+    assert '"ZDATE_WX" >= ?' in sql and '"ZDATE_WX" <= ?' in sql
     assert params == ["20260101", "20260131"]
     checkpoint = {"watermark": {"ZDATE": "20260115", "ZTIME": "101010"}}
-    _, params = sync.repair_query("incremental", checkpoint, date(2026, 1, 8), date(2026, 1, 31))
-    assert params[:3] == ["20260115", "20260115", "101010"]
+    sql, params = sync.repair_query("incremental", checkpoint, date(2026, 1, 8), date(2026, 1, 31))
+    assert params == ["20260108", "20260131"]
+    assert '"ZDATE" >' not in sql and '"ZTIME" >=' not in sql
 
 
 def test_repair_sync_start_date_is_hard_limited():
     assert sync.REPAIR_START_DATE == date(2026, 1, 1)
     sql, params = sync.repair_query("full", None, sync.REPAIR_START_DATE, date(2026, 1, 31))
-    assert '"ZDATE" >= ?' in sql
+    assert '"ZDATE_WX" >= ?' in sql
     assert params[0] == "20260101"
 
 
@@ -146,8 +147,8 @@ class FakeCollection:
         self.docs = [doc for doc in self.docs if not self._match(doc, query)]
         return SimpleNamespace(deleted_count=before - len(self.docs))
 
-    def find(self, *_args, **_kwargs):
-        return list(self.docs)
+    def find(self, query=None, *_args, **_kwargs):
+        return [dict(doc) for doc in self.docs if self._match(doc, query or {})]
 
     def distinct(self, field):
         values = []
@@ -167,9 +168,9 @@ class FakeCollection:
                     return False
                 if "$ne" in expected and actual == expected["$ne"]:
                     return False
-                if "$gte" in expected and actual < expected["$gte"]:
+                if "$gte" in expected and (actual is None or actual < expected["$gte"]):
                     return False
-                if "$lte" in expected and actual > expected["$lte"]:
+                if "$lte" in expected and (actual is None or actual > expected["$lte"]):
                     return False
             elif actual != expected:
                 return False
@@ -407,7 +408,7 @@ def test_sync_sales_replace_collection_deletes_after_confirm(monkeypatch):
     assert {doc["_id"] for doc in FakeMongoClient.instances[-1].db["orders"].docs} == {"SG:new-sg", "KK:new-kk"}
 
 
-def test_sync_repair_filters_sales_orders_retains_empty_and_advances_watermark(monkeypatch):
+def test_sync_repair_retains_unmatched_orders_and_leaves_legacy_watermark(monkeypatch):
     db = FakeDB()
     db["orders"].docs = [{"_id": "SG:1", "data": {"VBELN": "SO-1"}}]
     monkeypatch.setenv("TARGET_COLLECTION", "orders")
@@ -415,7 +416,7 @@ def test_sync_repair_filters_sales_orders_retains_empty_and_advances_watermark(m
     values_by_row = []
     for vbeln, ztime in [("SO-1", "010000"), ("SO-MISSING", "020000"), ("", "030000")]:
         row = {field: "" for field in sync.REPAIR_COLUMNS}
-        row.update({"MANDT": "800", "PCODE": "PC-1", "ZMCOD1": "SN-1", "ZDATE_WX": "20260102", "ZDATE": "20260102", "ZTIME": ztime, "VBELN": vbeln})
+        row.update({"MANDT": "800", "PCODE": "PC-1", "ZMCOD1": "SN-1", "ZWXDT": "20260102" + ztime, "ZDATE_WX": "20260102", "ZDATE": "20260102", "ZTIME": ztime, "VBELN": vbeln})
         values_by_row.append(tuple(row[field] for field in sync.REPAIR_COLUMNS))
 
     class Cursor:
@@ -444,31 +445,32 @@ def test_sync_repair_filters_sales_orders_retains_empty_and_advances_watermark(m
     monkeypatch.setattr(sync, "hana_connection", fake_hana_connection)
     result = sync.sync_repair(db, "repairs", "checkpoints", "incremental", date(2026, 1, 1), date(2026, 1, 2), 7, 1, False, "run-1")
     assert result["success"] is True
-    assert result["source_rows"] == 3 and result["matched_sales_orders"] == 1 and result["empty_sales_orders_retained"] == 1 and result["filtered_missing_sales_order"] == 1
-    assert len(db["repairs"].docs) == 2
-    checkpoint = db["checkpoints"].find_one({"_id": "repair_records"})
-    assert checkpoint["watermark"] == {"ZDATE": "20260102", "ZTIME": "030000"}
+    assert result["source_rows"] == 3 and result["matched_sales_orders"] == 1 and result["empty_sales_orders_retained"] == 1
+    assert result["unmatched_sales_orders_retained"] == 1
+    assert len(db["repairs"].docs) == 3
+    assert db["checkpoints"].docs == []
 
 
 def test_monthly_repair_cleanup_is_limited_to_the_selected_month_and_keeps_watermark():
     db = FakeDB()
     db["repairs"].docs = [
-        {"_id": "sep-stale", "_source_view": "ZSGV_ZZT_WLJL", "ZDATE": "20260910", "_scope_run_id": "old"},
-        {"_id": "sep-current", "_source_view": "ZSGV_ZZT_WLJL", "ZDATE": "20260911", "_scope_run_id": "run-1"},
-        {"_id": "oct-stale", "_source_view": "ZSGV_ZZT_WLJL", "ZDATE": "20261001", "_scope_run_id": "old"},
-        {"_id": "other-view", "_source_view": "other", "ZDATE": "20260910", "_scope_run_id": "old"},
+        {"_id": "sep-stale", "_source_view": "ZSGV_ZZT_WLJL", "ZDATE_WX": "20260910", "ZDATE": "20261010", "_scope_run_id": "old"},
+        {"_id": "sep-current", "_source_view": "ZSGV_ZZT_WLJL", "ZDATE_WX": "20260911", "_scope_run_id": "run-1"},
+        {"_id": "oct-stale", "_source_view": "ZSGV_ZZT_WLJL", "ZDATE_WX": "20261001", "ZDATE": "20260901", "_scope_run_id": "old"},
+        {"_id": "other-view", "_source_view": "other", "ZDATE_WX": "20260910", "_scope_run_id": "old"},
     ]
     db["checkpoints"].docs = [{"_id": "repair_records", "watermark": {"ZDATE": "20261012", "ZTIME": "010000"}}]
 
     result = sync.finalize_repair_run(
         db, "repairs", "checkpoints",
-        {"success": True, "mode": "monthly", "range": {"start": "2026-09-01", "end": "2026-09-30"}},
+        {"success": True, "snapshot_complete": True, "run_id": "run-1", "unique_rows": 1, "mode": "monthly", "range": {"start": "2026-09-01", "end": "2026-09-30"}},
         "run-1",
     )
 
     assert result == {"deleted_out_of_scope": 1}
     assert {doc["_id"] for doc in db["repairs"].docs} == {"sep-current", "oct-stale", "other-view"}
     assert db["checkpoints"].find_one({"_id": "repair_records"})["watermark"]["ZDATE"] == "20261012"
+    assert db["repairs_archive"].docs[0]["document"]["_id"] == "sep-stale"
 
 
 def test_monthly_repair_requires_a_complete_calendar_month():

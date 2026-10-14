@@ -3,12 +3,44 @@ package store
 import (
 	"context"
 	"fmt"
+	"sort"
 	"sync"
 
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
+
+func (s *Store) ViewOptions(ctx context.Context, viewID, field string) (ViewOptionsResult, error) {
+	_, ok := documentedViews[viewID]
+	if !ok {
+		return ViewOptionsResult{}, fmt.Errorf("unknown view: %s", viewID)
+	}
+	if viewID != "ZSGV_ZSD46N_SO_KK" || field != "BZTXT" {
+		return ViewOptionsResult{}, fmt.Errorf("unsupported view option: %s.%s", viewID, field)
+	}
+	values, err := s.views[viewID].Distinct(ctx, field, bson.M{
+		field: bson.M{"$exists": true, "$nin": bson.A{"", nil}},
+	})
+	if err != nil {
+		return ViewOptionsResult{}, err
+	}
+	unique := make(map[string]struct{}, len(values))
+	items := make([]string, 0, len(values))
+	for _, value := range values {
+		text := fmt.Sprint(value)
+		if text == "" {
+			continue
+		}
+		if _, exists := unique[text]; exists {
+			continue
+		}
+		unique[text] = struct{}{}
+		items = append(items, text)
+	}
+	sort.Strings(items)
+	return ViewOptionsResult{Items: items}, nil
+}
 
 func (s *Store) ViewList(ctx context.Context, viewID string, f ViewFilters, page, pageSize int, preview bool) (ViewListResult, error) {
 	config, ok := documentedViews[viewID]
@@ -17,6 +49,18 @@ func (s *Store) ViewList(ctx context.Context, viewID string, f ViewFilters, page
 	}
 	dateField := viewDateField(viewID, f, config.dateField)
 	filter := viewFilter(viewID, f, config.searchFields, dateField)
+	if viewID == "ZSGV_ZSD46N_SO_KK" {
+		if len(filter) == 0 {
+			available, err := s.waitForSalesOrderDeliverySummary(ctx)
+			if err != nil {
+				return ViewListResult{}, err
+			}
+			if available {
+				return s.viewSalesOrderDeliverySummaryCollection(ctx, page, pageSize, preview)
+			}
+		}
+		return s.viewSalesOrderDeliveryList(ctx, filter, page, pageSize, preview)
+	}
 	sortFields := bson.D{}
 	for _, field := range config.orderFields {
 		sortFields = append(sortFields, bson.E{Key: field, Value: -1})
@@ -91,6 +135,27 @@ func (s *Store) ViewListAll(ctx context.Context, viewID string, f ViewFilters) (
 	}
 	dateField := viewDateField(viewID, f, config.dateField)
 	filter := viewFilter(viewID, f, config.searchFields, dateField)
+	if viewID == "ZSGV_ZSD46N_SO_KK" {
+		if len(filter) == 0 {
+			available, err := s.waitForSalesOrderDeliverySummary(ctx)
+			if err != nil {
+				return ViewListResult{}, err
+			}
+			if available {
+				return s.viewSalesOrderDeliverySummaryAll(ctx)
+			}
+		}
+		pipeline := salesOrderDeliverySummaryPipeline(filter)
+		docs, total, err := salesOrderDeliverySummaryPage(ctx, s.views[viewID], pipeline, 0, MaxSalesOrderDeliverySummaryRows)
+		if err != nil {
+			return ViewListResult{}, err
+		}
+		for _, doc := range docs {
+			delete(doc, "_id")
+			normalizeViewID(doc)
+		}
+		return ViewListResult{Items: docs, Page: 1, PageSize: len(docs), Total: total}, nil
+	}
 	total, err := s.views[viewID].CountDocuments(ctx, filter)
 	if err != nil {
 		return ViewListResult{}, err
@@ -115,6 +180,191 @@ func (s *Store) ViewListAll(ctx context.Context, viewID string, f ViewFilters) (
 	// Total intentionally remains the count before the hard query limit so API
 	// clients can detect truncation without fetching an unbounded result set.
 	return ViewListResult{Items: docs, Page: 1, PageSize: len(docs), Total: total}, nil
+}
+
+func (s *Store) viewSalesOrderDeliveryList(ctx context.Context, filter bson.M, page, pageSize int, preview bool) (ViewListResult, error) {
+	pipeline := salesOrderDeliverySummaryPipeline(filter)
+	if preview {
+		pipeline = append(pipeline, salesOrderDeliverySummarySort(),
+			bson.D{{Key: "$skip", Value: int64((page - 1) * pageSize)}},
+			bson.D{{Key: "$limit", Value: int64(pageSize + 1)}})
+		cur, err := s.views["ZSGV_ZSD46N_SO_KK"].Aggregate(ctx, pipeline, options.Aggregate().SetAllowDiskUse(true))
+		if err != nil {
+			return ViewListResult{}, err
+		}
+		defer cur.Close(ctx)
+		docs := make([]bson.M, 0, pageSize)
+		if err := cur.All(ctx, &docs); err != nil {
+			return ViewListResult{}, err
+		}
+		hasMore := len(docs) > pageSize
+		if hasMore {
+			docs = docs[:pageSize]
+		}
+		for _, doc := range docs {
+			delete(doc, "_id")
+			normalizeViewID(doc)
+		}
+		return ViewListResult{Items: docs, Page: page, PageSize: pageSize, Total: int64(len(docs)), HasMore: hasMore, Preview: true}, nil
+	}
+
+	docs, total, err := salesOrderDeliverySummaryPage(ctx, s.views["ZSGV_ZSD46N_SO_KK"], pipeline, int64((page-1)*pageSize), int64(pageSize))
+	if err != nil {
+		return ViewListResult{}, err
+	}
+	for _, doc := range docs {
+		delete(doc, "_id")
+		normalizeViewID(doc)
+	}
+	return ViewListResult{Items: docs, Page: page, PageSize: pageSize, Total: total}, nil
+}
+
+func salesOrderDeliverySummaryPage(ctx context.Context, collection *mongo.Collection, pipeline mongo.Pipeline, skip, limit int64) ([]bson.M, int64, error) {
+	facetPipeline := append(mongo.Pipeline{}, pipeline...)
+	facetPipeline = append(facetPipeline, bson.D{{Key: "$facet", Value: bson.M{
+		"items": bson.A{
+			salesOrderDeliverySummarySort(),
+			bson.D{{Key: "$skip", Value: skip}},
+			bson.D{{Key: "$limit", Value: limit}},
+		},
+		"total": bson.A{bson.D{{Key: "$count", Value: "total"}}},
+	}}})
+	cur, err := collection.Aggregate(ctx, facetPipeline, options.Aggregate().SetAllowDiskUse(true).SetBatchSize(10000))
+	if err != nil {
+		return nil, 0, err
+	}
+	defer cur.Close(ctx)
+	var rows []struct {
+		Items []bson.M `bson:"items"`
+		Total []struct {
+			Count int64 `bson:"total"`
+		} `bson:"total"`
+	}
+	if err := cur.All(ctx, &rows); err != nil {
+		return nil, 0, err
+	}
+	if len(rows) == 0 {
+		return []bson.M{}, 0, nil
+	}
+	var total int64
+	if len(rows[0].Total) > 0 {
+		total = rows[0].Total[0].Count
+	}
+	return rows[0].Items, total, nil
+}
+
+func salesOrderDeliverySummarySort() bson.D {
+	return bson.D{{Key: "$sort", Value: bson.D{
+		{Key: "ERDAT", Value: -1},
+		{Key: "VBELN", Value: -1},
+		{Key: "_source_key", Value: -1},
+	}}}
+}
+
+func salesOrderDeliverySummaryPipeline(filter bson.M) mongo.Pipeline {
+	orderKey := bson.M{"$cond": bson.A{
+		emptyViewField("VBELN"),
+		bson.M{"$concat": bson.A{"__missing__", normalizedViewField("_source_key")}},
+		normalizedViewField("VBELN"),
+	}}
+	deliveryLineKey := bson.M{"$cond": bson.A{
+		bson.M{"$eq": bson.A{"$_id.delivery", ""}},
+		"|",
+		bson.M{"$concat": bson.A{"$_id.delivery", "|", "$_id.deliveryItem"}},
+	}}
+	uniqueSerials := bson.M{"$reduce": bson.M{
+		"input":        "$serialGroups",
+		"initialValue": bson.A{},
+		"in":           bson.M{"$setUnion": bson.A{"$$value", "$$this"}},
+	}}
+	sumQuantities := func(input any) bson.M {
+		return bson.M{"$reduce": bson.M{
+			"input":        input,
+			"initialValue": 0,
+			"in": bson.M{"$add": bson.A{
+				"$$value",
+				bson.M{"$convert": bson.M{
+					"input": "$$this.quantity", "to": "double", "onError": 0, "onNull": 0,
+				}},
+			}},
+		}}
+	}
+	deliveryLinesForSum := bson.M{"$filter": bson.M{
+		"input": "$deliveryLines",
+		"as":    "line",
+		"cond":  bson.M{"$ne": bson.A{"$$line.key", "|"}},
+	}}
+	deliveryLineKeys := bson.M{"$map": bson.M{
+		"input": "$deliveryLines",
+		"as":    "line",
+		"in":    "$$line.key",
+	}}
+
+	return mongo.Pipeline{
+		{{Key: "$match", Value: filter}},
+		{{Key: "$group", Value: bson.M{
+			"_id": bson.M{
+				"order":        orderKey,
+				"item":         normalizedViewField("POSNR"),
+				"delivery":     normalizedViewField("VBELN_L"),
+				"deliveryItem": normalizedViewField("POSNR_L"),
+			},
+			"_source_key": bson.M{"$max": "$_source_key"},
+			"VBELN":       bson.M{"$max": "$VBELN"},
+			"ERDAT":       bson.M{"$max": "$ERDAT"},
+			"KUNNR":       bson.M{"$max": "$KUNNR"},
+			"NAME1":       bson.M{"$max": "$NAME1"},
+			"BSTNK":       bson.M{"$max": "$BSTNK"},
+			"BZTXT":       bson.M{"$max": "$BZTXT"},
+			"VKORG":       bson.M{"$max": "$VKORG"},
+			"VKBUR":       bson.M{"$max": "$VKBUR"},
+			"CMGST":       bson.M{"$max": "$CMGST"},
+			"KWMENG": bson.M{"$max": bson.M{"$convert": bson.M{
+				"input": "$KWMENG", "to": "double", "onError": 0, "onNull": 0,
+			}}},
+			"LFIMG": bson.M{"$max": bson.M{"$convert": bson.M{
+				"input": "$LFIMG", "to": "double", "onError": 0, "onNull": 0,
+			}}},
+			"MATNR": bson.M{"$max": normalizedViewField("MATNR")},
+			"SERNR": bson.M{"$addToSet": normalizedViewField("SERNR")},
+		}}},
+		{{Key: "$group", Value: bson.M{
+			"_id":         "$_id.order",
+			"_source_key": bson.M{"$max": "$_source_key"},
+			"VBELN":       bson.M{"$max": "$VBELN"},
+			"ERDAT":       bson.M{"$max": "$ERDAT"},
+			"KUNNR":       bson.M{"$max": "$KUNNR"},
+			"NAME1":       bson.M{"$max": "$NAME1"},
+			"BSTNK":       bson.M{"$max": "$BSTNK"},
+			"BZTXT":       bson.M{"$max": "$BZTXT"},
+			"VKORG":       bson.M{"$max": "$VKORG"},
+			"VKBUR":       bson.M{"$max": "$VKBUR"},
+			"CMGST":       bson.M{"$max": "$CMGST"},
+			"orderLines":  bson.M{"$addToSet": bson.M{"key": "$_id.item", "quantity": "$KWMENG"}},
+			"deliveryLines": bson.M{"$addToSet": bson.M{
+				"key": deliveryLineKey, "quantity": "$LFIMG",
+			}},
+			"deliveryOrders": bson.M{"$addToSet": "$_id.delivery"},
+			"materialValues": bson.M{"$addToSet": "$MATNR"},
+			"serialGroups":   bson.M{"$addToSet": "$SERNR"},
+		}}},
+		{{Key: "$project", Value: bson.M{
+			"_id": "$_id", "_source_key": 1, "VBELN": 1, "ERDAT": 1, "KUNNR": 1,
+			"NAME1": 1, "BSTNK": 1, "BZTXT": 1, "VKORG": 1, "VKBUR": 1, "CMGST": 1,
+			"orderItemCount": bson.M{"$size": bson.M{"$setDifference": bson.A{
+				bson.M{"$map": bson.M{"input": "$orderLines", "as": "line", "in": "$$line.key"}},
+				bson.A{""},
+			}}},
+			"deliveryCount": bson.M{"$size": bson.M{"$setDifference": bson.A{"$deliveryOrders", bson.A{""}}}},
+			"deliveryLineCount": bson.M{"$size": bson.M{"$setDifference": bson.A{
+				deliveryLineKeys, bson.A{"|"},
+			}}},
+			"materialCount": bson.M{"$size": bson.M{"$setDifference": bson.A{"$materialValues", bson.A{""}}}},
+			"serialCount":   bson.M{"$size": bson.M{"$setDifference": bson.A{uniqueSerials, bson.A{""}}}},
+			"KWMENG":        sumQuantities("$orderLines"),
+			"LFIMG":         sumQuantities(deliveryLinesForSum),
+		}}},
+	}
 }
 
 // ViewBOMStream writes source BOM fields as CSV without JSON map reflection.
@@ -279,6 +529,9 @@ func viewStatsPipeline(viewID string, filter bson.M, dateField string) mongo.Pip
 		project["missingProductionOrder"] = 1
 		project["missingSalesOrder"] = 1
 		project["missingProductionOrderDistinct"] = bson.M{"$size": bson.M{"$setDifference": bson.A{"$missingProductionOrderValues", bson.A{"", nil}}}}
+	} else if viewID == "ZSGV_ZSD46N_SO_KK" {
+		group["salesOrderValues"] = bson.M{"$addToSet": normalizedViewField("VBELN")}
+		project["salesOrders"] = bson.M{"$size": bson.M{"$setDifference": bson.A{"$salesOrderValues", bson.A{""}}}}
 	}
 	return mongo.Pipeline{
 		{{Key: "$match", Value: filter}},

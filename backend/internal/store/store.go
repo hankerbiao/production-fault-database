@@ -57,9 +57,18 @@ func New(ctx context.Context, uri, database, repairCollection, orderCollection s
 	}
 	result := &Store{
 		client: client, db: db, repairs: db.Collection(repairCollection), orders: db.Collection(orderCollection), views: views,
-		bomCache: make(map[string]bomStreamCacheEntry), bomWarmDone: make(chan struct{}),
+		salesOrderDeliverySummaryMeta:  db.Collection(salesOrderDeliverySummaryMetaCollection),
+		salesOrderDeliverySummaryReady: make(chan struct{}),
+		bomCache:                       make(map[string]bomStreamCacheEntry), bomWarmDone: make(chan struct{}),
 		stationCache: make(map[string]bomStreamCacheEntry), stationWarmDone: make(chan struct{}),
 	}
+	go func() {
+		indexCtx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
+		defer cancel()
+		if err := result.RefreshSalesOrderDeliverySummary(indexCtx); err != nil {
+			log.Printf("sales order delivery summary initialization failed: %v", err)
+		}
+	}()
 	// Warm the broad LRR raw snapshot after startup so the first dashboard read
 	// does not pay the full Mongo scan latency.
 	go result.prewarmBOMStream()
@@ -351,6 +360,17 @@ func viewFilter(viewID string, f ViewFilters, searchFields []string, dateField s
 		addExactCompat("VKBUR", f.SalesOffice, false)
 		addExactCompat("SERNR", f.SN, false)
 		addExactCompat("WERKS", f.Base, false)
+		addExactCompat("BZTXT", f.SalesRegionName, false)
+		company5000 := f.Company5000
+		if company5000 == "" {
+			company5000 = f.LimitedCompany
+		}
+		switch strings.ToLower(strings.TrimSpace(company5000)) {
+		case "yes", "true", "1", "是":
+			conditions = append(conditions, bson.M{"VBELN": bson.M{"$regex": "^XNC", "$options": "i"}})
+		case "no", "false", "0", "否":
+			conditions = append(conditions, bson.M{"VBELN": bson.M{"$not": bson.M{"$regex": "^XNC", "$options": "i"}}})
+		}
 	case "ZSGV_ZPP_SERNOLIST":
 		if f.ProductionOrder != "" {
 			conditions = append(conditions, bson.M{"$or": bson.A{exactBatch("AUFNR_HEAD", f.ProductionOrder, true), exactBatch("AUFNR_ITEM", f.ProductionOrder, true)}})

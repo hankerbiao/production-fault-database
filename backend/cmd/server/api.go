@@ -35,4 +35,5 @@ type storeAPI interface {
 	ViewSCSStream(context.Context, string, store.ViewFilters, io.Writer) error
 	ViewDetail(context.Context, string, string) (store.ViewDetailResult, error)
 	ViewStats(context.Context, string, store.ViewFilters) (store.ViewStatsResult, error)
+	ViewOptions(context.Context, string, string) (store.ViewOptionsResult, error)
 }

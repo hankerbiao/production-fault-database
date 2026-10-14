@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -13,8 +14,9 @@ import (
 )
 
 type syncManager struct {
-	mu     sync.RWMutex
-	status syncStatus
+	mu                               sync.RWMutex
+	status                           syncStatus
+	refreshSalesOrderDeliverySummary func() error
 }
 
 type syncStatus struct {
@@ -126,12 +128,33 @@ func (m *syncManager) startRun(request syncRunRequest) (syncStatus, error) {
 			} else {
 				status.Message = "同步失败"
 			}
+		} else if syncRequestIncludesTask(request, "sales_order_delivery_records") && m.refreshSalesOrderDeliverySummary != nil {
+			if refreshErr := m.refreshSalesOrderDeliverySummary(); refreshErr != nil {
+				log.Printf("sales order delivery summary refresh failed: %v", refreshErr)
+				status.Message = "同步完成，但销售订单汇总刷新失败"
+				if status.Summary == nil {
+					status.Summary = make(map[string]any)
+				}
+				status.Summary["salesOrderDeliverySummaryRefreshError"] = refreshErr.Error()
+			}
 		}
 		m.mu.Lock()
 		m.status = status
 		m.mu.Unlock()
 	}()
 	return m.status, nil
+}
+
+func syncRequestIncludesTask(request syncRunRequest, taskID string) bool {
+	if len(request.TaskIDs) == 0 {
+		return true
+	}
+	for _, selected := range request.TaskIDs {
+		if selected == taskID {
+			return true
+		}
+	}
+	return false
 }
 
 func runSyncCommand(python, script string, args []string) (map[string]any, error) {

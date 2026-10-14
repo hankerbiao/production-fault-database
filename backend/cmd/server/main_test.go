@@ -140,6 +140,9 @@ func (f *fakeStore) ViewDetail(context.Context, string, string) (store.ViewDetai
 func (f *fakeStore) ViewStats(context.Context, string, store.ViewFilters) (store.ViewStatsResult, error) {
 	return store.ViewStatsResult{}, f.err
 }
+func (f *fakeStore) ViewOptions(context.Context, string, string) (store.ViewOptionsResult, error) {
+	return store.ViewOptionsResult{}, f.err
+}
 
 func newTestServer(f *fakeStore) *server { return &server{store: f, sync: newSyncManager()} }
 
@@ -380,11 +383,11 @@ func TestFilterHelpers(t *testing.T) {
 	}
 	deliveryFilters := viewFilters(url.Values{
 		"deliveryOrder": {"DL-1"}, "customerPurchaseOrder": {"PO-1"}, "customerNumber": {"C-1"},
-		"salesOrganization": {"1000"}, "salesOffice": {"2000"},
+		"salesOrganization": {"1000"}, "salesOffice": {"2000"}, "limitedCompany": {"yes"},
 	})
 	if deliveryFilters.DeliveryOrder != "DL-1" || deliveryFilters.CustomerPurchaseOrder != "PO-1" ||
 		deliveryFilters.CustomerNumber != "C-1" || deliveryFilters.SalesOrganization != "1000" ||
-		deliveryFilters.SalesOffice != "2000" {
+		deliveryFilters.SalesOffice != "2000" || deliveryFilters.LimitedCompany != "yes" {
 		t.Fatalf("delivery filters=%+v", deliveryFilters)
 	}
 }

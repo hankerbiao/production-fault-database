@@ -225,7 +225,9 @@ func faultLookupFilter(f Filters) bson.M {
 
 func (s *Store) FaultDetail(ctx context.Context, id string) (FaultDetail, error) {
 	var doc bson.M
-	err := s.repairs.FindOne(ctx, bson.M{"$or": bson.A{bson.M{"_source_key": id}, bson.M{"_id": id}}}).Decode(&doc)
+	err := s.repairs.FindOne(ctx, bson.M{"$or": bson.A{
+		bson.M{"_source_key": id}, bson.M{"_id": id}, bson.M{"_legacy_ids": id},
+	}}).Decode(&doc)
 	if err != nil {
 		return FaultDetail{}, err
 	}

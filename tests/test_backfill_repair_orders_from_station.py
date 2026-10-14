@@ -434,7 +434,7 @@ def test_hana_sync_runs_before_backfill_and_commits_after_success(monkeypatch):
     workflow_args.sync_repair_hana = True
     calls = []
 
-    def fake_sync(_db, collection, checkpoint_collection, mode, start_date, end_date, lookback_days, batch_size, dry_run, run_id, defer_finalize):
+    def fake_sync(_db, collection, checkpoint_collection, mode, start_date, end_date, lookback_days, batch_size, dry_run, run_id, defer_finalize, **_kwargs):
         calls.append(("sync", collection, checkpoint_collection, mode, start_date, end_date, lookback_days, batch_size, dry_run, run_id, defer_finalize))
         return {"success": True, "mode": "incremental", "watermark": {"ZDATE": "20260903", "ZTIME": "010000"}}
 

@@ -34,7 +34,13 @@ func main() {
 	}
 	defer s.Close(context.Background())
 
-	h := &server{store: s, sync: newSyncManager(), config: newServiceConfig()}
+	sync := newSyncManager()
+	sync.refreshSalesOrderDeliverySummary = func() error {
+		refreshCtx, refreshCancel := context.WithTimeout(context.Background(), 15*time.Minute)
+		defer refreshCancel()
+		return s.RefreshSalesOrderDeliverySummary(refreshCtx)
+	}
+	h := &server{store: s, sync: sync, config: newServiceConfig()}
 	mux := registerRoutes(h)
 
 	// Keep the default aligned with the Vite development proxy and README.

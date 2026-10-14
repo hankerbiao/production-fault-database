@@ -65,6 +65,7 @@ func viewFilters(q url.Values) store.ViewFilters {
 		AcceptedDateFrom: query(q, "acceptedDateFrom"), AcceptedDateTo: query(q, "acceptedDateTo"),
 		DeliveryOrder: query(q, "deliveryOrder"), CustomerPurchaseOrder: query(q, "customerPurchaseOrder"),
 		CustomerNumber: query(q, "customerNumber"), SalesOrganization: query(q, "salesOrganization"), SalesOffice: query(q, "salesOffice"),
+		LimitedCompany: query(q, "limitedCompany"), SalesRegionName: query(q, "bztxt"),
 	}
 }
 

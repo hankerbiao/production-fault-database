@@ -10,20 +10,26 @@ import (
 )
 
 type Store struct {
-	client              *mongo.Client
-	db                  *mongo.Database
-	repairs             *mongo.Collection
-	orders              *mongo.Collection
-	views               map[string]*mongo.Collection
-	bomCacheMu          sync.RWMutex
-	bomCache            map[string]bomStreamCacheEntry
-	bomWarmDone         chan struct{}
-	stationCacheMu      sync.RWMutex
-	stationCache        map[string]bomStreamCacheEntry
-	stationWarmDone     chan struct{}
-	companyOrderCacheMu sync.Mutex
-	companyOrderCacheAt time.Time
-	companyOrderCache   []string
+	client                             *mongo.Client
+	db                                 *mongo.Database
+	repairs                            *mongo.Collection
+	orders                             *mongo.Collection
+	views                              map[string]*mongo.Collection
+	salesOrderDeliverySummaryMeta      *mongo.Collection
+	salesOrderDeliverySummaryRefreshMu sync.Mutex
+	salesOrderDeliverySummaryStateMu   sync.RWMutex
+	salesOrderDeliverySummaryReady     chan struct{}
+	salesOrderDeliverySummaryReadyOnce sync.Once
+	salesOrderDeliverySummaryAvailable bool
+	bomCacheMu                         sync.RWMutex
+	bomCache                           map[string]bomStreamCacheEntry
+	bomWarmDone                        chan struct{}
+	stationCacheMu                     sync.RWMutex
+	stationCache                       map[string]bomStreamCacheEntry
+	stationWarmDone                    chan struct{}
+	companyOrderCacheMu                sync.Mutex
+	companyOrderCacheAt                time.Time
+	companyOrderCache                  []string
 }
 
 // SyncRun is intentionally flexible because the Python orchestration runtime
@@ -144,6 +150,9 @@ type OrderListResult struct {
 const MaxBulkQueryRows = 10000
 const MaxOrderQueryRows = MaxBulkQueryRows
 const MaxViewQueryRows = MaxBulkQueryRows
+const MaxSalesOrderDeliverySummaryRows = 100000
+const salesOrderDeliverySummaryCollection = "sales_order_delivery_orders_summary_sap"
+const salesOrderDeliverySummaryMetaCollection = "sales_order_delivery_summary_meta"
 
 var bomStreamFields = []string{"id", "AUFNR_1", "AUART", "VBELN_EX", "GSTRS", "GSTRS_DATE", "MENGE_A", "MATNR", "LGORT", "BUDAT_MKPF", "MAKTX"}
 var stationStreamFields = []string{"id", "PCODE", "AUFNR", "KDAUF", "GSTRS", "SPEC", "SPEC_DESC", "OPERATION", "ACTUAL_START_TIME", "ACTUAL_END_TIME", "MAKTX_TH", "LGORT", "LINE_CODE"}
@@ -180,6 +189,8 @@ type ViewFilters struct {
 	Company5000                                                                          string
 	Judgment, EnrichmentStatus, AcceptedDateFrom, AcceptedDateTo                         string
 	DeliveryOrder, CustomerPurchaseOrder, CustomerNumber, SalesOrganization, SalesOffice string
+	LimitedCompany                                                                       string
+	SalesRegionName                                                                      string
 }
 type ViewListResult struct {
 	Items    []bson.M `json:"items"`
@@ -205,6 +216,9 @@ type ViewStatsResult struct {
 	LatestAcceptedAt               string   `json:"latestAcceptedAt,omitempty"`
 	LatestCreatedAt                string   `json:"latestCreatedAt,omitempty"`
 	Is5000Count                    int64    `json:"is5000Count,omitempty"`
+}
+type ViewOptionsResult struct {
+	Items []string `json:"items"`
 }
 type ViewDetailResult struct {
 	Item   bson.M  `json:"item"`

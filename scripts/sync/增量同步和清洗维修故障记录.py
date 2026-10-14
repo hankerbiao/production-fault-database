@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Incrementally synchronize and clean repair records through one workflow."""
+"""Refresh a rolling repair snapshot and backfill orders through one workflow."""
 from __future__ import annotations
 
 import argparse
@@ -8,6 +8,7 @@ import json
 import logging
 import sys
 import time
+from contextlib import nullcontext
 from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -69,6 +70,10 @@ def missing_text_filter(field: str) -> dict[str, Any]:
     }
 
 
+def scoped_filter(query: dict[str, Any], scope: dict[str, Any] | None) -> dict[str, Any]:
+    return {"$and": [scope, query]} if scope else query
+
+
 def sap_headers() -> dict[str, str]:
     today = date.today().strftime("%Y%m%d")
     signature = hashlib.md5(f"sugon{SAP_METHOD}{today}sugon".encode("utf-8")).hexdigest().upper()
@@ -115,9 +120,10 @@ def configure_logging(level: str, log_file: str | None) -> None:
         LOGGER.addHandler(file_handler)
 
 
-def build_collection_a(collection: Any, progress: Progress) -> tuple[dict[str, tuple[str, str]], dict[str, int]]:
+def build_collection_a(collection: Any, progress: Progress, query: dict[str, Any] | None = None) -> tuple[dict[str, tuple[str, str]], dict[str, int]]:
     """Build PCODE -> (AUFNR, KDAUF), retaining only one-pair serial numbers."""
-    total = collection.count_documents({})
+    query = query or {}
+    total = collection.count_documents(query)
     pairs_by_sn: dict[str, dict[tuple[str, str], tuple[str, str]]] = {}
     stats = {
         "station_rows_scanned": 0,
@@ -126,7 +132,7 @@ def build_collection_a(collection: Any, progress: Progress) -> tuple[dict[str, t
         "station_ambiguous_sns": 0,
         "collection_a_size": 0,
     }
-    cursor = collection.find({}, {"PCODE": 1, "AUFNR": 1, "KDAUF": 1})
+    cursor = collection.find(query, {"PCODE": 1, "AUFNR": 1, "KDAUF": 1})
     try:
         for document in cursor:
             stats["station_rows_scanned"] += 1
@@ -156,9 +162,10 @@ def build_collection_a(collection: Any, progress: Progress) -> tuple[dict[str, t
     return collection_a, stats
 
 
-def build_repair_pcode_pairs(collection: Any, progress: Progress) -> tuple[dict[str, tuple[str, str]], dict[str, int]]:
+def build_repair_pcode_pairs(collection: Any, progress: Progress, scope: dict[str, Any] | None = None) -> tuple[dict[str, tuple[str, str]], dict[str, int]]:
     """Build PCODE -> (AUFNR, VBELN) from repair rows that already have both orders."""
-    total = collection.count_documents({})
+    query = scope or {}
+    total = collection.count_documents(query)
     pairs_by_sn: dict[str, dict[tuple[str, str], tuple[str, str]]] = {}
     stats = {
         "repair_source_rows_scanned": 0,
@@ -167,7 +174,7 @@ def build_repair_pcode_pairs(collection: Any, progress: Progress) -> tuple[dict[
         "repair_source_ambiguous_sns": 0,
         "repair_collection_b_size": 0,
     }
-    cursor = collection.find({}, {"PCODE": 1, "AUFNR": 1, "VBELN": 1})
+    cursor = collection.find(query, {"PCODE": 1, "AUFNR": 1, "VBELN": 1})
     try:
         for document in cursor:
             stats["repair_source_rows_scanned"] += 1
@@ -322,12 +329,12 @@ def query_sap_pcode_orders(
 def build_sap_pcode_orders(
     repairs: Any, collection_a: dict[str, tuple[str, str]],
     repair_pcode_pairs: dict[str, tuple[str, str]], args: argparse.Namespace,
-    progress: Progress, client_factory: Any = httpx.Client,
+    progress: Progress, client_factory: Any = httpx.Client, scope: dict[str, Any] | None = None,
 ) -> tuple[dict[str, str], dict[str, int]]:
     """Return SAP production orders for repair rows that do not have AUFNR yet."""
     serials: list[str] = []
     seen: set[str] = set()
-    cursor = repairs.find(missing_text_filter("VBELN"), {"PCODE": 1, "AUFNR": 1})
+    cursor = repairs.find(scoped_filter(missing_text_filter("VBELN"), scope), {"PCODE": 1, "AUFNR": 1})
     try:
         for document in cursor:
             sn = text(document.get("PCODE"))
@@ -371,8 +378,9 @@ def backfill_repairs(
     apply: bool,
     preview_limit: int,
     progress: Progress,
+    scope: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    repair_filter = {"$or": [missing_text_filter("VBELN"), missing_text_filter("GSTRS")]}
+    repair_filter = scoped_filter({"$or": [missing_text_filter("VBELN"), missing_text_filter("GSTRS")]}, scope)
     total = collection.count_documents(repair_filter)
     summary: dict[str, Any] = {
         "repair_candidates": total,
@@ -537,22 +545,26 @@ def backfill_repairs(
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="增量同步 HANA 维修故障记录，并回填缺失订单和计划生产时间")
-    parser.add_argument("--mode", choices=("incremental", "full", "monthly"), default="incremental", help="HANA 同步模式")
+    parser = argparse.ArgumentParser(description="按维修日期刷新近三个月 HANA 维修故障记录，并回填缺失订单和计划生产时间")
+    parser.add_argument("--mode", choices=("incremental", "full", "monthly"), default="incremental", help="incremental 刷新当月及前两个月；full/monthly 刷新指定维修日期范围")
     parser.add_argument("--start-date", type=parse_date, help="全量或按月同步起始日期 YYYY-MM-DD")
     parser.add_argument("--batch-size", type=int, default=int(env("SYNC_BATCH_SIZE", "1000")), help="MongoDB 批量写入大小")
     parser.add_argument("--preview-limit", type=int, default=20, help="JSON 摘要中展示的回填样本数量")
     parser.add_argument(
         "--skip-hana-sync", dest="sync_repair_hana", action="store_false",
-        help="仅执行现有维修记录的回填，不从 HANA 增量同步",
+        help="仅执行现有维修记录的回填，不刷新 HANA 快照",
     )
     parser.add_argument(
         "--sync-end-date", type=parse_date, default=date.today(),
-        help="HANA 维修增量同步结束日期，默认今天",
+        help="维修日期范围结束日期，默认今天",
     )
     parser.add_argument(
         "--sync-lookback-days", type=int, default=int(env("SYNC_LOOKBACK_DAYS", "7")),
-        help="HANA 维修增量同步水位线回看天数",
+        help="兼容旧命令的参数，维修滚动快照不再使用此回看天数",
+    )
+    parser.add_argument(
+        "--allow-large-cleanup", action="store_true",
+        help="核实 dry-run 后允许空快照或大量减少的窗口对账清理；默认阻断",
     )
     backfill_mode = parser.add_mutually_exclusive_group()
     backfill_mode.add_argument(
@@ -592,7 +604,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--log-file", default=env("LOG_FILE", ""), help="追加写入日志文件")
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--dry-run", action="store_true", help="仅生成预览和汇总，不写入（默认）")
-    mode.add_argument("--apply", action="store_true", help="执行 AUFNR 和 VBELN 回填")
+    mode.add_argument("--apply", action="store_true", help="写入维修快照、回填订单，并归档清理窗口内旧记录")
     parser.set_defaults(
         repair_collection=env("REPAIR_COLLECTION", "repair_records_sap"),
         station_collection=env("STATION_COLLECTION", "station_records_sap"),
@@ -624,7 +636,7 @@ def run_workflow(
     hana_sync_commit: dict[str, Any] = {}
     try:
         if getattr(args, "sync_repair_hana", True):
-            progress.update("同步 HANA 维修故障记录", 0, 1)
+            progress.update("刷新 HANA 维修故障快照", 0, 1)
             hana_sync = sync_sales_orders.sync_repair(
                 db,
                 args.repair_collection,
@@ -637,21 +649,39 @@ def run_workflow(
                 not args.apply,
                 run_id,
                 defer_finalize=args.apply,
+                allow_large_cleanup=getattr(args, "allow_large_cleanup", False),
             )
-            progress.update("同步 HANA 维修故障记录", 1, 1)
+            progress.update("刷新 HANA 维修故障快照", 1, 1)
             if not hana_sync.get("success"):
                 raise RuntimeError(f"HANA 维修故障记录同步失败: {hana_sync.get('error', '未知错误')}")
-        collection_a, station_stats = build_collection_a(db[args.station_collection], progress)
+        scope = None
+        station_query = None
+        if hana_sync.get("range"):
+            if args.apply:
+                scope = {"_source_view": sync_sales_orders.REPAIR_VIEW_ID, "_scope_run_id": run_id}
+            else:
+                scope = sync_sales_orders.repair_scope_filter(
+                    date.fromisoformat(hana_sync["range"]["start"]),
+                    date.fromisoformat(hana_sync["range"]["end"]),
+                )
+            cursor = db[args.repair_collection].find(scope, {"PCODE": 1})
+            try:
+                serials = sorted({text(doc.get("PCODE")) for doc in cursor if text(doc.get("PCODE"))})
+            finally:
+                if hasattr(cursor, "close"):
+                    cursor.close()
+            station_query = {"PCODE": {"$in": serials}}
+        collection_a, station_stats = build_collection_a(db[args.station_collection], progress, station_query)
         repair_pcode_pairs: dict[str, tuple[str, str]] = {}
         repair_source_stats: dict[str, Any] = {}
         if args.repair_pcode_fallback:
-            repair_pcode_pairs, repair_source_stats = build_repair_pcode_pairs(db[args.repair_collection], progress)
+            repair_pcode_pairs, repair_source_stats = build_repair_pcode_pairs(db[args.repair_collection], progress, scope)
         sap_pcode_orders: dict[str, str] = {}
         sap_stats: dict[str, Any] = {}
         if args.sap_pcode_fallback:
             sap_pcode_orders, sap_stats = build_sap_pcode_orders(
                 db[args.repair_collection], collection_a, repair_pcode_pairs,
-                args, progress, sap_client_factory,
+                args, progress, sap_client_factory, scope,
             )
             if args.apply and sap_stats["sap_failed_sns"] and not getattr(args, "allow_partial_sap", False):
                 raise RuntimeError(
@@ -670,7 +700,7 @@ def run_workflow(
             db[args.audit_collection] if args.apply and getattr(args, "audit_collection", "") else None,
             run_id,
             args.batch_size, args.apply,
-            args.preview_limit, progress,
+            args.preview_limit, progress, scope,
         )
         if getattr(args, "sync_repair_hana", True) and args.apply:
             hana_sync_commit = sync_sales_orders.finalize_repair_run(
@@ -737,7 +767,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         lock_path = env("REPAIR_STATION_BACKFILL_LOCK_PATH", DEFAULT_LOCK)
         with process_lock(lock_path):
             with process_lock(env("SYNC_LOCK_PATH", "/tmp/line-fault-table-sync.lock")):
-                with mongo_lease_lock(db, env("REPAIR_STATION_BACKFILL_LOCK_NAME", DEFAULT_MONGO_LOCK)):
+                lease = mongo_lease_lock(db, env("REPAIR_STATION_BACKFILL_LOCK_NAME", DEFAULT_MONGO_LOCK)) if args.apply else nullcontext()
+                with lease:
                     result = run_workflow(db, args, run_id=run_id)
         result.update({
             "started_at": started_at,

@@ -1,6 +1,6 @@
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { AlertTriangle, Boxes, ClipboardList, Search, SlidersHorizontal } from 'lucide-react';
-import { listView, viewDetail, viewStats } from '../api/views';
+import { listView, viewDetail, viewOptions, viewStats } from '../api/views';
 import { usePagedResource } from '../hooks/usePagedResource';
 import { useDetail } from '../hooks/useDetail';
 import { ActiveFilters } from '../components/ActiveFilters';
@@ -16,13 +16,31 @@ import { downloadCsv } from '../utils/export';
 import { formatCell, formatDate, formatDateRange, formatNumber } from '../utils/formatters';
 
 const emptyStats = { total: 0, salesOrders: 0, productionOrders: 0, missingSalesOrder: 0, missingProductionOrder: 0, missingProductionOrderDistinct: 0, is5000Count: 0, dataStartDate: '', dataEndDate: '', latestSyncedAt: '' };
-const initialFilters = { keyword: '', productionOrder: '', salesOrder: '', productModel: '', from: '', to: '', dateFrom: '', dateTo: '', stationCode: '', sn: '', base: '', orderType: '', materialCode: '', headOrder: '', itemOrder: '', deliveryOrder: '', customerPurchaseOrder: '', customerNumber: '', salesOrganization: '', salesOffice: '', doaCode: '', status: '', judgment: '', customer: '', serviceOrder: '', changeType: '', partNumber: '', partSn: '', operator: '', needReturn: '', revoked: '', company5000: '' };
-const filterLabels = { keyword: '关键字', productionOrder: '生产订单', salesOrder: '销售订单', productModel: '机型', from: '开始时间', to: '结束时间', stationCode: '工位', sn: '序列号', base: '工厂/库存地点', orderType: '订单类型', materialCode: '物料号', deliveryOrder: '交货单', customerPurchaseOrder: '客户采购订单', customerNumber: '客户编号', salesOrganization: '销售组织', salesOffice: '销售办事处', headOrder: '机头订单', itemOrder: '小刀订单', doaCode: 'DOA单号', status: '处理状态', judgment: '判定结果', customer: '客户', serviceOrder: '服务单', changeType: '操作类型', partNumber: '备件PN', partSn: '备件SN', operator: '操作人', needReturn: '需归还', revoked: '已撤销', company5000: '5000公司' };
+const initialFilters = { keyword: '', productionOrder: '', salesOrder: '', productModel: '', from: '', to: '', dateFrom: '', dateTo: '', stationCode: '', sn: '', base: '', orderType: '', materialCode: '', headOrder: '', itemOrder: '', deliveryOrder: '', customerPurchaseOrder: '', customerNumber: '', salesOrganization: '', salesOffice: '', bztxt: '', doaCode: '', status: '', judgment: '', customer: '', serviceOrder: '', changeType: '', partNumber: '', partSn: '', operator: '', needReturn: '', revoked: '', company5000: '' };
+const filterLabels = { keyword: '关键字', productionOrder: '生产订单', salesOrder: '销售订单', productModel: '机型', from: '开始时间', to: '结束时间', dateFrom: '开始日期', dateTo: '结束日期', stationCode: '工位', sn: '序列号', base: '工厂/库存地点', orderType: '订单类型', materialCode: '物料号', deliveryOrder: '交货单', customerPurchaseOrder: '客户采购订单', customerNumber: '客户编号', salesOrganization: '销售组织', salesOffice: '销售办事处', bztxt: '销售地区名称', headOrder: '机头订单', itemOrder: '小刀订单', doaCode: 'DOA单号', status: '处理状态', judgment: '判定结果', customer: '客户', serviceOrder: '服务单', changeType: '操作类型', partNumber: '备件PN', partSn: '备件SN', operator: '操作人', needReturn: '需归还', revoked: '已撤销', company5000: '是否为5000公司' };
 const hasActiveFilters = filters => Object.values(filters).some(value => value !== '' && value !== false && value !== undefined && value !== null);
 
 export function ViewDashboardPage({ config, modelOptions = [], setConnected, setRefreshing, refreshToken = 0 }) {
   const isStationPreview = filters => config.id === 'Z_V_ZMES_T_001' && !hasActiveFilters(filters);
   const resource = usePagedResource({ loadPage: useCallback((filters, page, size) => listView(config.id, filters, page, size, isStationPreview(filters)), [config.id]), loadStats: useCallback(filters => isStationPreview(filters) ? Promise.resolve(emptyStats) : viewStats(config.id, filters), [config.id]), initialFilters, initialStats: emptyStats, refreshToken, onConnectionChange: setConnected, onRefreshing: setRefreshing });
+  const [dynamicOptions, setDynamicOptions] = useState({});
+  useEffect(() => {
+    let active = true;
+    const fields = (config.advancedFields || []).filter(field => field.type === 'remote-select' && field.sourceField);
+    if (!fields.length) {
+      setDynamicOptions({});
+      return () => { active = false; };
+    }
+    Promise.all(fields.map(async field => {
+      try {
+        const result = await viewOptions(config.id, field.sourceField);
+        return [field.key, Array.isArray(result?.items) ? result.items : []];
+      } catch {
+        return [field.key, []];
+      }
+    })).then(entries => { if (active) setDynamicOptions(Object.fromEntries(entries)); });
+    return () => { active = false; };
+  }, [config.id, config.advancedFields]);
   const detail = useDetail(id => viewDetail(config.id, id), '无法读取该记录的详细字段');
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [exporting, setExporting] = useState(false);
@@ -41,12 +59,12 @@ export function ViewDashboardPage({ config, modelOptions = [], setConnected, set
       return <span className={`result-pill ${value === '是' ? 'is-yes' : 'is-no'}`}>{value}</span>;
     },
   }));
-  const exportData = async (extraFilters = resource.appliedFilters, filename = `${config.title}.csv`) => { setExporting(true); try { await downloadCsv({ endpoint: `/api/views/${config.id}`, filters: extraFilters, filename, columns: columns.map(column => ({ key: column.key, label: column.label })) }); } finally { setExporting(false); } };
+  const exportData = async (extraFilters = resource.appliedFilters, filename = `${config.title}.csv`) => { setExporting(true); try { await downloadCsv({ endpoint: config.exportEndpoint || `/api/views/${config.id}`, filters: extraFilters, filename, columns: columns.map(column => ({ key: column.key, label: column.label })) }); } finally { setExporting(false); } };
   const stats = resource.stats;
   return <main>
     <Hero title={config.title} detail={config.detail} meta={[{ label: bilingual ? '数据来源 / Data source' : '数据来源', value: config.source }, { label: bilingual ? '数据区间 / Data period' : '数据区间', value: formatDateRange(stats.dataStartDate, stats.dataEndDate) }, { label: bilingual ? '最新同步 / Latest sync' : '最新同步', value: formatDate(stats.latestSyncedAt) }]} />
-    {!resource.preview && <Stats className="view-stats"><Stat icon={<Boxes />} label={bilingual ? '记录总数 / Total records' : '记录总数'} value={formatNumber(resource.total)} tone="blue" />{(config.stats || []).map(item => <Stat key={item.key} icon={item.tone === 'red' || item.tone === 'orange' ? <AlertTriangle /> : <ClipboardList />} label={item.label} value={formatNumber(stats[item.key])} tone={item.tone} />)}</Stats>}
-    <section className="workspace"><div className="section-head"><div><p className="eyebrow">{config.id}</p><h2>{bilingual ? `${config.title} 明细 / Details` : `${config.title}明细`}</h2></div><span className="record-count">{resource.preview ? `当前页 ${resource.items.length} 条` : `共 ${formatNumber(resource.total)} 条记录`}</span></div>
+    {!resource.preview && <Stats className="view-stats"><Stat icon={<Boxes />} label={bilingual ? '记录总数 / Total records' : (config.totalStatLabel || '记录总数')} value={formatNumber(config.totalStatKey ? stats[config.totalStatKey] : resource.total)} tone="blue" />{(config.stats || []).map(item => <Stat key={item.key} icon={item.tone === 'red' || item.tone === 'orange' ? <AlertTriangle /> : <ClipboardList />} label={item.label} value={formatNumber(stats[item.key])} tone={item.tone} />)}</Stats>}
+    <section className="workspace"><div className="section-head"><div><p className="eyebrow">{config.id}</p><h2>{bilingual ? `${config.title} 明细 / Details` : `${config.title}明细`}</h2></div><span className="record-count">{resource.preview ? `当前页 ${resource.items.length} 条` : `共 ${formatNumber(resource.total)} ${config.resultCountUnit || '条记录'}`}</span></div>
       <form className="filters dashboard-filters filter-form" aria-label={`${config.title}搜索条件`} onSubmit={submit}>
         <div className="filter-form-body">
           {config.showProductionOrder && <label className="filter-field"><span>{bilingual ? '生产订单 / Production order' : '生产订单'}</span><input className="filter-text" aria-label="生产订单" placeholder="AUFNR" value={resource.filters.productionOrder} onChange={event => update('productionOrder', event.target.value)} /></label>}
@@ -55,11 +73,11 @@ export function ViewDashboardPage({ config, modelOptions = [], setConnected, set
           {config.dateField && <div className="filter-field filter-field-date"><span>{bilingual ? `${config.dateLabel || '时间周期'} / Date period` : (config.dateLabel || '时间周期')}</span><DateRangePicker from={resource.filters.from} to={resource.filters.to} onChange={(from, to) => resource.setFilters(previous => ({ ...previous, from, to }))} label={bilingual ? `${config.dateLabel || '时间周期'} / Date period` : (config.dateLabel || '时间周期')} bilingual={bilingual} /></div>}
         </div>
         <div className="filter-actions"><button className="filter-btn" type="submit" aria-label={bilingual ? '搜索 / 筛选 / Search' : '搜索 / 筛选'} disabled={resource.loading}><Search size={16} />{resource.loading ? (bilingual ? '搜索中 / Searching' : '搜索中') : (bilingual ? '搜索 / Search' : '搜索')}</button><button className="advanced-btn" type="button" onClick={() => setAdvancedOpen(value => !value)} aria-expanded={advancedOpen}><SlidersHorizontal size={16} />{bilingual ? `高级条件${advancedOpen ? '收起' : '展开'} / More` : `高级条件${advancedOpen ? '收起' : '展开'}`}</button><button className="reset-btn" type="button" onClick={reset} disabled={resource.loading}>{bilingual ? '重置 / Reset' : '重置'}</button><ExportButton exporting={exporting} onClick={() => exportData()} bilingual={bilingual} />{config.allowMissingSalesOrderExport && <ExportButton exporting={exporting} onClick={() => exportData({ ...resource.appliedFilters, missingSalesOrder: true }, '订单BOM过账-销售订单为空.csv')} label="导出销售订单为空" title="导出销售订单为空的 BOM 数据" />}</div>
-        {advancedOpen && <div className="advanced-filters"><div className="advanced-filters-head"><strong>{bilingual ? '更多筛选 / More filters' : '更多筛选'}</strong><span>{bilingual ? '按字段缩小结果范围 / Refine results' : '按字段缩小结果范围'}</span></div><div className="advanced-filters-grid"><input className="filter-text" aria-label={bilingual ? '关键字 / Keyword' : '关键字'} placeholder={bilingual ? '关键字 / Keyword' : '关键字'} value={resource.filters.keyword} onChange={event => update('keyword', event.target.value)} />{config.advancedFields?.map(field => field.type === 'select' ? <select key={field.key} aria-label={field.label} value={resource.filters[field.key] || ''} onChange={event => update(field.key, event.target.value)}><option value="">{field.placeholder}</option>{field.options.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}</select> : field.type === 'checkbox' ? <label className="filter-checkbox" key={field.key}><input type="checkbox" aria-label={field.label} checked={resource.filters[field.key] === 'true'} onChange={event => update(field.key, event.target.checked ? 'true' : '')} /><span>{field.label}</span></label> : <input key={field.key} aria-label={field.placeholder} className="filter-text" placeholder={field.placeholder} value={resource.filters[field.key] || ''} onChange={event => update(field.key, event.target.value)} />)}</div></div>}
+        {advancedOpen && <div className="advanced-filters"><div className="advanced-filters-head"><strong>{bilingual ? '更多筛选 / More filters' : '更多筛选'}</strong><span>{bilingual ? '按字段缩小结果范围 / Refine results' : '按字段缩小结果范围'}</span></div><div className="advanced-filters-grid"><input className="filter-text" aria-label={bilingual ? '关键字 / Keyword' : '关键字'} placeholder={bilingual ? '关键字 / Keyword' : '关键字'} value={resource.filters.keyword} onChange={event => update('keyword', event.target.value)} />{config.advancedFields?.map(field => field.type === 'select' ? <select key={field.key} aria-label={field.label} value={resource.filters[field.key] || ''} onChange={event => update(field.key, event.target.value)}><option value="">{field.placeholder}</option>{field.options.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}</select> : field.type === 'remote-select' ? <select key={field.key} aria-label={field.label} value={resource.filters[field.key] || ''} onChange={event => update(field.key, event.target.value)}><option value="">{field.placeholder}</option>{(dynamicOptions[field.key] || []).map(option => <option key={option} value={option}>{option}</option>)}</select> : field.type === 'checkbox' ? <label className="filter-checkbox" key={field.key}><input type="checkbox" aria-label={field.label} checked={resource.filters[field.key] === 'true'} onChange={event => update(field.key, event.target.checked ? 'true' : '')} /><span>{field.label}</span></label> : <input key={field.key} aria-label={field.placeholder} className="filter-text" placeholder={field.placeholder} value={resource.filters[field.key] || ''} onChange={event => update(field.key, event.target.value)} />)}</div></div>}
       </form>
       <ActiveFilters filters={resource.appliedFilters} labels={filterLabels} initialFilters={initialFilters} onRemove={removeFilter} onClear={reset} />
-      <DataTable pageId={config.id} columns={columns} items={resource.items} loading={resource.loading} error={resource.error} onOpen={detail.open} loadingMessage={`正在加载${config.title}数据`} bilingual={bilingual} />
-      <Pagination page={resource.page} total={resource.total} pageSize={resource.pageSize} setPage={resource.setPage} setPageSize={resource.setPageSize} bilingual={bilingual} preview={resource.preview} hasMore={resource.hasMore} />
+      <DataTable pageId={config.id} columns={columns} items={resource.items} loading={resource.loading} error={resource.error} onOpen={detail.open} loadingMessage={`正在加载${config.title}数据`} bilingual={bilingual} itemUnit={config.resultItemUnit || '条当前结果'} />
+      <Pagination page={resource.page} total={resource.total} pageSize={resource.pageSize} setPage={resource.setPage} setPageSize={resource.setPageSize} bilingual={bilingual} preview={resource.preview} hasMore={resource.hasMore} itemUnit={config.resultItemUnit || '条'} />
     </section>
     {(detail.loading || detail.detail) && <DetailPanel detail={detail.detail} loading={detail.loading} close={detail.close} title={bilingual ? '视图记录详情 / View Record Details' : '视图记录详情'} heading={bilingual ? '完整数据库字段 / All database fields' : '完整数据库字段'} />}
   </main>;

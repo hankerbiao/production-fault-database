@@ -14,7 +14,7 @@ function readPreferences(pageId, columns) {
   } catch { return { density: 'comfortable', hidden: [] }; }
 }
 
-export function DataTable({ pageId, columns, items, loading, error, onOpen, emptyMessage = '没有找到匹配的数据', loadingMessage = '正在加载数据', bilingual = false }) {
+export function DataTable({ pageId, columns, items, loading, error, onOpen, emptyMessage = '没有找到匹配的数据', loadingMessage = '正在加载数据', bilingual = false, itemUnit = '条当前结果' }) {
   const initial = useMemo(() => readPreferences(pageId, columns), [pageId, columns]);
   const [density, setDensity] = useState(initial.density);
   const [hidden, setHidden] = useState(initial.hidden);
@@ -35,7 +35,7 @@ export function DataTable({ pageId, columns, items, loading, error, onOpen, empt
   const toggleColumn = key => setHidden(current => current.includes(key) ? current.filter(item => item !== key) : [...current, key]);
   return <section className={`record-table ${pageId === 'ZSGV_ZSD124' ? 'bom-table-shell' : ''} ${scsTable ? 'scs-table-shell' : ''} ${density === 'compact' ? 'is-compact' : ''}`}>
     <div className="table-toolbar">
-      <span>{loading ? '正在更新结果' : `显示 ${items.length} 条当前结果`}</span>
+      <span>{loading ? '正在更新结果' : `显示 ${items.length} ${itemUnit}`}</span>
       <div className="table-toolbar-actions">
         <button type="button" className={density === 'compact' ? 'active' : ''} onClick={() => setDensity(value => value === 'compact' ? 'comfortable' : 'compact')} title="切换表格密度" aria-pressed={density === 'compact'}><Rows3 size={15} />{density === 'compact' ? '紧凑' : '舒适'}</button>
         <div className="column-menu" ref={menuRef}>

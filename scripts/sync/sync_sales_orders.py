@@ -12,7 +12,9 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import sqlite3
 import sys
+import tempfile
 from collections import OrderedDict
 from contextlib import contextmanager
 from datetime import date, datetime, timedelta, timezone
@@ -28,6 +30,7 @@ try:
     import httpx
     from pymongo import ASCENDING, MongoClient, UpdateOne
     from bson.decimal128 import Decimal128
+    from bson import BSON
 except ImportError as exc:  # pragma: no cover - exercised by deployment, not unit tests
     print(json.dumps({"success": False, "error": f"missing dependency: {exc.name}; install httpx and pymongo"}, ensure_ascii=False))
     raise SystemExit(2) from exc
@@ -58,6 +61,8 @@ REPAIR_COLUMNS = tuple(
     "RECORD01REPAIRM SLOT AUFNR VBELN POSNR U_FIND U_RMA_NAME RMA_RESULT RMA_TYPE2".split()
 )
 REPAIR_KEY_FIELDS = ("MANDT", "PCODE", "ZMCOD1", "ZDATE_WX", "ZTIME")
+REPAIR_ID_FIELDS = ("MANDT", "PCODE", "ZWXDT", "ZMCOD1", "ZMCOD2")
+REPAIR_VIEW_ID = "ZSGV_ZZT_WLJL"
 # The repair view is only in scope from this date onward. This lower bound is
 # enforced for both full and incremental runs, even when callers omit a start.
 REPAIR_START_DATE = date(2026, 1, 1)
@@ -202,26 +207,96 @@ def aggregate(source: str, records: list[dict[str, Any]], synced_at: datetime) -
 def repair_query(mode: str, checkpoint: dict[str, Any] | None, start_date: date | None, end_date: date) -> tuple[str, list[Any]]:
     conditions: list[str] = []
     params: list[Any] = []
-    if mode == "incremental" and checkpoint and checkpoint.get("watermark"):
-        wm = checkpoint["watermark"]
-        conditions.append('("ZDATE" > ? OR ("ZDATE" = ? AND "ZTIME" >= ?))')
-        params.extend((wm["ZDATE"], wm["ZDATE"], wm["ZTIME"]))
     if start_date:
-        conditions.append('"ZDATE" >= ?')
+        conditions.append('"ZDATE_WX" >= ?')
         params.append(start_date.strftime("%Y%m%d"))
-    conditions.append('"ZDATE" <= ?')
+    conditions.append('"ZDATE_WX" <= ?')
     params.append(end_date.strftime("%Y%m%d"))
     selected = ", ".join(f'"{field}"' for field in REPAIR_COLUMNS)
     where = f" WHERE {' AND '.join(conditions)}" if conditions else ""
-    order = ", ".join(f'"{field}"' for field in ("PCODE", "ZWXDT", "ZMCOD1", "ZDATE_WX", "ZTIME"))
+    order = ", ".join(f'"{field}"' for field in REPAIR_ID_FIELDS)
     return f"SELECT {selected} FROM {REPAIR_VIEW}{where} ORDER BY {order}", params
 
 
+def repair_scope_filter(start_date: date, end_date: date) -> dict[str, Any]:
+    return {
+        "_source_view": REPAIR_VIEW_ID,
+        "ZDATE_WX": {"$gte": start_date.strftime("%Y%m%d"), "$lte": end_date.strftime("%Y%m%d")},
+    }
+
+
 def repair_cleanup_filter(mode: str, run_id: str, start_date: date, end_date: date) -> dict[str, Any]:
-    query: dict[str, Any] = {"_source_view": "ZSGV_ZZT_WLJL", "_scope_run_id": {"$ne": run_id}}
-    if mode == "monthly":
-        query["ZDATE"] = {"$gte": start_date.strftime("%Y%m%d"), "$lte": end_date.strftime("%Y%m%d")}
-    return query
+    return {**repair_scope_filter(start_date, end_date), "_scope_run_id": {"$ne": run_id}}
+
+
+def repair_window_start(end_date: date) -> date:
+    month = end_date.year * 12 + end_date.month - 3
+    return max(date(month // 12, month % 12 + 1, 1), REPAIR_START_DATE)
+
+
+def repair_identity(row: Mapping[str, Any]) -> str:
+    values = [str(row.get(field) or "").strip() for field in REPAIR_ID_FIELDS]
+    if not all(values[:3]):
+        raise ValueError("维修记录缺少稳定身份字段 MANDT/PCODE/ZWXDT，拒绝提交快照")
+    try:
+        if len(values[2]) != 14 or not values[2].isdigit():
+            raise ValueError
+        datetime.strptime(values[2], "%Y%m%d%H%M%S")
+    except ValueError as exc:
+        raise ValueError("维修记录 ZWXDT 必须为有效的 14 位维修日期时间") from exc
+    # Empty part serials are valid; never fall back to a mutable whole-row hash.
+    payload = json.dumps(values, ensure_ascii=False, separators=(",", ":"))
+    return "repair:v2:" + hashlib.sha256(payload.encode()).hexdigest()
+
+
+@contextmanager
+def repair_snapshot(sql: str, params: list[Any], batch_size: int, stats: dict[str, Any]) -> Iterator[Any]:
+    """Validate a complete source snapshot on disk before any MongoDB mutation."""
+    with tempfile.TemporaryDirectory(prefix="repair-snapshot-") as directory:
+        snapshot = sqlite3.connect(str(Path(directory) / "snapshot.sqlite"))
+        try:
+            snapshot.execute("CREATE TABLE repairs (identity TEXT PRIMARY KEY, payload BLOB, hash TEXT, legacy_key TEXT)")
+            with hana_connection() as connection:
+                cursor = connection.cursor()
+                try:
+                    cursor.execute(sql, tuple(params))
+                    while rows := cursor.fetchmany(batch_size):
+                        stats["batches"] += 1
+                        for values in rows:
+                            row = dict(zip(REPAIR_COLUMNS, values, strict=True))
+                            identity = repair_identity(row)
+                            repair_date = str(row.get("ZDATE_WX") or "").strip()
+                            if not params[0] <= repair_date <= params[1]:
+                                raise ValueError("维修记录的 ZDATE_WX 不在本次快照范围内")
+                            payload = BSON.encode({field: bson_value(row[field]) for field in REPAIR_COLUMNS})
+                            content_hash = hashlib.sha256(payload).hexdigest()
+                            existing = snapshot.execute("SELECT hash FROM repairs WHERE identity = ?", (identity,)).fetchone()
+                            if existing:
+                                if existing[0] != content_hash:
+                                    raise RuntimeError(f"维修明细身份冲突，拒绝提交快照: {identity}")
+                                stats["duplicate_source_rows"] += 1
+                            else:
+                                snapshot.execute("INSERT INTO repairs VALUES (?, ?, ?, ?)", (
+                                    identity, payload, content_hash, source_key(row, REPAIR_KEY_FIELDS),
+                                ))
+                            stats["source_rows"] += 1
+                finally:
+                    cursor.close()
+            snapshot.commit()
+            stats["unique_rows"] = snapshot.execute("SELECT COUNT(*) FROM repairs").fetchone()[0]
+            stats["snapshot_complete"] = True
+            yield snapshot
+        finally:
+            snapshot.close()
+
+
+def validate_repair_cleanup(existing_count: int, stale_count: int, unique_rows: int, allow_large_cleanup: bool) -> None:
+    if allow_large_cleanup:
+        return
+    if existing_count and not unique_rows:
+        raise RuntimeError("HANA 快照为空且本地窗口有数据，已阻断清理；核实后可用 --allow-large-cleanup")
+    if stale_count > 100 and stale_count > existing_count / 2:
+        raise RuntimeError("本次将清理超过 100 条且超过窗口一半的数据，已阻断；核实后可用 --allow-large-cleanup")
 
 
 def is_complete_month(start_date: date, end_date: date) -> bool:
@@ -257,90 +332,171 @@ def hana_connection() -> Iterator[Any]:
         connection.close()
 
 
-def sync_repair(db: Any, collection: str, checkpoint_collection: str, mode: str, start_date: date | None, end_date: date, lookback_days: int, batch_size: int, dry_run: bool, run_id: str, defer_finalize: bool = False) -> dict[str, Any]:
+def sync_repair(db: Any, collection: str, checkpoint_collection: str, mode: str, start_date: date | None, end_date: date, lookback_days: int, batch_size: int, dry_run: bool, run_id: str, defer_finalize: bool = False, *, allow_large_cleanup: bool = False) -> dict[str, Any]:
+    if mode not in {"incremental", "full", "monthly"}:
+        raise ValueError("未知维修同步模式")
+    if batch_size < 1 or not run_id:
+        raise ValueError("维修同步必须提供有效 batch_size 和 run_id")
     if end_date < REPAIR_START_DATE:
         raise ValueError("维修数据仅同步 2026-01-01 及之后的数据")
     if mode == "monthly" and (start_date is None or not is_complete_month(start_date, end_date)):
         raise ValueError("按月同步必须提供完整自然月的起止日期")
-    checkpoint = None if mode in {"full", "monthly"} or dry_run else db[checkpoint_collection].find_one({"_id": "repair_records"})
-    if mode == "incremental" and checkpoint and checkpoint.get("watermark"):
-        watermark_date = date.fromisoformat(str(checkpoint["watermark"]["ZDATE"]))
-        start_date = watermark_date - timedelta(days=lookback_days)
-    # First run without a checkpoint starts at 2026-01-01; later incremental
-    # runs may move the effective start forward from the stored watermark.
+    if mode == "incremental":
+        start_date = repair_window_start(end_date)
     start_date = max(start_date or REPAIR_START_DATE, REPAIR_START_DATE)
+    if start_date > end_date:
+        raise ValueError("维修同步起始日期不能晚于结束日期")
     allowed_vbelns = sales_order_vbelns(db)
     if not allowed_vbelns:
         raise RuntimeError("sales_orders_sap 中没有有效 VBELN，拒绝同步维修数据")
-    sql, params = repair_query(mode, checkpoint, start_date, end_date)
-    stats = {"success": False, "mode": mode, "source_rows": 0, "matched_sales_orders": 0, "empty_sales_orders_retained": 0, "filtered_missing_sales_order": 0, "batches": 0, "inserted": 0, "updated": 0, "sales_order_vbelns": len(allowed_vbelns), "range": {"start": start_date.isoformat(), "end": end_date.isoformat()}}
-    watermark = None
-    if not dry_run:
-        db[collection].create_index("_source_key", unique=True, name="source_key_unique")
-    with hana_connection() as connection:
-        cursor = connection.cursor()
+    sql, params = repair_query(mode, None, start_date, end_date)
+    stats: dict[str, Any] = {
+        "success": False, "mode": mode, "strategy": "rolling_snapshot" if mode == "incremental" else "snapshot",
+        "run_id": run_id, "snapshot_complete": False, "source_rows": 0, "unique_rows": 0,
+        "duplicate_source_rows": 0, "matched_sales_orders": 0, "empty_sales_orders_retained": 0,
+        "unmatched_sales_orders_retained": 0, "filtered_missing_sales_order": 0, "batches": 0,
+        "inserted": 0, "updated": 0, "unchanged": 0, "relinked": 0, "would_insert": 0, "would_update": 0,
+        "sales_order_vbelns": len(allowed_vbelns), "allow_large_cleanup": allow_large_cleanup,
+        "range": {"start": start_date.isoformat(), "end": end_date.isoformat()},
+    }
+    target = db[collection]
+    with repair_snapshot(sql, params, batch_size, stats) as snapshot:
+        existing_by_identity: dict[str, list[dict[str, Any]]] = {}
+        existing_count = 0
+        cursor = target.find(repair_scope_filter(start_date, end_date))
         try:
-            cursor.execute(sql, tuple(params))
-            while rows := cursor.fetchmany(batch_size):
-                operations = []
-                for values in rows:
-                    row = dict(zip(REPAIR_COLUMNS, values, strict=True))
-                    watermark = watermark_max(watermark, row, ("ZDATE", "ZTIME"))
-                    stats["source_rows"] += 1
-                    normalized_vbeln = str(row.get("VBELN") or "").strip()
-                    if normalized_vbeln and normalized_vbeln not in allowed_vbelns:
-                        stats["filtered_missing_sales_order"] += 1
-                        continue
-                    if normalized_vbeln:
-                        stats["matched_sales_orders"] += 1
-                    else:
-                        stats["empty_sales_orders_retained"] += 1
-                    if not dry_run:
-                        key = source_key(row, REPAIR_KEY_FIELDS)
-                        document = {key: bson_value(value) for key, value in row.items()}
-                        document.update({"_source_key": key, "_source_view": "ZSGV_ZZT_WLJL", "_scope_run_id": run_id, "_synced_at": datetime.now(timezone.utc), "_sync_run_id": run_id})
-                        operations.append(UpdateOne({"_source_key": key}, {"$set": document, "$setOnInsert": {"_id": hashlib.sha256(key.encode()).hexdigest()}}, upsert=True))
-                if operations:
-                    result = db[collection].bulk_write(operations, ordered=False)
-                    stats["inserted"] += result.upserted_count
-                    stats["updated"] += result.modified_count
-                stats["batches"] += 1
+            for document in cursor:
+                existing_count += 1
+                try:
+                    identity = repair_identity(document)
+                except ValueError:
+                    continue
+                existing_by_identity.setdefault(identity, []).append(document)
         finally:
-            cursor.close()
-    if watermark is None and checkpoint:
-        watermark = checkpoint.get("watermark")
-    if not dry_run and not defer_finalize:
-        db[collection].create_index([("PCODE", ASCENDING), ("ZDATE_WX", ASCENDING)], name="repair_pcode_date")
-        if mode in {"full", "monthly"}:
-            db[collection].create_index([("_source_view", ASCENDING), ("ZDATE", ASCENDING), ("_scope_run_id", ASCENDING)], name="repair_scope_cleanup")
-            result = db[collection].delete_many(repair_cleanup_filter(mode, run_id, start_date, end_date))
-            stats["deleted_out_of_scope"] = result.deleted_count
-        if mode != "monthly":
-            db[checkpoint_collection].update_one({"_id": "repair_records"}, {"$set": {"dataset": "repair_records", "watermark": watermark, "run_id": run_id, "updated_at": datetime.now(timezone.utc)}}, upsert=True)
-    stats["watermark"] = watermark
+            if hasattr(cursor, "close"):
+                cursor.close()
+        reused = sum(identity in existing_by_identity for identity, in snapshot.execute("SELECT identity FROM repairs"))
+        stats["stale_candidates"] = existing_count - reused
+        validate_repair_cleanup(existing_count, stats["stale_candidates"], stats["unique_rows"], allow_large_cleanup)
+        if not dry_run:
+            target.create_index("_repair_id", unique=True, name="repair_identity_unique",
+                                partialFilterExpression={"_repair_id": {"$type": "string"}})
+            target.create_index("_source_key", unique=True, name="source_key_unique")
+            target.create_index([("_source_view", ASCENDING), ("ZDATE_WX", ASCENDING), ("_scope_run_id", ASCENDING)],
+                                name="repair_snapshot_cleanup")
+            target.create_index("_legacy_ids", name="repair_legacy_ids")
+        operations = []
+        for identity, payload, content_hash, legacy_key in snapshot.execute("SELECT * FROM repairs ORDER BY identity"):
+            row = BSON(payload).decode()
+            normalized_vbeln = str(row.get("VBELN") or "").strip()
+            if not normalized_vbeln:
+                stats["empty_sales_orders_retained"] += 1
+            elif normalized_vbeln in allowed_vbelns:
+                stats["matched_sales_orders"] += 1
+            else:
+                stats["unmatched_sales_orders_retained"] += 1
+            previous = existing_by_identity.get(identity, [])
+            canonical = max(previous, key=lambda doc: (
+                doc.get("_repair_id") == identity, str(doc.get("_synced_at") or ""), str(doc["_id"]),
+            )) if previous else None
+            changed = canonical is None or canonical.get("_source_hash") != content_hash
+            relinked = canonical is not None and canonical.get("_repair_id") != identity
+            stats["would_insert"] += canonical is None
+            stats["would_update"] += canonical is not None and changed
+            stats["unchanged"] += canonical is not None and not changed
+            stats["relinked"] += relinked
+            if dry_run:
+                continue
+            now = datetime.now(timezone.utc)
+            aliases = {legacy_key}
+            for document in previous:
+                aliases.update(document.get("_legacy_ids") or [])
+                aliases.add(str(document["_id"]))
+                if document.get("_source_key"):
+                    aliases.add(document["_source_key"])
+            metadata: dict[str, Any] = {
+                "_repair_id": identity, "_source_key": identity, "_source_view": REPAIR_VIEW_ID,
+                "_source_identity_version": 2, "_source_hash": content_hash,
+                "_scope_run_id": run_id, "_sync_run_id": run_id, "_last_seen_at": now,
+                "_legacy_ids": sorted(aliases),
+            }
+            if changed:
+                source_orders = {field: row[field] for field in ("AUFNR", "VBELN")}
+                if canonical:
+                    previous_orders = canonical.get("_source_orders") or {}
+                    for field in ("AUFNR", "VBELN"):
+                        if not row[field] and not previous_orders.get(field):
+                            row[field] = canonical.get(field, "")
+                    if row["AUFNR"] != canonical.get("AUFNR", ""):
+                        row["GSTRS"] = ""
+                        row["VBELN"] = source_orders["VBELN"]
+                metadata.update(row)
+                metadata.update({"_source_orders": source_orders, "_synced_at": now})
+            if canonical and "_first_seen_at" not in canonical:
+                metadata["_first_seen_at"] = canonical.get("_synced_at") or now
+            query = {"_id": canonical["_id"]} if canonical else {"_repair_id": identity}
+            update: dict[str, Any] = {"$set": metadata}
+            if canonical is None:
+                update["$setOnInsert"] = {"_id": hashlib.sha256(identity.encode()).hexdigest(), "_first_seen_at": now}
+            operations.append(UpdateOne(query, update, upsert=canonical is None))
+            stats["inserted"] += canonical is None
+            stats["updated"] += canonical is not None and changed
+            if len(operations) >= batch_size:
+                target.bulk_write(operations, ordered=False)
+                operations.clear()
+        if operations:
+            target.bulk_write(operations, ordered=False)
     stats["success"] = True
+    if not dry_run and not defer_finalize:
+        stats.update(finalize_repair_run(db, collection, checkpoint_collection, stats, run_id))
     return stats
 
 
 def finalize_repair_run(db: Any, collection: str, checkpoint_collection: str, sync_result: Mapping[str, Any], run_id: str) -> dict[str, int]:
-    """Advance the incremental watermark and remove stale scoped rows after cleanup."""
-    if not sync_result.get("success"):
-        raise ValueError("不能提交失败的维修同步")
+    """Archive stale window records only after the validated workflow succeeds."""
+    if not sync_result.get("success") or not sync_result.get("snapshot_complete") or sync_result.get("run_id") != run_id:
+        raise ValueError("不能提交未完整校验或 run_id 不匹配的维修快照")
+    sync_range = sync_result["range"]
+    start_date = date.fromisoformat(sync_range["start"])
+    end_date = date.fromisoformat(sync_range["end"])
+    target = db[collection]
+    covered_count = target.count_documents({
+        **repair_scope_filter(start_date, end_date), "_scope_run_id": run_id,
+    })
+    if covered_count != sync_result["unique_rows"]:
+        raise RuntimeError("本次维修快照尚未完整写入，拒绝清理旧记录")
+    query = repair_cleanup_filter(str(sync_result["mode"]), run_id, start_date, end_date)
+    stale_count = target.count_documents(query)
+    existing_count = target.count_documents(repair_scope_filter(start_date, end_date))
+    validate_repair_cleanup(existing_count, stale_count, sync_result["unique_rows"], sync_result.get("allow_large_cleanup", False))
+    archive = db[collection + "_archive"]
     deleted = 0
-    mode = sync_result.get("mode")
-    if mode in {"full", "monthly"}:
-        sync_range = sync_result.get("range", {})
-        start_date = date.fromisoformat(sync_range["start"])
-        end_date = date.fromisoformat(sync_range["end"])
-        db[collection].create_index([("_source_view", ASCENDING), ("ZDATE", ASCENDING), ("_scope_run_id", ASCENDING)], name="repair_scope_cleanup")
-        deleted = db[collection].delete_many(repair_cleanup_filter(mode, run_id, start_date, end_date)).deleted_count
-    db[collection].create_index([("PCODE", ASCENDING), ("ZDATE_WX", ASCENDING)], name="repair_pcode_date")
-    if mode != "monthly":
-        db[checkpoint_collection].update_one(
-            {"_id": "repair_records"},
-            {"$set": {"dataset": "repair_records", "watermark": sync_result.get("watermark"), "run_id": run_id, "updated_at": datetime.now(timezone.utc)}},
-            upsert=True,
-        )
+    documents: list[dict[str, Any]] = []
+
+    def archive_batch() -> None:
+        nonlocal deleted
+        if not documents:
+            return
+        archive.bulk_write([
+            UpdateOne({"_id": f"{run_id}:{doc['_id']}"}, {"$setOnInsert": {
+                "document": doc, "run_id": run_id, "archived_at": datetime.now(timezone.utc),
+                "reason": "not_in_repair_snapshot", "range": sync_range,
+            }}, upsert=True)
+            for doc in documents
+        ], ordered=False)
+        deleted += target.delete_many({**query, "_id": {"$in": [doc["_id"] for doc in documents]}}).deleted_count
+        documents.clear()
+
+    cursor = target.find(query)
+    try:
+        for document in cursor:
+            documents.append(document)
+            if len(documents) >= 1000:
+                archive_batch()
+        archive_batch()
+    finally:
+        if hasattr(cursor, "close"):
+            cursor.close()
     return {"deleted_out_of_scope": deleted}
 
 

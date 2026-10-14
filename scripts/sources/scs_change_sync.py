@@ -123,20 +123,27 @@ def change_source_key(row: dict[str, Any]) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
+def service_order_values(document: dict[str, Any]) -> set[str]:
+    """Extract every service-order identifier available on a DOA document."""
+    values: set[str] = set()
+    service = str(document.get("service_uid") or "").strip()
+    if service:
+        values.add(service)
+    details = document.get("details")
+    fields = details.get("service_fields") if isinstance(details, dict) else None
+    if isinstance(fields, dict):
+        for key in ("服务单号", "服务订单号", "服务单"):
+            value = str(fields.get(key) or "").strip()
+            if value:
+                values.add(value)
+    return values
+
+
 def load_5000_service_orders(database: Any, collection_name: str = "scs_doa_records") -> set[str]:
     """Return service-order numbers belonging to 5000 companies."""
     values: set[str] = set()
     for document in database[collection_name].find({"is_5000_company": True}, {"service_uid": 1, "details.service_fields": 1}):
-        service = str(document.get("service_uid") or "").strip()
-        if service:
-            values.add(service)
-        details = document.get("details")
-        fields = details.get("service_fields") if isinstance(details, dict) else None
-        if isinstance(fields, dict):
-            for key in ("服务单号", "服务订单号", "服务单"):
-                value = str(fields.get(key) or "").strip()
-                if value:
-                    values.add(value)
+        values.update(service_order_values(document))
     return values
 
 

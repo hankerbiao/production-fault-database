@@ -364,9 +364,13 @@ def extract_sales_order(details: dict[str, Any]) -> str:
 
 def load_5000_customer_purchase_orders(
     database: Any,
-    collection_name: str = "sales_order_delivery_records_sap",
+    collection_name: str | None = None,
 ) -> set[str]:
     """Load BSTNK values for delivery rows classified as 5000-company orders."""
+    collection_name = collection_name or env(
+        "SALES_ORDER_DELIVERY_COLLECTION",
+        "sales_order_delivery_records_sap",
+    )
     values: set[str] = set()
     query = {"VBELN": {"$regex": "^XNC", "$options": "i"}}
     for document in database[collection_name].find(query, {"BSTNK": 1}):

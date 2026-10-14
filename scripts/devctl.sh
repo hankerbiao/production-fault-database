@@ -12,6 +12,10 @@ FRONTEND_PID_FILE="${RUNTIME_DIR}/frontend.pid"
 BACKEND_LOG="${RUNTIME_DIR}/backend.log"
 FRONTEND_LOG="${RUNTIME_DIR}/frontend.log"
 
+if [[ -x "${RUNTIME_DIR}/node/bin/node" ]]; then
+  export PATH="${RUNTIME_DIR}/node/bin:${PATH}"
+fi
+
 die() {
   printf '错误: %s\n' "$*" >&2
   exit 1
@@ -38,6 +42,7 @@ usage() {
   FRONTEND_HOST                 前端监听地址，默认 0.0.0.0（允许外部机器访问）
   ENV_FILE                       后端环境文件，默认项目根目录 .env
   RUNTIME_DIR                    PID、日志和后端构建文件目录，默认项目根目录 .run
+  BACKEND_SKIP_BUILD=1            使用 .run 中已有后端构建文件，供部署脚本使用
 
 示例:
   scripts/devctl.sh start
@@ -167,8 +172,12 @@ start_backend() {
   command_or_die go
   command_or_die curl
   local binary="${RUNTIME_DIR}/fault-gateway"
-  printf '编译后端...\n'
-  (cd "$ROOT_DIR/backend" && go build -o "$binary" ./cmd/server)
+  if [[ "${BACKEND_SKIP_BUILD:-0}" == 1 ]]; then
+    [[ -x "$binary" ]] || die "后端构建文件不存在: $binary"
+  else
+    printf '编译后端...\n'
+    (cd "$ROOT_DIR/backend" && go build -o "$binary" ./cmd/server)
+  fi
 
   printf '启动后端 (端口 %s)...\n' "$BACKEND_PORT"
   ENV_FILE="$ENV_FILE" PORT="$BACKEND_PORT" \

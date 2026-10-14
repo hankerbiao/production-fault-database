@@ -20,7 +20,6 @@ from contextlib import contextmanager
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterator, Mapping
-from urllib.parse import quote_plus
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in __import__("sys").path:
@@ -29,7 +28,6 @@ if str(PROJECT_ROOT) not in __import__("sys").path:
 try:
     import httpx
     from pymongo import ASCENDING, MongoClient, UpdateOne
-    from bson.decimal128 import Decimal128
     from bson import BSON
 except ImportError as exc:  # pragma: no cover - exercised by deployment, not unit tests
     print(json.dumps({"success": False, "error": f"missing dependency: {exc.name}; install httpx and pymongo"}, ensure_ascii=False))
@@ -41,7 +39,13 @@ from scripts.sources.hana.hana_view_sync import (
     mongo_client_options,
     mongo_write_concern_summary,
     stream_nonempty_field_values,
+    bson_value,
+    hana_connection,
+    mongo_uri,
+    install_graceful_shutdown,
 )
+from scripts.sync_runtime import Snapshot, archive_cleanup, check_leases, print_failure, resource_lock
+from scripts.sources.sap_http.client import headers as sap_headers, records as validate_records
 
 
 ROOT = PROJECT_ROOT
@@ -50,7 +54,6 @@ SOURCES = OrderedDict((
     ("KK", "http://10.8.100.11:8001/sap/ZHTTP_SIMS?sap-client=600"),
 ))
 METHOD = "ZSIMS_CL_INBOUND_MO_PSINFO"
-ERROR_MSGTYS = {"E", "A", "X"}
 DEFAULT_TIMEOUT = 120.0
 REPAIR_VIEW = '"_SYS_BIC"."BW_LOCAL.PP/ZSGV_ZZT_WLJL"'
 REPAIR_COLUMNS = tuple(
@@ -81,56 +84,17 @@ def parse_prodh(value: str) -> list[str]:
     return [item.strip() for item in value.replace("，", ",").split(",") if item.strip()]
 
 
-def mongo_uri() -> str:
-    hosts = [item.strip() for item in env("MONGODB_HOSTS").split(",") if item.strip()]
-    if not hosts:
-        raise RuntimeError("MONGODB_HOSTS 未配置")
-    username = env("MONGODB_USERNAME")
-    password = env("MONGODB_PASSWORD")
-    auth = ""
-    if username or password:
-        if not username or not password:
-            raise RuntimeError("MONGODB_USERNAME 和 MONGODB_PASSWORD 必须同时配置")
-        auth = f"{quote_plus(username)}:{quote_plus(password)}@"
-    options = ["authSource=" + quote_plus(env("MONGODB_AUTH_SOURCE", env("MONGODB_DATABASE")))]
-    replica_set = env("MONGODB_REPLICA_SET")
-    if replica_set:
-        options.append("replicaSet=" + quote_plus(replica_set))
-    return f"mongodb://{auth}{','.join(hosts)}/{quote_plus(env('MONGODB_DATABASE'))}?{'&'.join(options)}"
-
-
 def request_headers() -> dict[str, str]:
-    today = datetime.now().strftime("%Y%m%d")
-    signature = hashlib.md5(f"sugon{METHOD}{today}sugon".encode("utf-8")).hexdigest().upper()
-    return {"Content-Type": "application/json", "method": METHOD, "sign": signature, "time": today}
+    return sap_headers(METHOD)
 
 
 def current_date() -> date:
     return date.today()
 
 
-def is_empty_sap_result(body: Mapping[str, Any]) -> bool:
-    message = str(body.get("MSGTX") or "").strip().lower()
-    return "no data" in message
-
-
 def covers_sales_full_scope(start: date, end: date, *, today: date | None = None) -> bool:
     today = today or current_date()
     return start <= SALES_SCOPE_START and end >= today
-
-
-def validate_records(body: Any, source: str) -> list[dict[str, Any]]:
-    if not isinstance(body, dict):
-        raise RuntimeError(f"{source}: 响应不是 JSON 对象")
-    msgty = str(body.get("MSGTY") or "").upper()
-    if msgty in ERROR_MSGTYS:
-        if is_empty_sap_result(body):
-            return []
-        raise RuntimeError(f"{source}: SAP error ({msgty}): {body.get('MSGTX') or 'Unknown SAP error'}")
-    records = body.get("DATA")
-    if not isinstance(records, list) or not all(isinstance(row, dict) for row in records):
-        raise RuntimeError(f"{source}: 响应缺少有效 DATA 数组")
-    return records
 
 
 def number(value: Any) -> float:
@@ -142,35 +106,12 @@ def number(value: Any) -> float:
         return 0.0
 
 
-def bson_value(value: Any) -> Any:
-    if isinstance(value, Decimal128):
-        return value
-    if hasattr(value, "as_tuple") and value.__class__.__name__ == "Decimal":
-        return Decimal128(str(value))
-    if isinstance(value, (date, datetime)):
-        return value if isinstance(value, datetime) else datetime.combine(value, datetime.min.time(), tzinfo=timezone.utc)
-    if isinstance(value, dict):
-        return {str(key): bson_value(item) for key, item in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [bson_value(item) for item in value]
-    return value
-
-
 def source_key(row: dict[str, Any], fields: tuple[str, ...]) -> str:
     values = [str(row.get(field) or "").strip() for field in fields]
     if not all(values):
         payload = json.dumps(sorted(row.items()), ensure_ascii=False, default=str, separators=(",", ":"))
         return "full_row:" + hashlib.sha256(payload.encode()).hexdigest()
     return json.dumps(values, ensure_ascii=False, separators=(",", ":"))
-
-
-def watermark_max(current: Any, row: dict[str, Any], fields: tuple[str, ...]) -> Any:
-    candidate = tuple(str(row.get(field) or "").strip() for field in fields)
-    if not all(candidate):
-        return current
-    if current is None or candidate > tuple(str(current.get(field) or "") for field in fields):
-        return dict(zip(fields, candidate, strict=True))
-    return current
 
 
 def aggregate(source: str, records: list[dict[str, Any]], synced_at: datetime) -> tuple[list[dict[str, Any]], dict[str, int]]:
@@ -261,6 +202,7 @@ def repair_snapshot(sql: str, params: list[Any], batch_size: int, stats: dict[st
                 try:
                     cursor.execute(sql, tuple(params))
                     while rows := cursor.fetchmany(batch_size):
+                        check_leases()
                         stats["batches"] += 1
                         for values in rows:
                             row = dict(zip(REPAIR_COLUMNS, values, strict=True))
@@ -311,28 +253,7 @@ def sales_order_vbelns(db: Any) -> set[str]:
     )
 
 
-@contextmanager
-def hana_connection() -> Iterator[Any]:
-    try:
-        from hdbcli import dbapi
-    except ImportError as exc:
-        raise RuntimeError("缺少 hdbcli，请使用源项目 backend/.venv/bin/python 或安装 hdbcli") from exc
-    required = ("HANA_ADDRESS", "HANA_USER", "HANA_PASSWORD")
-    missing = [name for name in required if not env(name)]
-    if missing:
-        raise RuntimeError("缺少 HANA 配置: " + ", ".join(missing))
-    connection = dbapi.connect(
-        address=env("HANA_ADDRESS"), port=int(env("HANA_PORT", "30015")),
-        user=env("HANA_USER"), password=env("HANA_PASSWORD"),
-        communicationTimeout=int(env("HANA_CONNECT_TIMEOUT", "120")) * 1000,
-    )
-    try:
-        yield connection
-    finally:
-        connection.close()
-
-
-def sync_repair(db: Any, collection: str, checkpoint_collection: str, mode: str, start_date: date | None, end_date: date, lookback_days: int, batch_size: int, dry_run: bool, run_id: str, defer_finalize: bool = False, *, allow_large_cleanup: bool = False) -> dict[str, Any]:
+def sync_repair(db: Any, collection: str, checkpoint_collection: str, mode: str, start_date: date | None, end_date: date, lookback_days: int, batch_size: int, dry_run: bool, run_id: str, defer_finalize: bool = False, *, allow_large_cleanup: bool = False, preview_snapshot: Snapshot | None = None) -> dict[str, Any]:
     if mode not in {"incremental", "full", "monthly"}:
         raise ValueError("未知维修同步模式")
     if batch_size < 1 or not run_id:
@@ -405,8 +326,6 @@ def sync_repair(db: Any, collection: str, checkpoint_collection: str, mode: str,
             stats["would_update"] += canonical is not None and changed
             stats["unchanged"] += canonical is not None and not changed
             stats["relinked"] += relinked
-            if dry_run:
-                continue
             now = datetime.now(timezone.utc)
             aliases = {legacy_key}
             for document in previous:
@@ -434,6 +353,11 @@ def sync_repair(db: Any, collection: str, checkpoint_collection: str, mode: str,
                 metadata.update({"_source_orders": source_orders, "_synced_at": now})
             if canonical and "_first_seen_at" not in canonical:
                 metadata["_first_seen_at"] = canonical.get("_synced_at") or now
+            if dry_run:
+                if preview_snapshot is not None:
+                    preview_snapshot.add(identity, {**(canonical or {}), **metadata,
+                        "_id": canonical["_id"] if canonical else hashlib.sha256(identity.encode()).hexdigest()})
+                continue
             query = {"_id": canonical["_id"]} if canonical else {"_repair_id": identity}
             update: dict[str, Any] = {"$set": metadata}
             if canonical is None:
@@ -442,9 +366,11 @@ def sync_repair(db: Any, collection: str, checkpoint_collection: str, mode: str,
             stats["inserted"] += canonical is None
             stats["updated"] += canonical is not None and changed
             if len(operations) >= batch_size:
+                check_leases(verify=True)
                 target.bulk_write(operations, ordered=False)
                 operations.clear()
         if operations:
+            check_leases(verify=True)
             target.bulk_write(operations, ordered=False)
     stats["success"] = True
     if not dry_run and not defer_finalize:
@@ -469,34 +395,9 @@ def finalize_repair_run(db: Any, collection: str, checkpoint_collection: str, sy
     stale_count = target.count_documents(query)
     existing_count = target.count_documents(repair_scope_filter(start_date, end_date))
     validate_repair_cleanup(existing_count, stale_count, sync_result["unique_rows"], sync_result.get("allow_large_cleanup", False))
-    archive = db[collection + "_archive"]
-    deleted = 0
-    documents: list[dict[str, Any]] = []
-
-    def archive_batch() -> None:
-        nonlocal deleted
-        if not documents:
-            return
-        archive.bulk_write([
-            UpdateOne({"_id": f"{run_id}:{doc['_id']}"}, {"$setOnInsert": {
-                "document": doc, "run_id": run_id, "archived_at": datetime.now(timezone.utc),
-                "reason": "not_in_repair_snapshot", "range": sync_range,
-            }}, upsert=True)
-            for doc in documents
-        ], ordered=False)
-        deleted += target.delete_many({**query, "_id": {"$in": [doc["_id"] for doc in documents]}}).deleted_count
-        documents.clear()
-
-    cursor = target.find(query)
-    try:
-        for document in cursor:
-            documents.append(document)
-            if len(documents) >= 1000:
-                archive_batch()
-        archive_batch()
-    finally:
-        if hasattr(cursor, "close"):
-            cursor.close()
+    deleted = archive_cleanup(db, collection, repair_scope_filter(start_date, end_date), query,
+                              run_id, sync_result["unique_rows"],
+                              allow_large_cleanup=bool(sync_result.get("allow_large_cleanup")))
     return {"deleted_out_of_scope": deleted}
 
 
@@ -576,7 +477,8 @@ def cleanup_sales_orders(
             "或显式传入 --replace-collection --confirm-delete"
         )
         return result
-    result["deleted_out_of_scope"] = db[collection].delete_many(query).deleted_count
+    result["deleted_out_of_scope"] = archive_cleanup(db, collection,
+        {"source": {"$in": list(SOURCES)}}, query, run_id, written, allow_large_cleanup=confirm_delete)
     result["cleanup"] = "replaced"
     return result
 
@@ -591,6 +493,9 @@ def read_watermark(db: Any, collection: str, source: str) -> date | None:
 
 
 def save_watermark(db: Any, collection: str, source: str, value: date, run_id: str) -> None:
+    check_leases(verify=True)
+    previous = read_watermark(db, collection, source)
+    value = max(value, previous) if previous else value
     db[collection].update_one(
         {"_id": f"sales_orders:{source}"},
         {"$set": {"source": "sales_orders", "source_name": source, "last_success_date": value.isoformat(), "updated_at": datetime.now(timezone.utc), "run_id": run_id}},
@@ -602,17 +507,18 @@ def upsert(db: Any, collection: str, documents: list[dict[str, Any]], synced_at:
     if not documents:
         return 0, 0
     coll = db[collection]
-    ids = [doc["_id"] for doc in documents]
-    existing = {doc["_id"] for doc in coll.find({"_id": {"$in": ids}}, {"_id": 1})}
-    operations = []
-    for doc in documents:
-        operations.append(UpdateOne(
-            {"_id": doc["_id"]},
-            {"$set": {key: value for key, value in doc.items() if key != "_id"}, "$setOnInsert": {"first_seen_at": synced_at}, "$inc": {"sync_count": 1}},
-            upsert=True,
-        ))
-    coll.bulk_write(operations, ordered=False)
-    return len(ids) - len(existing), len(existing)
+    inserted = updated = 0
+    batch_size = max(1, int(env("SYNC_BATCH_SIZE", "1000")))
+    for start in range(0, len(documents), batch_size):
+        batch = documents[start:start + batch_size]
+        existing = {doc["_id"] for doc in coll.find({"_id": {"$in": [doc["_id"] for doc in batch]}}, {"_id": 1})}
+        check_leases(verify=True)
+        coll.bulk_write([UpdateOne({"_id": doc["_id"]},
+            {"$set": {key: value for key, value in doc.items() if key != "_id"},
+             "$setOnInsert": {"first_seen_at": synced_at}, "$inc": {"sync_count": 1}}, upsert=True) for doc in batch], ordered=False)
+        inserted += len(batch) - len(existing)
+        updated += len(existing)
+    return inserted, updated
 
 
 def sync_sales(args: argparse.Namespace) -> dict[str, Any]:
@@ -684,11 +590,11 @@ def sync_sales(args: argparse.Namespace) -> dict[str, Any]:
                             inserted, updated = upsert(db, target_collection, documents, synced_at)
                             item["inserted"] += inserted
                             item["updated"] += updated
-                    if not args.dry_run:
+                    if not args.dry_run and not args.full:
                         save_watermark(db, checkpoint_collection, source, end, run_id)
                     item["success"] = True
                 except Exception as exc:
-                    item.update({"success": False, "error": str(exc), "inserted": 0, "updated": 0})
+                    item.update({"success": False, "error": str(exc)})
                     summary["success"] = False
                 summary["sources"][source] = item
         if args.full and not args.dry_run and summary["success"]:
@@ -700,6 +606,9 @@ def sync_sales(args: argparse.Namespace) -> dict[str, Any]:
             summary.update(cleanup)
             if cleanup.get("error"):
                 summary["success"] = False
+            if summary["success"]:
+                for source in SOURCES:
+                    save_watermark(db, checkpoint_collection, source, args.end_date, run_id)
         if not args.dry_run:
             db[env("SYNC_RUN_COLLECTION", "sync_runs")].insert_one({**summary, "created_at": synced_at})
         return summary
@@ -708,19 +617,26 @@ def sync_sales(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def run(args: argparse.Namespace) -> dict[str, Any]:
-    return sync_sales(args)
+    if args.dry_run:
+        return sync_sales(args)
+    client = MongoClient(mongo_uri(), **mongo_client_options())
+    try:
+        with resource_lock(client[env("MONGODB_DATABASE")], env("TARGET_COLLECTION", "sales_orders_sap")):
+            return sync_sales(args)
+    finally:
+        client.close()
 
 
 def main() -> int:
     load_dotenv(PROJECT_ROOT / ".env")
+    install_graceful_shutdown()
     args = build_parser().parse_args()
     try:
         summary = run(args)
         print(json.dumps(summary, ensure_ascii=False, default=str, sort_keys=True))
         return 0 if summary.get("success") is not False else 1
     except Exception as exc:
-        print(json.dumps({"success": False, "error": str(exc)}, ensure_ascii=False), file=sys.stdout)
-        return 1
+        return print_failure(exc)
 
 
 if __name__ == "__main__":

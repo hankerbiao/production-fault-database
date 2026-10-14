@@ -16,6 +16,7 @@ import json
 import sys
 import time
 from collections import defaultdict
+from contextlib import nullcontext
 from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
@@ -30,10 +31,10 @@ from scripts.sources.hana.hana_view_sync import (
     env,
     load_dotenv,
     mongo_client_options,
-    mongo_lease_lock,
     mongo_uri,
     process_lock,
 )
+from scripts.sync_runtime import check_leases, order_key, print_failure, resource_lock
 
 
 ORCHESTRATOR_RUN_COLLECTION = "sync_orchestrator_runs"
@@ -67,14 +68,6 @@ def normalize_planned_date(value: Any) -> str:
         except ValueError:
             continue
     return ""
-
-
-def order_key(value: Any) -> str:
-    """Normalize SAP numeric order numbers while preserving alphanumeric IDs."""
-    value = text(value)
-    if value.isdigit():
-        return value.lstrip("0") or "0"
-    return value
 
 
 def add_candidate(index: dict[str, set[str]], key: str, value: str) -> None:
@@ -160,6 +153,7 @@ def build_source_indexes(
 def flush_operations(collection: Any, operations: list[UpdateOne], *, apply: bool) -> tuple[int, int]:
     if not operations or not apply:
         return 0, 0
+    check_leases(verify=True)
     result = collection.bulk_write(operations, ordered=False)
     return result.matched_count, result.modified_count
 
@@ -176,7 +170,7 @@ def backfill(
 ) -> dict[str, Any]:
     bom = db[bom_collection_name]
     sales_orders = db[sales_collection_name]
-    progress = ProgressReporter(db, run_id)
+    progress = ProgressReporter(db, run_id if apply else None)
     production_index, sales_index, source_stats = build_source_indexes(sales_orders, progress)
     summary: dict[str, Any] = {
         "success": True,
@@ -200,6 +194,16 @@ def backfill(
         "preview": [],
     }
     operations: list[UpdateOne] = []
+
+    def enqueue(document_id: Any, fields: dict[str, str]) -> None:
+        operations.append(UpdateOne({"_id": document_id}, {"$set": fields}))
+        if len(operations) >= batch_size:
+            matched, modified = flush_operations(bom, operations, apply=apply)
+            summary["write_attempted"] += len(operations) if apply else 0
+            summary["write_matched"] += matched
+            summary["write_modified"] += modified
+            operations.clear()
+
     total = bom.count_documents({})
     progress.report("扫描并规范化 BOM 计划开始时间", 0, total, force=True)
     cursor = bom.find(
@@ -223,7 +227,7 @@ def backfill(
             if not production_order and not sales_order:
                 summary["skipped_empty_orders"] += 1
                 if existing_date and existing_date != text(document.get("GSTRS_DATE")):
-                    operations.append(UpdateOne({"_id": document["_id"]}, {"$set": {"GSTRS_DATE": existing_date}}))
+                    enqueue(document["_id"], {"GSTRS_DATE": existing_date})
                     summary["normalized"] += 1
                 continue
 
@@ -247,7 +251,7 @@ def backfill(
                     if production_order not in production_index and sales_order not in sales_index:
                         summary["unmatched_orders"] += 1
                 if existing_date and existing_date != text(document.get("GSTRS_DATE")):
-                    operations.append(UpdateOne({"_id": document["_id"]}, {"$set": {"GSTRS_DATE": existing_date}}))
+                    enqueue(document["_id"], {"GSTRS_DATE": existing_date})
                     summary["normalized"] += 1
                 continue
 
@@ -277,21 +281,13 @@ def backfill(
                     "matched_by": match_type,
                     "status": status,
                 })
-            fields = {"GSTRS_DATE": planned_start}
+            fields = {}
+            if text(document.get("GSTRS_DATE")) != planned_start:
+                fields["GSTRS_DATE"] = planned_start
             if existing_raw != planned_start:
                 fields["GSTRS"] = planned_start
-            operations.append(
-                UpdateOne(
-                    {"_id": document["_id"]},
-                    {"$set": fields},
-                )
-            )
-            if len(operations) >= batch_size:
-                matched, modified = flush_operations(bom, operations, apply=apply)
-                summary["write_attempted"] += len(operations) if apply else 0
-                summary["write_matched"] += matched
-                summary["write_modified"] += modified
-                operations.clear()
+            if fields:
+                enqueue(document["_id"], fields)
     finally:
         if hasattr(cursor, "close"):
             cursor.close()
@@ -333,8 +329,8 @@ def main() -> int:
         client = MongoClient(mongo_uri(), **mongo_client_options())
         db = client[env("MONGODB_DATABASE")]
         lock_path = env("BOM_PLANNED_START_LOCK_PATH", "/tmp/order-bom-planned-start.lock")
-        lock_name = env("BOM_PLANNED_START_LOCK_NAME", "order-bom-planned-start")
-        with process_lock(lock_path), mongo_lease_lock(db, lock_name):
+        with process_lock(lock_path) if args.apply else nullcontext(), \
+                resource_lock(db, args.bom_collection) if args.apply else nullcontext():
             result = backfill(
                 db,
                 bom_collection_name=args.bom_collection,
@@ -348,8 +344,7 @@ def main() -> int:
         print(json.dumps(result, ensure_ascii=False, sort_keys=True))
         return 0
     except Exception as exc:
-        print(json.dumps({"success": False, "error": str(exc)}, ensure_ascii=False))
-        return 1
+        return print_failure(exc)
     finally:
         if client is not None:
             client.close()

@@ -153,6 +153,9 @@ class FakeCollection:
     def find_one(self, *_args, **_kwargs):
         return None
 
+    def find(self, *_args, **_kwargs):
+        return iter([])
+
     def insert_one(self, document):
         self.documents.append(document)
 
@@ -221,7 +224,7 @@ def test_sync_view_closes_one_hana_session_cursor_and_mongo_client(monkeypatch):
     assert FakeMongoClient.instance.closed is True
 
 
-def test_sync_view_dry_run_reports_duplicate_source_keys(monkeypatch):
+def test_sync_view_dry_run_deduplicates_identical_source_rows(monkeypatch):
     row = ["x"] * len(sync.VIEW_SPECS["ZSGV_ZSD46N_SO_KK"].columns)
     connection = FakeHanaConnection()
     connection.cursor_instance.batches = [[tuple(row), tuple(row)], []]
@@ -229,6 +232,8 @@ def test_sync_view_dry_run_reports_duplicate_source_keys(monkeypatch):
     monkeypatch.setenv("HANA_ADDRESS", "localhost")
     monkeypatch.setenv("HANA_USER", "user")
     monkeypatch.setenv("HANA_PASSWORD", "password")
+    monkeypatch.setattr(sync, "MongoClient", FakeMongoClient)
+    monkeypatch.setenv("MONGODB_URI", "mongodb://test")
     result = sync.sync_view(
         sync.VIEW_SPECS["ZSGV_ZSD46N_SO_KK"],
         mode="full",
@@ -237,13 +242,14 @@ def test_sync_view_dry_run_reports_duplicate_source_keys(monkeypatch):
         batch_size=10,
         lookback_days=7,
         dry_run=True,
-        validate_source_keys=True,
     )
-    assert result["success"] is False
+    assert result["success"] is True
+    assert result["unique_rows"] == 1
     assert result["source_rows"] == 2
     assert result["duplicate_source_keys"] == 1
     assert connection.closed is True
     assert connection.cursor_instance.closed is True
+    assert not any(c.documents or c.updated for c in FakeMongoClient.instance.database.collections.values())
 
 
 def test_full_sync_defers_old_row_deletion_until_cleanup_commits(monkeypatch):

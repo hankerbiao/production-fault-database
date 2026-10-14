@@ -1,0 +1,11 @@
+[
+  {"id":"sales_orders","label":"销售订单","script":"scripts/sync/sync_sales_orders.py","dependencies":[],"priority":10,"fullSupported":true},
+  {"id":"station_records","label":"工位记录","script":"scripts/sync/station_records.py","dependencies":["sales_orders"],"priority":20,"fullSupported":true},
+  {"id":"repair_records","label":"维修故障","script":"scripts/sync/增量同步和清洗维修故障记录.py","dependencies":["sales_orders","station_records"],"priority":30,"fullSupported":true},
+  {"id":"order_bom_postings","label":"订单 BOM 过账","script":"scripts/sync/order_bom_postings.py","dependencies":["sales_orders"],"priority":40,"fullSupported":true},
+  {"id":"order_bom_planned_start","label":"BOM 计划开始时间回填","script":"scripts/maintenance/backfill_order_bom_planned_start.py","dependencies":["sales_orders","order_bom_postings"],"priority":45,"fullSupported":true},
+  {"id":"serial_bindings","label":"序列号绑定","script":"scripts/sync/serial_bindings.py","dependencies":[],"priority":50,"fullSupported":true},
+  {"id":"sales_order_delivery_records","label":"销售订单交付明细","script":"scripts/sync/sales_order_delivery_records.py","dependencies":[],"priority":55,"fullSupported":true},
+  {"id":"scs_doa","label":"SCS DOA","script":"scripts/sources/scs_doa_sync.py","dependencies":["sales_orders"],"priority":60,"fullSupported":true},
+  {"id":"scs_change","label":"SCS 换上换下","script":"scripts/sources/scs_change_sync.py","dependencies":["scs_doa"],"priority":70,"fullSupported":true}
+]

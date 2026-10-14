@@ -22,6 +22,8 @@ class Collection:
         self.delete_calls = 0
 
     def count_documents(self, query):
+        if "$or" in query:
+            return sum(d["_id"] in {part["_id"] for part in query["$or"]} for d in self.docs)
         return sum(1 for d in self.docs if d.get("_source_view") == query.get("_source_view"))
 
     def find(self, query=None, projection=None):
@@ -30,9 +32,11 @@ class Collection:
             return Cursor(self.docs)
         rows = []
         for doc in self.docs:
+            if "$or" in query and doc["_id"] not in {part["_id"] for part in query["$or"]}:
+                continue
             if query.get("_source_view") and doc.get("_source_view") != query["_source_view"]:
                 continue
-            rows.append({"_id": doc["_id"], **{key: doc.get(key) for key in projection if key != "_id"}})
+            rows.append(dict(doc) if projection is None else {"_id": doc["_id"], **{key: doc.get(key) for key in projection if key != "_id"}})
         return Cursor(rows)
 
     def bulk_write(self, operations, ordered=False):
@@ -55,7 +59,14 @@ class DB:
         self.collections = {"bom": bom, "station": station, "orders": orders}
 
     def __getitem__(self, key):
+        if key.endswith("_archive"):
+            self.collections.setdefault(key, Archive())
         return self.collections[key]
+
+
+class Archive:
+    def bulk_write(self, operations, **_kwargs):
+        return SimpleNamespace(upserted_count=len(operations))
 
 
 def test_bom_keeps_only_5000_company_cpx_values():

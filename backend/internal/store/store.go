@@ -62,13 +62,6 @@ func New(ctx context.Context, uri, database, repairCollection, orderCollection s
 		bomCache:                       make(map[string]bomStreamCacheEntry), bomWarmDone: make(chan struct{}),
 		stationCache: make(map[string]bomStreamCacheEntry), stationWarmDone: make(chan struct{}),
 	}
-	go func() {
-		indexCtx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
-		defer cancel()
-		if err := result.RefreshSalesOrderDeliverySummary(indexCtx); err != nil {
-			log.Printf("sales order delivery summary initialization failed: %v", err)
-		}
-	}()
 	// Warm the broad LRR raw snapshot after startup so the first dashboard read
 	// does not pay the full Mongo scan latency.
 	go result.prewarmBOMStream()

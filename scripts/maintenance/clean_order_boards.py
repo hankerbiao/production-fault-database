@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+from contextlib import nullcontext
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -23,11 +24,11 @@ if str(ROOT) not in sys.path:
 from scripts.sources.hana.hana_view_sync import (  # noqa: E402
     env,
     mongo_client_options,
-    mongo_lease_lock,
     mongo_uri,
     mongo_write_concern_summary,
     process_lock,
 )
+from scripts.sync_runtime import archive_cleanup, check_leases, order_key, resource_lock
 
 
 CONFIRMATION = "DELETE-ORDER-BOARD-INVALID"
@@ -64,8 +65,7 @@ def normalize(value: Any) -> str:
 
 
 def normalize_order(value: Any) -> str:
-    value = normalize(value)
-    return value.lstrip("0") or "0" if value else ""
+    return order_key(value)
 
 
 def parse_date(value: str) -> date:
@@ -82,9 +82,10 @@ def base_filter(spec: BoardSpec, from_date: date | None, to_date: date | None, s
     if from_date or to_date:
         window: dict[str, str] = {}
         if from_date:
-            window["$gte"] = from_date.isoformat()
+            window["$gte"] = from_date.strftime("%Y%m%d") if spec.name == "bom" else from_date.isoformat()
         if to_date:
-            window["$lt"] = (to_date + timedelta(days=1)).isoformat()
+            next_day = to_date + timedelta(days=1)
+            window["$lt"] = next_day.strftime("%Y%m%d") if spec.name == "bom" else next_day.isoformat()
         query[spec.date_field] = window
     return query
 
@@ -167,6 +168,17 @@ def process_bom_cpx_cleanup(
         "updated": 0, "deleted": 0,
     }
     deletes: list[dict[str, Any]] = []
+    run_id = uuid4().hex
+
+    def flush() -> None:
+        if deletes and apply:
+            identities = [{"_id": row["_id"], "_source_view": spec.source_view, "CPX": row.get("CPX")} for row in deletes]
+            selected = {"$or": identities}
+            stats["deleted"] += archive_cleanup(db, collection_name, selected, selected, run_id,
+                                               1, allow_large_cleanup=True, batch_size=batch_size,
+                                               reason="non_5000_company")
+        deletes.clear()
+
     cursor = collection.find(query, {"_id": 1, "CPX": 1})
     try:
         for row in cursor:
@@ -181,7 +193,10 @@ def process_bom_cpx_cleanup(
                     stats["empty_cpx"] += 1
                 stats["non_5000_cpx"] += 1
                 stats["delete_candidates"] += 1
-                deletes.append(row)
+                if apply:
+                    deletes.append(row)
+                    if len(deletes) >= batch_size:
+                        flush()
             if progress and (stats["scanned"] == 1 or stats["scanned"] % 100 == 0):
                 suffix = f"/{total}" if total else ""
                 print(f"\r处理bom: {stats['scanned']}{suffix}", end="", file=sys.stderr, flush=True)
@@ -201,15 +216,7 @@ def process_bom_cpx_cleanup(
         f"空 CPX {stats['empty_cpx']:,} 条，非 5000 CPX 删除候选 {stats['delete_candidates']:,} 条"
     )
     if apply:
-        log(f"[bom] 开始执行 CPX 清理，共 {len(deletes):,} 个删除动作，批大小 {batch_size}")
-        for start in range(0, len(deletes), batch_size):
-            batch = deletes[start:start + batch_size]
-            identities = [
-                {"_id": row.get("_id"), "_source_view": spec.source_view, "CPX": row.get("CPX")}
-                for row in batch
-            ]
-            stats["deleted"] += collection.delete_many({"$or": identities}).deleted_count
-            log(f"[bom] 已执行 {min(start + len(batch), len(deletes)):,}/{len(deletes):,} 个删除动作（删除 {stats['deleted']:,}）")
+        flush()
         log(f"[bom] CPX 清理完成：删除 {stats['deleted']:,} 条")
     else:
         log("[bom] dry-run，不执行数据库变更")
@@ -264,6 +271,29 @@ def process_board(
     actions: list[tuple[str, dict[str, Any], dict[str, str] | None]] = []
     unresolved_productions: set[str] = set()
     update_candidates = 0
+    run_id = uuid4().hex
+
+    def flush() -> None:
+        if actions and apply:
+            updates, deletes = [], []
+            for kind, row, fields in actions:
+                identity = {"_id": row["_id"], "_source_view": spec.source_view,
+                            spec.production_field: row.get(spec.production_field),
+                            spec.sales_field: row.get(spec.sales_field)}
+                if kind == "update":
+                    updates.append(UpdateOne(identity, {"$set": fields or {}}))
+                else:
+                    deletes.append(identity)
+            check_leases(verify=True)
+            if updates:
+                stats["updated"] += db[collection_name].bulk_write(updates, ordered=False).modified_count
+            if deletes:
+                selected = {"$or": deletes}
+                stats["deleted"] += archive_cleanup(db, collection_name, selected, selected,
+                    run_id, 1, allow_large_cleanup=True, batch_size=batch_size,
+                    reason="sales_order_not_in_reference")
+        actions.clear()
+
     cursor = db[collection_name].find(query, {"_id": 1, spec.production_field: 1, spec.sales_field: 1})
     try:
         for row in cursor:
@@ -305,6 +335,8 @@ def process_board(
                 if sales_key not in board_sales:
                     stats["delete_candidates"] += 1
                     actions.append(("delete", row, None))
+                    if len(actions) >= batch_size:
+                        flush()
                     continue
                 stats["matched_sales_orders"] += 1
                 if fields:
@@ -315,6 +347,8 @@ def process_board(
                 update_candidates += 1
             else:
                 stats["missing_board_sales"] += 1
+            if len(actions) >= batch_size:
+                flush()
             if progress and (stats["scanned"] == 1 or stats["scanned"] % 100 == 0):
                 suffix = f"/{total}" if total else ""
                 print(f"\r处理{spec.name}: {stats['scanned']}{suffix}", end="", file=sys.stderr, flush=True)
@@ -336,25 +370,7 @@ def process_board(
     )
 
     if apply:
-        log(f"[{spec.name}] 开始执行批量变更，共 {len(actions):,} 个动作，批大小 {batch_size}")
-        collection = db[collection_name]
-        for start in range(0, len(actions), batch_size):
-            batch = actions[start:start + batch_size]
-            updates: list[Any] = []
-            deletes: list[dict[str, Any]] = []
-            for kind, row, fields in batch:
-                identity = {"_id": row.get("_id"), "_source_view": spec.source_view,
-                            spec.production_field: row.get(spec.production_field),
-                            spec.sales_field: row.get(spec.sales_field)}
-                if kind == "update":
-                    updates.append(UpdateOne(identity, {"$set": fields or {}}))
-                else:
-                    deletes.append(identity)
-            if updates:
-                stats["updated"] += collection.bulk_write(updates, ordered=False).modified_count
-            if deletes:
-                stats["deleted"] += collection.delete_many({"$or": deletes}).deleted_count
-            log(f"[{spec.name}] 已执行 {min(start + len(batch), len(actions)):,}/{len(actions):,} 个动作（更新 {stats['updated']:,}，删除 {stats['deleted']:,}）")
+        flush()
         log(f"[{spec.name}] 批量变更完成：更新 {stats['updated']:,} 条，删除 {stats['deleted']:,} 条")
     else:
         log(f"[{spec.name}] dry-run，不执行数据库变更")
@@ -397,19 +413,20 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     log(f"任务启动：run_id={run_id}，模式={result['mode']}，看板={','.join(boards)}，批大小={args.batch_size}，limit={args.limit}")
     try:
         db = client[database]
-        with process_lock(lock_path):
-            with process_lock(sync_path):
-                with mongo_lease_lock(db, env("SYNC_DISTRIBUTED_LOCK_NAME", "sales_repair_sync")):
-                    for board in boards:
-                        spec = SPECS[board]
-                        collection = env(spec.collection_env, spec.default_collection)
+        with process_lock(lock_path) if args.apply else nullcontext():
+            with process_lock(sync_path) if args.apply else nullcontext():
+                for board in boards:
+                    spec = SPECS[board]
+                    collection = env(spec.collection_env, spec.default_collection)
+                    with resource_lock(db, collection) if args.apply else nullcontext():
                         result["boards"][board] = process_board(db, spec, collection, order_collection, apply=args.apply, batch_size=args.batch_size, limit=args.limit, from_date=args.from_date, to_date=args.to_date, sync_run_id=getattr(args, "sync_run_id", None), progress=not args.no_progress)
         result.update({"success": True, "finished_at": datetime.now(timezone.utc), "mongo_write_concern": mongo_write_concern_summary(options)})
         log(f"任务完成：run_id={run_id}，处理看板={','.join(boards)}")
         return result
     finally:
-        try:
-            client[database][audit_collection].insert_one({**result, "status": "success" if result.get("success") else "failed", "created_at": datetime.now(timezone.utc)})
-        except Exception:
-            pass
+        if args.apply:
+            try:
+                client[database][audit_collection].insert_one({**result, "status": "success" if result.get("success") else "failed", "created_at": datetime.now(timezone.utc)})
+            except Exception:
+                pass
         client.close()

@@ -357,9 +357,27 @@ def test_dry_run_entry_does_not_acquire_mongo_lease(monkeypatch):
     monkeypatch.setattr(backfill, "mongo_uri", lambda: "mongodb://test")
     monkeypatch.setattr(backfill, "load_dotenv", lambda: None)
     monkeypatch.setattr(backfill, "process_lock", lambda *_args: nullcontext())
-    monkeypatch.setattr(backfill, "mongo_lease_lock", forbidden)
+    monkeypatch.setattr(backfill, "resource_lock", forbidden)
     monkeypatch.setattr(backfill, "run_workflow", lambda *_args, **_kwargs: {"success": True})
     assert backfill.run(workflow)["success"]
+
+
+def test_dry_run_backfills_new_source_rows_without_mutating_local_repairs(monkeypatch):
+    from scripts.sync import 增量同步和清洗维修故障记录 as backfill
+    db = seed_db(monkeypatch)
+    db["station_records_sap"].docs = [
+        {"_id": "station", "PCODE": "PC-NEW", "AUFNR": "PO-1", "KDAUF": "SO-1"},
+    ]
+    source(monkeypatch, [repair(PCODE="PC-NEW", AUFNR="", VBELN="")])
+    args = backfill.build_parser().parse_args(["--dry-run", "--basic-backfill", "--no-progress"])
+    args.repair_collection = "repairs"
+    args.sales_order_collection = "orders"
+    args.sync_end_date = date(2026, 10, 14)
+    result = backfill.run_workflow(db, args)
+    assert result["backfill_basis"] == "validated_source_snapshot"
+    assert result["station_matches"] == 1
+    assert result["would_update"] == 1
+    assert db["repairs"].docs == []
 
 
 def test_partial_target_write_is_detected_before_cleanup(monkeypatch):

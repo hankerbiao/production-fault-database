@@ -1,11 +1,12 @@
 import argparse
+from contextlib import nullcontext
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 from scripts.sources.scs_change_sync import (
     bounded_change_range,
     change_source_key,
-    fetch_changes,
+    iter_changes,
     load_5000_service_orders,
     parse_changes,
     request,
@@ -36,10 +37,11 @@ def test_fetch_changes_paginates(monkeypatch):
 
     def fake_request(client, method, url, **kwargs):
         calls.append(kwargs["params"]["pageNo"])
-        return Response() if len(calls) == 1 else type("EmptyResponse", (), {"text": "", "raise_for_status": lambda self: None})()
+        empty = "<form id='a8a80e692948867c501948be54ba50b6f'><table><tr><th>服务单号</th></tr></table></form>"
+        return Response() if len(calls) == 1 else type("EmptyResponse", (), {"text": empty, "raise_for_status": lambda self: None})()
 
     monkeypatch.setattr("scripts.sources.scs_change_sync.request", fake_request)
-    assert len(fetch_changes(object(), page_size=1)) == 1
+    assert sum(len(page) for page in iter_changes(object(), page_size=1)) == 1
     assert calls == [1, 2]
 
 
@@ -60,8 +62,8 @@ def test_incremental_change_window_looks_back_two_days():
 
 def test_change_request_uses_five_to_ten_second_random_delay(monkeypatch):
     waits = []
-    monkeypatch.setattr("scripts.sources.scs_change_sync.random.uniform", lambda minimum, maximum: (waits.append((minimum, maximum)) or 7))
-    monkeypatch.setattr("scripts.sources.scs_change_sync.time.sleep", lambda value: waits.append(value))
+    monkeypatch.setattr("scripts.sources.scs_doa_sync.random.uniform", lambda minimum, maximum: (waits.append((minimum, maximum)) or 7))
+    monkeypatch.setattr("scripts.sources.scs_doa_sync.time.sleep", lambda value: waits.append(value))
 
     class Client:
         def request(self, method, url, **kwargs):
@@ -80,7 +82,7 @@ def test_load_5000_service_orders():
     assert load_5000_service_orders(Database()) == {"SH-1", "SH-2"}
 
 
-def test_sync_fetches_and_writes_one_page_at_a_time(monkeypatch):
+def test_sync_validates_all_pages_before_bounded_writes(monkeypatch):
     rows = [
         {"so_code": "SH-1", "create_time": "2026-09-08 10:00:00"},
         {"so_code": "SH-2", "create_time": "2026-09-08 11:00:00"},
@@ -88,9 +90,11 @@ def test_sync_fetches_and_writes_one_page_at_a_time(monkeypatch):
     ]
     pages = {1: rows[:2], 2: rows[2:], 3: []}
     requested_pages = []
+    events = []
 
     def fake_fetch_page(_client, page, *_args, **_kwargs):
         requested_pages.append(page)
+        events.append("read")
         return pages[page]
 
     class Result:
@@ -106,17 +110,25 @@ def test_sync_fetches_and_writes_one_page_at_a_time(monkeypatch):
 
         def bulk_write(self, operations, **_kwargs):
             self.writes.append(list(operations))
+            events.append("write")
             return Result()
 
         def delete_many(self, *_args, **_kwargs):
             return type("DeleteResult", (), {"deleted_count": 0})()
+
+        def find(self, *_args):
+            return iter([])
+
+        def count_documents(self, *_args):
+            return 0
 
     class Checkpoints:
         def __init__(self):
             self.updates = []
 
         def find_one(self, *_args, **_kwargs):
-            return None
+            return {"status": "running", "mode": "full", "start_date": "2026-01-01",
+                    "page": 99, "page_row_index": 1, "watermark": "2026-08-01"}
 
         def update_one(self, query, update, **_kwargs):
             self.updates.append((query, update))
@@ -154,6 +166,7 @@ def test_sync_fetches_and_writes_one_page_at_a_time(monkeypatch):
     monkeypatch.setattr("scripts.sources.scs_change_sync.login", lambda _client: None)
     monkeypatch.setattr("scripts.sources.scs_change_sync.fetch_change_page", fake_fetch_page)
     monkeypatch.setattr("scripts.sources.scs_change_sync.load_5000_service_orders", lambda *_args: set())
+    monkeypatch.setattr("scripts.sources.scs_change_sync.resource_lock", lambda *_args: nullcontext())
     monkeypatch.setenv("SCS_WRITE_BATCH_SIZE", "2")
 
     result = sync(argparse.Namespace(full=True, start_date="2026-01-01", lookback_days=7, page_size=2, dry_run=False))
@@ -161,6 +174,6 @@ def test_sync_fetches_and_writes_one_page_at_a_time(monkeypatch):
     assert requested_pages == [1, 2]
     assert [len(write) for write in database.collection.writes] == [2, 1]
     checkpoint_sets = [update[1]["$set"] for update in database.checkpoints.updates]
-    assert any(item["page"] == 1 and item["page_row_index"] == 2 for item in checkpoint_sets)
+    assert events[:2] == ["read", "read"]
     assert checkpoint_sets[-1]["status"] == "completed"
     assert result["fetched"] == 3

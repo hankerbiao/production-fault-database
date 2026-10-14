@@ -34,6 +34,23 @@ func main() {
 	}
 	defer s.Close(context.Background())
 
+	go func() {
+		refreshCtx, refreshCancel := context.WithTimeout(context.Background(), 15*time.Minute)
+		defer refreshCancel()
+		if err := s.InitializeSalesOrderDeliverySummary(refreshCtx); err != nil {
+			log.Printf("sales order delivery summary initialization failed: %v", err)
+		}
+		refreshCancel()
+		ticker := time.NewTicker(30 * time.Second)
+		defer ticker.Stop()
+		for range ticker.C {
+			pollCtx, pollCancel := context.WithTimeout(context.Background(), 15*time.Minute)
+			if err := s.RefreshSalesOrderDeliverySummaryIfStale(pollCtx); err != nil {
+				log.Printf("sales order delivery summary refresh failed: %v", err)
+			}
+			pollCancel()
+		}
+	}()
 	sync := newSyncManager()
 	sync.refreshSalesOrderDeliverySummary = func() error {
 		refreshCtx, refreshCancel := context.WithTimeout(context.Background(), 15*time.Minute)

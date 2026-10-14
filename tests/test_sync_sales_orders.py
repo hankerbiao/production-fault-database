@@ -80,13 +80,7 @@ def test_covers_sales_full_scope():
     assert not sync.covers_sales_full_scope(date(2026, 1, 1), date(2026, 1, 31), today=today)
 
 
-def test_watermark_and_aggregate():
-    current = {"ZDATE": "20260101", "ZTIME": "120000"}
-    assert sync.watermark_max(current, {"ZDATE": "20260101", "ZTIME": "110000"}, ("ZDATE", "ZTIME")) == current
-    newer = sync.watermark_max(current, {"ZDATE": "20260102", "ZTIME": "000000"}, ("ZDATE", "ZTIME"))
-    assert newer == {"ZDATE": "20260102", "ZTIME": "000000"}
-    assert sync.watermark_max(newer, {"ZDATE": "", "ZTIME": ""}, ("ZDATE", "ZTIME")) == newer
-
+def test_aggregate_preserves_order_lines():
     rows = [
         {"AUFNR": "100", "GAMNG": "1,000", "WMENG": "2", "VBELN": "SO1"},
         {"AUFNR": "100", "GAMNG": "2", "WMENG": "3", "VBELN": "SO1"},
@@ -256,7 +250,7 @@ def test_upsert_is_idempotent_shape(monkeypatch):
     assert db["orders"].docs[0]["sync_count"] == 2
 
 
-def test_sync_sales_full_run_advances_only_successful_sources(monkeypatch):
+def test_sync_sales_failed_full_run_preserves_all_checkpoints(monkeypatch):
     FakeMongoClient.instances.clear()
     monkeypatch.setenv("MONGODB_DATABASE", "test")
     monkeypatch.setenv("TARGET_COLLECTION", "orders")
@@ -277,7 +271,7 @@ def test_sync_sales_full_run_advances_only_successful_sources(monkeypatch):
     db = FakeMongoClient.instances[0].db
     assert db["orders"].docs[0]["_id"] == "SG:1"
     assert "deleted_out_of_scope" not in result
-    assert db["checkpoints"].find_one({"_id": "sales_orders:SG"})["last_success_date"] == "2026-01-02"
+    assert db["checkpoints"].find_one({"_id": "sales_orders:SG"}) is None
     assert db["checkpoints"].find_one({"_id": "sales_orders:KK"}) is None
 
 

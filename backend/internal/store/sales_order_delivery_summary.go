@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -29,12 +30,18 @@ func (s *Store) RefreshSalesOrderDeliverySummary(ctx context.Context) (refreshEr
 			s.salesOrderDeliverySummaryAvailable = false
 			s.salesOrderDeliverySummaryStateMu.Unlock()
 		}
-		s.salesOrderDeliverySummaryReadyOnce.Do(func() {
-			if s.salesOrderDeliverySummaryReady != nil {
-				close(s.salesOrderDeliverySummaryReady)
-			}
-		})
+		s.markSalesOrderDeliverySummaryReady()
 	}()
+	sourceVersion, err := s.salesOrderDeliverySourceVersion(ctx)
+	if err != nil {
+		return err
+	}
+	if active, err := s.salesOrderDeliverySyncActive(ctx); err != nil || active {
+		if err != nil {
+			return err
+		}
+		return fmt.Errorf("sales order delivery synchronization is active")
+	}
 
 	salesOrderDeliverySummaryPrefix := salesOrderDeliverySummaryCollection + "_build_"
 	stagingName := fmt.Sprintf("%s%d", salesOrderDeliverySummaryPrefix, time.Now().UTC().UnixNano())
@@ -77,8 +84,21 @@ func (s *Store) RefreshSalesOrderDeliverySummary(ctx context.Context) (refreshEr
 		return fmt.Errorf("close sales order delivery summary cursor: %w", closeErr)
 	}
 
+	currentVersion, err := s.salesOrderDeliverySourceVersion(ctx)
+	if err != nil {
+		return err
+	}
+	if currentVersion != sourceVersion {
+		return fmt.Errorf("sales order delivery source changed during summary build")
+	}
+	if active, err := s.salesOrderDeliverySyncActive(ctx); err != nil || active {
+		if err != nil {
+			return err
+		}
+		return fmt.Errorf("sales order delivery synchronization started during summary build")
+	}
 	_, err = s.salesOrderDeliverySummaryMeta.UpdateOne(ctx, bson.M{"_id": "active"}, bson.M{"$set": bson.M{
-		"collection": stagingName, "built_at": time.Now().UTC(),
+		"collection": stagingName, "built_at": time.Now().UTC(), "source_version": sourceVersion,
 	}}, options.Update().SetUpsert(true))
 	if err != nil {
 		return fmt.Errorf("publish sales order delivery summary: %w", err)
@@ -91,6 +111,123 @@ func (s *Store) RefreshSalesOrderDeliverySummary(ctx context.Context) (refreshEr
 	return nil
 }
 
+func (s *Store) InitializeSalesOrderDeliverySummary(ctx context.Context) error {
+	if s.salesOrderDeliverySummaryMeta == nil {
+		return fmt.Errorf("sales order delivery summary metadata collection is not initialized")
+	}
+	defer s.markSalesOrderDeliverySummaryReady()
+
+	s.salesOrderDeliverySummaryRefreshMu.Lock()
+	var metadata struct {
+		Collection    string `bson:"collection"`
+		SourceVersion string `bson:"source_version"`
+	}
+	err := s.salesOrderDeliverySummaryMeta.FindOne(ctx, bson.M{"_id": "active"}).Decode(&metadata)
+	if err == nil {
+		prefix := salesOrderDeliverySummaryCollection + "_build_"
+		if strings.HasPrefix(metadata.Collection, prefix) {
+			names, listErr := s.db.ListCollectionNames(ctx, bson.M{"name": metadata.Collection})
+			version, versionErr := s.salesOrderDeliverySourceVersion(ctx)
+			if versionErr != nil {
+				s.salesOrderDeliverySummaryRefreshMu.Unlock()
+				return versionErr
+			}
+			if listErr == nil && len(names) > 0 && metadata.SourceVersion == version {
+				s.salesOrderDeliverySummaryStateMu.Lock()
+				s.salesOrderDeliverySummaryAvailable = true
+				s.salesOrderDeliverySummaryStateMu.Unlock()
+				s.salesOrderDeliverySummaryRefreshMu.Unlock()
+				return nil
+			}
+			if listErr != nil {
+				err = listErr
+			} else {
+				err = mongo.ErrNoDocuments
+			}
+		} else {
+			err = mongo.ErrNoDocuments
+		}
+	}
+	s.salesOrderDeliverySummaryRefreshMu.Unlock()
+
+	if err != nil && err != mongo.ErrNoDocuments {
+		return err
+	}
+	return s.RefreshSalesOrderDeliverySummary(ctx)
+}
+
+func (s *Store) salesOrderDeliverySourceVersion(ctx context.Context) (string, error) {
+	var version struct {
+		RunID string `bson:"run_id"`
+	}
+	err := s.db.Collection("sync_dataset_versions").FindOne(ctx, bson.M{"_id": "ZSGV_ZSD46N_SO_KK"}).Decode(&version)
+	if err == mongo.ErrNoDocuments {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("read delivery source version: %w", err)
+	}
+	return version.RunID, nil
+}
+
+func (s *Store) salesOrderDeliverySyncActive(ctx context.Context) (bool, error) {
+	collection := os.Getenv("SYNC_LOCK_COLLECTION")
+	if collection == "" {
+		collection = "sync_locks"
+	}
+	err := s.db.Collection(collection).FindOne(ctx, bson.M{
+		"_id":        "dataset:" + s.views["ZSGV_ZSD46N_SO_KK"].Name(),
+		"expires_at": bson.M{"$gt": time.Now().UTC()},
+	}).Err()
+	if err == mongo.ErrNoDocuments {
+		return false, nil
+	}
+	return err == nil, err
+}
+
+// RefreshSalesOrderDeliverySummaryIfStale is shared by the periodic monitor.
+func (s *Store) RefreshSalesOrderDeliverySummaryIfStale(ctx context.Context) error {
+	active, err := s.salesOrderDeliverySyncActive(ctx)
+	if err != nil {
+		return err
+	}
+	if active {
+		s.salesOrderDeliverySummaryStateMu.Lock()
+		s.salesOrderDeliverySummaryAvailable = false
+		s.salesOrderDeliverySummaryStateMu.Unlock()
+		return nil
+	}
+	version, err := s.salesOrderDeliverySourceVersion(ctx)
+	if err != nil {
+		return err
+	}
+	var metadata struct {
+		SourceVersion string `bson:"source_version"`
+	}
+	err = s.salesOrderDeliverySummaryMeta.FindOne(ctx, bson.M{"_id": "active"}).Decode(&metadata)
+	if err != nil && err != mongo.ErrNoDocuments {
+		return err
+	}
+	s.salesOrderDeliverySummaryStateMu.RLock()
+	available := s.salesOrderDeliverySummaryAvailable
+	s.salesOrderDeliverySummaryStateMu.RUnlock()
+	if err == mongo.ErrNoDocuments || metadata.SourceVersion != version || !available {
+		s.salesOrderDeliverySummaryStateMu.Lock()
+		s.salesOrderDeliverySummaryAvailable = false
+		s.salesOrderDeliverySummaryStateMu.Unlock()
+		return s.RefreshSalesOrderDeliverySummary(ctx)
+	}
+	return nil
+}
+
+func (s *Store) markSalesOrderDeliverySummaryReady() {
+	s.salesOrderDeliverySummaryReadyOnce.Do(func() {
+		if s.salesOrderDeliverySummaryReady != nil {
+			close(s.salesOrderDeliverySummaryReady)
+		}
+	})
+}
+
 func (s *Store) waitForSalesOrderDeliverySummary(ctx context.Context) (bool, error) {
 	if s.salesOrderDeliverySummaryReady != nil {
 		select {
@@ -100,8 +237,22 @@ func (s *Store) waitForSalesOrderDeliverySummary(ctx context.Context) (bool, err
 		}
 	}
 	s.salesOrderDeliverySummaryStateMu.RLock()
-	defer s.salesOrderDeliverySummaryStateMu.RUnlock()
-	return s.salesOrderDeliverySummaryAvailable, nil
+	available := s.salesOrderDeliverySummaryAvailable
+	s.salesOrderDeliverySummaryStateMu.RUnlock()
+	if !available {
+		return false, nil
+	}
+	active, err := s.salesOrderDeliverySyncActive(ctx)
+	if err != nil {
+		return false, err
+	}
+	if active {
+		s.salesOrderDeliverySummaryStateMu.Lock()
+		s.salesOrderDeliverySummaryAvailable = false
+		s.salesOrderDeliverySummaryStateMu.Unlock()
+		return false, nil
+	}
+	return true, nil
 }
 
 func (s *Store) activeSalesOrderDeliverySummary(ctx context.Context) (*mongo.Collection, error) {

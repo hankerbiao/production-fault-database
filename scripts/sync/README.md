@@ -8,12 +8,15 @@
 | `station_records.py` | 工位记录 `station_records_sap` | `python scripts/sync/station_records.py --mode incremental --apply` |
 | `增量同步和清洗维修故障记录.py` | 维修记录 `repair_records_sap` | `python scripts/sync/增量同步和清洗维修故障记录.py --apply` |
 | `order_bom_postings.py` | BOM 过账 `order_bom_postings_sap` | `python scripts/sync/order_bom_postings.py --mode incremental --apply` |
+| `../maintenance/backfill_order_bom_planned_start.py` | BOM 计划开始时间 | `python scripts/maintenance/backfill_order_bom_planned_start.py --apply` |
 | `serial_bindings.py` | 序列号绑定 `serial_bindings_sap` | `python scripts/sync/serial_bindings.py --mode incremental --apply` |
 | `sales_order_delivery_records.py` | 2026 销售订单交付明细 `sales_order_delivery_records_sap` | `python scripts/sync/sales_order_delivery_records.py --mode incremental --apply` |
+| `../sources/scs_doa_sync.py` | SCS DOA | `python scripts/sources/scs_doa_sync.py` |
+| `../sources/scs_change_sync.py` | SCS 换上换下 | `python scripts/sources/scs_change_sync.py` |
 
 ## 执行顺序
 
-`syncctl.py run --mode incremental` 按注册表串行运行销售订单、工位、维修、BOM、序列号、SCS DOA 和 SCS 换上换下；会自动补齐选中任务的依赖。维修任务在该入口下完整刷新当月及前两个月，其他任务继续使用各自的增量机制。运行状态、阶段摘要和失败原因存入 MongoDB 的 `sync_orchestrator_runs`，并通过可续租租约锁防止 cron、API 和命令行并发。维修清洗依赖已同步的销售订单和工位数据。
+`syncctl.py run --mode incremental` 按注册表串行运行销售订单、工位、维修、BOM、BOM 计划开始时间回填、序列号、交付明细、SCS DOA 和 SCS 换上换下；会自动补齐选中任务的依赖。Python 与 Go 共用 `backend/internal/syncmanifest/tasks.json`，修改任务时只维护这一份目录。维修任务在该入口下完整刷新当月及前两个月，其他任务继续使用各自的增量机制。运行状态、阶段摘要和失败原因存入 MongoDB 的 `sync_orchestrator_runs`。维修清洗依赖已同步的销售订单和工位数据。
 
 ```bash
 .venv/bin/python scripts/sync/syncctl.py run --mode incremental
@@ -25,6 +28,24 @@
 销售订单交付明细任务的日期边界固定为 `ERDAT` 2026 全年，编排器的其他日期参数不会扩大或缩小该数据集。首次可先运行 `python scripts/sync/sales_order_delivery_records.py --mode full --dry-run` 核对读取量，再通过同步管理页执行全量写入；日常编排使用增量模式并回看 7 天。源视图没有修改时间字段，因此超过回看期的历史更正需通过全量任务重新对账。
 
 销售订单全量默认只在 `start-date` 不晚于 `2026-01-01` 且结束日期覆盖当天时清理范围外旧单。从更晚日期重建只会 upsert，不会删除历史月份。强制整表替换需直接调用脚本并同时传入 `--replace-collection --confirm-delete`。
+
+## 运行与恢复
+
+所有正式入口按实际集合持有 `dataset:<集合名>` 的续租锁，BOM 回填与 BOM 同步共享同一资源锁；编排器另持有流程锁。`SYNC_MONGO_LOCK_TTL_SECONDS` 默认 120 秒，续租异常或持有者变化会阻止后续写入、归档和提交。升级前应等待旧版本同步进程结束，旧脚本的锁名与新资源锁不兼容。
+
+编排器等待子任务时持续更新运行心跳。`SYNC_TASK_TIMEOUT_SECONDS` 默认 21600 秒（6 小时）；超时、失锁或终止信号会终止并回收子进程组。瞬时连接错误、请求超时等最多尝试 3 次；失败后剩余阶段标记 `skipped`。stdout/stderr 实时写入 `logs/syncctl/<运行ID>.<任务>.<尝试次数>.*.log`，可通过 `SYNC_TASK_LOG_DIR` 修改目录。运行记录保存 `log_prefix`。日志及归档没有自动过期策略，需要按部署容量定期保留或清理。
+
+HANA 和 SCS 先把完整源结果落入临时 SQLite，再校验业务键。相同内容重复只保留一份，同键不同内容会在写库前失败。全量清理仅在读取日期窗口内执行，先归档到 `<集合>_archive`，归档失败不删除。空源且本地存在数据、或待删除超过 100 条且超过本地范围的一半时默认阻断。BOM 的 CPX 过滤、工位的订单准入和序列号精确去重属于明确业务规则，同样先归档，但不使用快照收缩比例限制。
+
+核实合法的源数据收缩后，可直接调用 HANA 表入口或 SCS 入口并显式传入 `--allow-large-cleanup`；此参数仅放开数量保护，不绕过分页、身份或页面结构校验，也不跳过归档。编排器不传此参数。销售订单仍使用已有的 `--confirm-delete` 确认机制。
+
+预览读取与正式执行相同的检查点，不创建索引、数据库锁或运行记录。工位、BOM 和维修在本次源快照上计算清洗及回填候选。预览仍需 MongoDB 读取权限、源访问权限和临时磁盘空间。源校验和目标写入分阶段执行，整个窗口并非数据库事务；中途失败可能留下部分 upsert，检查点和清理不会越过失败步骤，重跑会重新读取窗口并幂等覆盖。
+
+SCS 不按页码或行偏移跳过旧记录；重跑从窗口第一页读取，用业务键去重。分页错误、登录页和异常表结构均视为失败。DOA 详情失败保留旧有效详情，以 `_detail_pending`、`_detail_error` 和 `_detail_attempted_at` 记录补偿状态；每次额外补偿最多 `SCS_DETAIL_RETRY_LIMIT` 条历史待补记录，默认 100。两个 SCS 任务重算历史公司归属，只有值变化才写入。
+
+交付明细成功提交后发布 `sync_dataset_versions` 的 `ZSGV_ZSD46N_SO_KK` 版本。后端每 30 秒检查源版本，沿用现有 Go 物化汇总实现刷新；汇总构建前后检查源版本和写入锁，源发生变化则放弃发布。更新后需重启后端以启用此监听；首次成功同步会使旧汇总失效。检测到源同步或汇总刷新期间，查询回退到源聚合。
+
+序列号视图没有日期字段，`incremental` 仍读取全表并修复历史精确重复，但只在 `full` 时清理源中已消失记录。工位开始时间、交付创建日期和 SCS 创建日期不能反映所有历史修改，超出回看期的更正需要指定范围的全量对账。交付明细与 SCS 换上换下继续固定 2026 年范围。
 
 维修记录默认按 `ZDATE_WX` 维修日期刷新当月及前两个月。例如结束日期为 `2026-10-14` 时，窗口为 `2026-08-01` 至 `2026-10-14`（包含边界），最早不超过 `2026-01-01`。不再读取或推进维修 `ZDATE/ZTIME` 检查点，`--sync-lookback-days` 仅保留命令兼容。已有历史数据继续保留；首次导入全部历史仍需使用 `full`。
 

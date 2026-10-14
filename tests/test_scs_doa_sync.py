@@ -3,9 +3,9 @@ from types import SimpleNamespace
 
 from scripts.sources.scs_doa_sync import (
     backfill_5000_company,
-    can_resume,
     classify_doa_document,
     extract_equipment,
+    load_5000_customer_purchase_orders,
     parse_datetime,
     parse_labels,
     parse_list,
@@ -61,11 +61,26 @@ def test_request_waits_within_default_range(monkeypatch):
     assert waits == [(3.0, 5.0), 4.5]
 
 
-def test_classify_doa_document_uses_detail_sales_order():
-    assert classify_doa_document({"sales_order": "OLD", "details": {"fields": {"合同/订单号": "XHG2609190"}}}, {"XHG2609190"}) == {
-        "sales_order": "XHG2609190", "is_5000_company": True,
+def test_load_5000_customer_purchase_orders_uses_company_view_filter_and_bstnk():
+    class Collection:
+        def find(self, query, projection):
+            assert query == {"VBELN": {"$regex": "^XNC", "$options": "i"}}
+            assert projection == {"BSTNK": 1}
+            return [{"BSTNK": " PO-5000 "}, {"BSTNK": ""}, {}]
+
+    class Database:
+        def __getitem__(self, name):
+            assert name == "sales_order_delivery_records_sap"
+            return Collection()
+
+    assert load_5000_customer_purchase_orders(Database()) == {"PO-5000"}
+
+
+def test_classify_doa_document_uses_detail_order_number_against_bstnk():
+    assert classify_doa_document({"sales_order": "OLD", "details": {"fields": {"合同/订单号": "PO-5000"}}}, {"PO-5000"}) == {
+        "sales_order": "PO-5000", "is_5000_company": True,
     }
-    assert classify_doa_document({"details": {"fields": {"合同/订单号": "XHG-NOT-FOUND"}}}, {"XHG2609190"})["is_5000_company"] is False
+    assert classify_doa_document({"details": {"fields": {"合同/订单号": "PO-NOT-FOUND"}}}, {"PO-5000"})["is_5000_company"] is False
 
 
 def test_backfill_5000_company_re_evaluates_existing_documents():
@@ -114,14 +129,6 @@ def test_parser_defaults_lookback_to_two_days(monkeypatch):
     monkeypatch.setenv("SCS_LOOKBACK_DAYS", "5")
     args = build_parser().parse_args([])
     assert args.lookback_days == 5
-
-
-def test_incremental_can_resume_same_query_window():
-    args = SimpleNamespace(full=False, start_date=None)
-    checkpoint = {"status": "running", "mode": "incremental", "query_start": "2026-09-10", "run_id": "run-1"}
-    assert can_resume(checkpoint, args, "2026-09-10") is True
-    assert can_resume(checkpoint, args, "2026-09-11") is False
-    assert can_resume({"status": "completed", "mode": "incremental", "query_start": "2026-09-10"}, args, "2026-09-10") is False
 
 
 def test_should_refresh_details_skips_unchanged_complete_rows():

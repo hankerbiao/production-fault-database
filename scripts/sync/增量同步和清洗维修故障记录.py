@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import logging
 import sys
@@ -25,17 +24,17 @@ from scripts.sources.hana.hana_view_sync import (
     env,
     load_dotenv,
     mongo_client_options,
-    mongo_lease_lock,
     mongo_uri,
     mongo_write_concern_summary,
     process_lock,
 )
 from scripts.sync import sync_sales_orders
+from scripts.sync_runtime import Snapshot, check_leases, order_key, print_failure, resource_lock
+from scripts.sources.sap_http.client import headers, records as sap_rows
 
 
 LOGGER = logging.getLogger("增量同步和清洗维修故障记录")
 DEFAULT_LOCK = "/tmp/line-fault-station-order-backfill.lock"
-DEFAULT_MONGO_LOCK = "repair-records-station-backfill"
 SAP_METHOD = "ZSIMS_CL_INBOUND_SN_INFO"
 SAP_SOURCES = (
     ("KK", "http://10.8.100.11:8001/sap/ZHTTP_SIMS?sap-client=600"),
@@ -48,8 +47,7 @@ def text(value: Any) -> str:
 
 
 def normalized_order(value: Any) -> str:
-    value = text(value)
-    return value.lstrip("0") or "0" if value else ""
+    return order_key(value)
 
 
 def parse_date(value: str) -> date:
@@ -75,9 +73,7 @@ def scoped_filter(query: dict[str, Any], scope: dict[str, Any] | None) -> dict[s
 
 
 def sap_headers() -> dict[str, str]:
-    today = date.today().strftime("%Y%m%d")
-    signature = hashlib.md5(f"sugon{SAP_METHOD}{today}sugon".encode("utf-8")).hexdigest().upper()
-    return {"Content-Type": "application/json", "method": SAP_METHOD, "sign": signature, "time": today}
+    return headers(SAP_METHOD)
 
 
 class Progress:
@@ -257,19 +253,6 @@ def build_sales_order_pairs(collection: Any, progress: Progress) -> tuple[dict[s
     return pairs, planned_starts, stats
 
 
-def sap_rows(body: Any) -> list[dict[str, Any]]:
-    if not isinstance(body, dict):
-        raise RuntimeError("SAP 响应不是 JSON 对象")
-    message_type = text(body.get("MSGTY")).upper()
-    message = text(body.get("MSGTX"))
-    if message_type in {"E", "A", "X"} and "no data" not in message.lower() and "无数据" not in message:
-        raise RuntimeError(f"SAP 返回错误 ({message_type}): {message or '未知错误'}")
-    rows = body.get("DATA", [])
-    if not isinstance(rows, list) or not all(isinstance(row, dict) for row in rows):
-        raise RuntimeError("SAP 响应缺少有效 DATA 数组")
-    return rows
-
-
 def query_sap_pcode_orders(
     serials: list[str], batch_size: int, retries: int, retry_delay: float, timeout: float,
     progress: Progress, client_factory: Any = httpx.Client,
@@ -414,9 +397,11 @@ def backfill_repairs(
         if not operations:
             return
         if apply:
+            check_leases(verify=True)
             if audit_collection is not None:
                 audit_collection.bulk_write(audit_operations, ordered=False)
                 summary["audit_records"] += len(audit_operations)
+            check_leases(verify=True)
             result = collection.bulk_write(operations, ordered=False)
             summary["updated"] += result.modified_count
         operations.clear()
@@ -634,6 +619,8 @@ def run_workflow(
     progress = Progress(not args.no_progress)
     hana_sync: dict[str, Any] = {}
     hana_sync_commit: dict[str, Any] = {}
+    preview = Snapshot() if not args.apply and getattr(args, "sync_repair_hana", True) else None
+    repairs = db[args.repair_collection]
     try:
         if getattr(args, "sync_repair_hana", True):
             progress.update("刷新 HANA 维修故障快照", 0, 1)
@@ -650,10 +637,13 @@ def run_workflow(
                 run_id,
                 defer_finalize=args.apply,
                 allow_large_cleanup=getattr(args, "allow_large_cleanup", False),
+                preview_snapshot=preview,
             )
             progress.update("刷新 HANA 维修故障快照", 1, 1)
             if not hana_sync.get("success"):
                 raise RuntimeError(f"HANA 维修故障记录同步失败: {hana_sync.get('error', '未知错误')}")
+            if preview is not None:
+                repairs = preview
         scope = None
         station_query = None
         if hana_sync.get("range"):
@@ -664,23 +654,37 @@ def run_workflow(
                     date.fromisoformat(hana_sync["range"]["start"]),
                     date.fromisoformat(hana_sync["range"]["end"]),
                 )
-            cursor = db[args.repair_collection].find(scope, {"PCODE": 1})
+            cursor = repairs.find(scope, {"PCODE": 1})
             try:
                 serials = sorted({text(doc.get("PCODE")) for doc in cursor if text(doc.get("PCODE"))})
             finally:
                 if hasattr(cursor, "close"):
                     cursor.close()
             station_query = {"PCODE": {"$in": serials}}
-        collection_a, station_stats = build_collection_a(db[args.station_collection], progress, station_query)
+        if station_query is not None:
+            collection_a = {}
+            station_stats = {}
+            serials = station_query["PCODE"]["$in"]
+            for offset in range(0, len(serials), args.batch_size):
+                pairs, counts = build_collection_a(db[args.station_collection], progress,
+                    {"PCODE": {"$in": serials[offset:offset + args.batch_size]}})
+                collection_a.update(pairs)
+                for key, count in counts.items():
+                    station_stats[key] = station_stats.get(key, 0) + count
+            if not serials:
+                collection_a, station_stats = build_collection_a(db[args.station_collection], progress,
+                                                               {"PCODE": {"$in": []}})
+        else:
+            collection_a, station_stats = build_collection_a(db[args.station_collection], progress)
         repair_pcode_pairs: dict[str, tuple[str, str]] = {}
         repair_source_stats: dict[str, Any] = {}
         if args.repair_pcode_fallback:
-            repair_pcode_pairs, repair_source_stats = build_repair_pcode_pairs(db[args.repair_collection], progress, scope)
+            repair_pcode_pairs, repair_source_stats = build_repair_pcode_pairs(repairs, progress, scope)
         sap_pcode_orders: dict[str, str] = {}
         sap_stats: dict[str, Any] = {}
         if args.sap_pcode_fallback:
             sap_pcode_orders, sap_stats = build_sap_pcode_orders(
-                db[args.repair_collection], collection_a, repair_pcode_pairs,
+                repairs, collection_a, repair_pcode_pairs,
                 args, progress, sap_client_factory, scope,
             )
             if args.apply and sap_stats["sap_failed_sns"] and not getattr(args, "allow_partial_sap", False):
@@ -696,7 +700,7 @@ def run_workflow(
                 db[args.sales_order_collection], progress,
             )
         repair_stats = backfill_repairs(
-            db[args.repair_collection], collection_a, repair_pcode_pairs, sap_pcode_orders, sales_order_pairs, planned_starts,
+            repairs, collection_a, repair_pcode_pairs, sap_pcode_orders, sales_order_pairs, planned_starts,
             db[args.audit_collection] if args.apply and getattr(args, "audit_collection", "") else None,
             run_id,
             args.batch_size, args.apply,
@@ -712,6 +716,8 @@ def run_workflow(
             )
     finally:
         progress.finish()
+        if preview is not None:
+            preview.__exit__()
     return {
         "success": True,
         "mode": getattr(args, "mode", "incremental"),
@@ -727,6 +733,7 @@ def run_workflow(
         "sync_repair_hana": getattr(args, "sync_repair_hana", True),
         "hana_sync": hana_sync,
         "hana_sync_commit": hana_sync_commit,
+        "backfill_basis": "validated_source_snapshot" if preview is not None else "local_dataset",
         "audit_collection": getattr(args, "audit_collection", ""),
         "run_id": run_id,
         **station_stats,
@@ -765,9 +772,9 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     try:
         db = client[database]
         lock_path = env("REPAIR_STATION_BACKFILL_LOCK_PATH", DEFAULT_LOCK)
-        with process_lock(lock_path):
-            with process_lock(env("SYNC_LOCK_PATH", "/tmp/line-fault-table-sync.lock")):
-                lease = mongo_lease_lock(db, env("REPAIR_STATION_BACKFILL_LOCK_NAME", DEFAULT_MONGO_LOCK)) if args.apply else nullcontext()
+        with process_lock(lock_path) if args.apply else nullcontext():
+            with process_lock(env("SYNC_LOCK_PATH", "/tmp/line-fault-table-sync.lock")) if args.apply else nullcontext():
+                lease = resource_lock(db, args.repair_collection) if args.apply else nullcontext()
                 with lease:
                     result = run_workflow(db, args, run_id=run_id)
         result.update({
@@ -788,8 +795,7 @@ def main() -> int:
         print(json.dumps(run(args), ensure_ascii=False, default=str, sort_keys=True))
         return 0
     except Exception as exc:
-        print(json.dumps({"success": False, "error": str(exc)}, ensure_ascii=False), file=sys.stdout)
-        return 1
+        return print_failure(exc)
 
 
 if __name__ == "__main__":

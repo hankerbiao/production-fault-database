@@ -10,9 +10,9 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import signal
 import subprocess
 import sys
-import threading
 import time
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
@@ -24,14 +24,13 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from pymongo import MongoClient, ReturnDocument
-from pymongo.errors import DuplicateKeyError
+from pymongo import MongoClient
 
-from scripts.sources.hana.hana_view_sync import env, load_dotenv, mongo_client_options, mongo_uri
+from scripts.sources.hana.hana_view_sync import env, install_graceful_shutdown, load_dotenv, mongo_client_options, mongo_uri
+from scripts.sync_runtime import Lease as ResourceLease, check_leases, error_payload
 
 
 RUN_COLLECTION = "sync_orchestrator_runs"
-LOCK_COLLECTION = "sync_locks"
 LOCK_NAME = "sync-orchestrator"
 DEFAULT_RETRY_ATTEMPTS = 3
 
@@ -51,8 +50,8 @@ class Task:
         if self.id == "sales_orders":
             if mode == "full":
                 args.extend(["--full", "--start-date", start_date or ""])
-                if end_date:
-                    args.extend(["--end-date", end_date])
+            if end_date:
+                args.extend(["--end-date", end_date])
         elif self.id in {"station_records", "order_bom_postings", "serial_bindings"}:
             args.extend(["--mode", mode, "--apply"])
             if mode == "full":
@@ -74,20 +73,15 @@ class Task:
         else:  # SCS commands share the same flag convention.
             if mode == "full":
                 args.extend(["--full", "--start-date", start_date or ""])
+            if end_date:
+                args.extend(["--end-date", end_date])
         return args
 
 
-TASKS: tuple[Task, ...] = (
-    Task("sales_orders", "销售订单", "scripts/sync/sync_sales_orders.py", priority=10),
-    Task("station_records", "工位记录", "scripts/sync/station_records.py", ("sales_orders",), 20),
-    Task("repair_records", "维修故障", "scripts/sync/增量同步和清洗维修故障记录.py", ("sales_orders", "station_records"), 30),
-    Task("order_bom_postings", "订单 BOM 过账", "scripts/sync/order_bom_postings.py", ("sales_orders",), 40),
-    Task("order_bom_planned_start", "BOM 计划开始时间回填", "scripts/maintenance/backfill_order_bom_planned_start.py", ("sales_orders", "order_bom_postings"), 45),
-    Task("serial_bindings", "序列号绑定", "scripts/sync/serial_bindings.py", priority=50),
-    Task("sales_order_delivery_records", "销售订单交付明细", "scripts/sync/sales_order_delivery_records.py", priority=55),
-    Task("scs_doa", "SCS DOA", "scripts/sources/scs_doa_sync.py", ("sales_orders",), 60),
-    Task("scs_change", "SCS 换上换下", "scripts/sources/scs_change_sync.py", ("scs_doa",), 70),
-)
+TASKS = tuple(Task(
+    item["id"], item["label"], item["script"], tuple(item["dependencies"]),
+    item["priority"], item["fullSupported"],
+) for item in json.loads((ROOT / "backend/internal/syncmanifest/tasks.json").read_text(encoding="utf-8")))
 TASK_BY_ID = {task.id: task for task in TASKS}
 
 
@@ -149,52 +143,16 @@ def validate_request(mode: str, requested: Iterable[str] | None, start_date: str
     return tasks, start, end or date.today().isoformat()
 
 
-class Lease:
-    """Mongo lease that remains valid across long full synchronization runs."""
+class Lease(ResourceLease):
     def __init__(self, db: Any, owner: str, ttl_seconds: int = 120):
-        self.collection = db[LOCK_COLLECTION]
-        self.owner = owner
-        self.ttl_seconds = max(ttl_seconds, 30)
-        self._lost = threading.Event()
-        self._stop = threading.Event()
-        self._thread: threading.Thread | None = None
+        super().__init__(db, LOCK_NAME, f"{owner}:{uuid4().hex}", ttl_seconds,
+                         collection=env("SYNC_LOCK_COLLECTION", "sync_locks"))
 
     def acquire(self) -> None:
-        now = datetime.now(timezone.utc)
         try:
-            document = self.collection.find_one_and_update(
-            {"_id": LOCK_NAME, "$or": [{"expires_at": {"$lte": now}}, {"owner": self.owner}]},
-            {"$set": {"owner": self.owner, "acquired_at": now, "expires_at": datetime.fromtimestamp(now.timestamp() + self.ttl_seconds, timezone.utc)}},
-            upsert=True,
-            return_document=ReturnDocument.AFTER,
-            )
-        except DuplicateKeyError:
-            document = None
-        if not document or document.get("owner") != self.owner:
-            raise SyncError("已有同步任务运行中", code="already_running")
-        self._thread = threading.Thread(target=self._renew, daemon=True)
-        self._thread.start()
-
-    def _renew(self) -> None:
-        while not self._stop.wait(self.ttl_seconds / 3):
-            now = datetime.now(timezone.utc)
-            result = self.collection.update_one(
-                {"_id": LOCK_NAME, "owner": self.owner},
-                {"$set": {"expires_at": datetime.fromtimestamp(now.timestamp() + self.ttl_seconds, timezone.utc)}},
-            )
-            if result.matched_count != 1:
-                self._lost.set()
-                return
-
-    @property
-    def lost(self) -> bool:
-        return self._lost.is_set()
-
-    def close(self) -> None:
-        self._stop.set()
-        if self._thread:
-            self._thread.join(timeout=1)
-        self.collection.delete_one({"_id": LOCK_NAME, "owner": self.owner})
+            super().acquire()
+        except RuntimeError as exc:
+            raise SyncError(str(exc), code="already_running") from exc
 
 
 class RunStore:
@@ -252,7 +210,56 @@ def is_retryable(result: dict[str, Any], returncode: int) -> bool:
     if isinstance(error, dict):
         return bool(error.get("retryable"))
     text = str(error or "").lower()
-    return returncode != 0 and any(token in text for token in ("timeout", "timed out", "connection", "temporar", "503", "502", "429"))
+    if returncode != 0 and any(token in text for token in ("timeout", "timed out", "connection", "temporar", "503", "502", "429")):
+        return True
+    sources = result.get("sources") or {}
+    return any(is_retryable(source, returncode) for source in sources.values() if isinstance(source, dict))
+
+
+def terminate_child(child: subprocess.Popen[Any]) -> None:
+    if child.poll() is not None:
+        return
+    try:
+        os.killpg(child.pid, signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+    try:
+        child.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(child.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        child.wait(timeout=5)
+
+
+def supervise(command: list[str], *, timeout: float, heartbeat: Any, log_prefix: Path) -> subprocess.CompletedProcess[str]:
+    if timeout <= 0:
+        raise ValueError("SYNC_TASK_TIMEOUT_SECONDS 必须大于 0")
+    log_prefix.parent.mkdir(parents=True, exist_ok=True)
+    stdout_path = Path(str(log_prefix) + ".stdout.log")
+    stderr_path = Path(str(log_prefix) + ".stderr.log")
+    deadline = time.monotonic() + timeout
+    with stdout_path.open("wb") as stdout, stderr_path.open("wb") as stderr:
+        child = subprocess.Popen(command, cwd=ROOT, stdout=stdout, stderr=stderr,
+                                 start_new_session=True, env={**os.environ, "PYTHONUNBUFFERED": "1"})
+        try:
+            while True:
+                heartbeat()
+                if child.poll() is not None:
+                    break
+                if time.monotonic() >= deadline:
+                    raise SyncError("同步任务超过执行时限", code="task_timeout", retryable=True)
+                time.sleep(min(1, max(0, deadline - time.monotonic())))
+        finally:
+            terminate_child(child)
+
+    def tail(path: Path) -> str:
+        with path.open("rb") as handle:
+            handle.seek(max(0, path.stat().st_size - 2 * 1024 * 1024))
+            return handle.read().decode("utf-8", errors="replace")
+
+    return subprocess.CompletedProcess(command, child.returncode, tail(stdout_path), tail(stderr_path))
 
 
 class Orchestrator:
@@ -266,36 +273,58 @@ class Orchestrator:
         tasks, start, end = validate_request(mode, requested, start_date, end_date)
         run_id = run_id or uuid4().hex
         lease = Lease(self.db, run_id, int(os.getenv("SYNC_ORCHESTRATOR_LEASE_SECONDS", "120")))
-        self.store.abandon_stale(datetime.fromtimestamp(time.time() - int(os.getenv("SYNC_ORCHESTRATOR_STALE_SECONDS", "300")), timezone.utc))
         lease.acquire()
-        self.store.create(run_id, mode=mode, requested=list(requested or [task.id for task in TASKS]), tasks=tasks, start_date=start, end_date=end, source=source)
+        current_task: Task | None = None
         try:
+            self.store.abandon_stale(datetime.fromtimestamp(time.time() - int(os.getenv("SYNC_ORCHESTRATOR_STALE_SECONDS", "300")), timezone.utc))
+            self.store.create(run_id, mode=mode, requested=list(requested or [task.id for task in TASKS]), tasks=tasks, start_date=start, end_date=end, source=source)
             for task in tasks:
+                current_task = task
                 if lease.lost:
                     raise SyncError("同步租约已丢失", code="lease_lost")
                 result = self._execute_task(run_id, task, mode, start, end)
                 if not result.get("success"):
                     error = result.get("error") or {"code": "task_failed", "message": f"{task.id} 同步失败", "retryable": False}
                     self.store.finish(run_id, "failed", str(error.get("message", error) if isinstance(error, dict) else error))
+                    self._skip_remaining(run_id, tasks, task)
                     return self.store.run(run_id) or {"_id": run_id, "state": "failed"}
             self.store.finish(run_id, "success", "同步完成")
             return self.store.run(run_id) or {"_id": run_id, "state": "success"}
-        except SyncError as exc:
+        except Exception as exc:
+            if current_task:
+                self.store.stage(run_id, current_task.id, state="failed", error=error_payload(exc),
+                                 finished_at=datetime.now(timezone.utc))
+                self._skip_remaining(run_id, tasks, current_task)
             self.store.finish(run_id, "failed", str(exc))
-            return self.store.run(run_id) or {"_id": run_id, "state": "failed", "error": exc.payload()}
+            return self.store.run(run_id) or {"_id": run_id, "state": "failed", "error": error_payload(exc)}
         finally:
             lease.close()
+
+    def _skip_remaining(self, run_id: str, tasks: list[Task], failed: Task) -> None:
+        for task in tasks[tasks.index(failed) + 1:]:
+            self.store.stage(run_id, task.id, state="skipped", message=f"前置任务 {failed.id} 失败")
+
+    def _heartbeat(self, run_id: str) -> None:
+        check_leases(verify=True)
+        self.store.heartbeat(run_id)
 
     def _execute_task(self, run_id: str, task: Task, mode: str, start: str | None, end: str | None) -> dict[str, Any]:
         for attempt in range(1, self.attempts + 1):
             self.store.stage(run_id, task.id, state="running", attempts=attempt, started_at=datetime.now(timezone.utc), finished_at=None, error=None)
             command = task.command(self.python, mode, start, end, run_id)
-            completed = subprocess.run(command, cwd=ROOT, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
+            log_prefix = Path(env("SYNC_TASK_LOG_DIR", str(ROOT / "logs" / "syncctl"))) / f"{run_id}.{task.id}.{attempt}"
+            self.store.stage(run_id, task.id, log_prefix=str(log_prefix))
+            try:
+                completed = supervise(command, timeout=float(env("SYNC_TASK_TIMEOUT_SECONDS", "21600")),
+                                      heartbeat=lambda: self._heartbeat(run_id), log_prefix=log_prefix)
+            except SyncError as exc:
+                completed = subprocess.CompletedProcess(command, 1,
+                    json.dumps({"success": False, "error": exc.payload()}), "")
             try:
                 summary = json_result(completed.stdout, task, mode)
             except SyncError as exc:
                 summary = {"success": False, "taskId": task.id, "mode": mode, "error": exc.payload()}
-            success = completed.returncode == 0 and summary.get("success") is not False
+            success = completed.returncode == 0 and summary.get("success") is True
             if success:
                 summary["success"] = True
                 self.store.stage(run_id, task.id, state="success", attempts=attempt, finished_at=datetime.now(timezone.utc), summary=summary, error=None)
@@ -308,7 +337,9 @@ class Orchestrator:
             self.store.stage(run_id, task.id, state="retrying" if retryable and attempt < self.attempts else "failed", attempts=attempt, finished_at=datetime.now(timezone.utc), summary=summary, error=error)
             if not retryable or attempt == self.attempts:
                 return {"success": False, "error": error, "summary": summary}
-            time.sleep(min(8, 2 ** (attempt - 1)))
+            for _ in range(min(8, 2 ** (attempt - 1))):
+                self._heartbeat(run_id)
+                time.sleep(1)
         raise AssertionError("unreachable")
 
 
@@ -343,6 +374,7 @@ def main() -> int:
         return 0
     try:
         load_dotenv(ROOT / ".env")
+        install_graceful_shutdown()
         client = MongoClient(mongo_uri(), **mongo_client_options())
         try:
             result = Orchestrator(client[env("MONGODB_DATABASE")]).execute(mode=args.mode, requested=args.tasks, start_date=args.start_date, end_date=args.end_date, source=args.source, run_id=args.run_id)

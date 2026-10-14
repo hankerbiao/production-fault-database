@@ -102,6 +102,7 @@ func TestRefreshSalesOrderDeliverySummaryWithMongo(t *testing.T) {
 	if dbName == "" {
 		dbName = "production_fault_test"
 	}
+	dbName = fmt.Sprintf("%s_summary_test_%d", dbName, time.Now().UnixNano())
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	client, err := mongo.Connect(ctx, options.Client().ApplyURI(uri))
@@ -114,19 +115,10 @@ func TestRefreshSalesOrderDeliverySummaryWithMongo(t *testing.T) {
 	}
 
 	db := client.Database(dbName)
+	defer db.Drop(context.Background())
 	sourceName := fmt.Sprintf("sales_order_delivery_source_%d", time.Now().UnixNano())
 	source := db.Collection(sourceName)
 	meta := db.Collection(salesOrderDeliverySummaryMetaCollection)
-	defer source.Drop(context.Background())
-	defer meta.Drop(context.Background())
-	defer func() {
-		var active struct {
-			Collection string `bson:"collection"`
-		}
-		if err := meta.FindOne(context.Background(), bson.M{"_id": "active"}).Decode(&active); err == nil && active.Collection != "" {
-			_ = db.Collection(active.Collection).Drop(context.Background())
-		}
-	}()
 	ctx, cancel = context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
 
@@ -160,5 +152,59 @@ func TestRefreshSalesOrderDeliverySummaryWithMongo(t *testing.T) {
 	}
 	if result.Items[1]["KWMENG"] != float64(5) || result.Items[1]["serialCount"] != int32(2) && result.Items[1]["serialCount"] != int64(2) {
 		t.Fatalf("sales order summary did not deduplicate quantities or retain serial count: %v", result.Items[1])
+	}
+	var before bson.M
+	if err := meta.FindOne(ctx, bson.M{"_id": "active"}).Decode(&before); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.RefreshSalesOrderDeliverySummaryIfStale(ctx); err != nil {
+		t.Fatal(err)
+	}
+	var unchanged bson.M
+	if err := meta.FindOne(ctx, bson.M{"_id": "active"}).Decode(&unchanged); err != nil {
+		t.Fatal(err)
+	}
+	if before["collection"] != unchanged["collection"] {
+		t.Fatal("unchanged source version rebuilt summary")
+	}
+	if _, err := source.InsertOne(ctx, bson.M{"_source_key": "cron-row", "VBELN": "SO-3", "ERDAT": "20260104"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Collection("sync_dataset_versions").InsertOne(ctx, bson.M{"_id": "ZSGV_ZSD46N_SO_KK", "run_id": "cron-1"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.RefreshSalesOrderDeliverySummaryIfStale(ctx); err != nil {
+		t.Fatal(err)
+	}
+	var refreshed bson.M
+	if err := meta.FindOne(ctx, bson.M{"_id": "active"}).Decode(&refreshed); err != nil {
+		t.Fatal(err)
+	}
+	if refreshed["source_version"] != "cron-1" || refreshed["collection"] == before["collection"] {
+		t.Fatalf("cron version did not publish refreshed summary: %v", refreshed)
+	}
+	result, err = s.ViewList(ctx, "ZSGV_ZSD46N_SO_KK", ViewFilters{}, 1, 20, false)
+	if err != nil || result.Total != 3 {
+		t.Fatalf("cron summary total=%d err=%v", result.Total, err)
+	}
+	if _, err := db.Collection("sync_locks").InsertOne(ctx, bson.M{
+		"_id": "dataset:" + sourceName, "expires_at": time.Now().Add(time.Minute),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.RefreshSalesOrderDeliverySummaryIfStale(ctx); err != nil {
+		t.Fatal(err)
+	}
+	s.salesOrderDeliverySummaryStateMu.RLock()
+	available := s.salesOrderDeliverySummaryAvailable
+	s.salesOrderDeliverySummaryStateMu.RUnlock()
+	if available {
+		t.Fatal("active source writer did not disable materialized summary")
+	}
+	if _, err := db.Collection("sync_locks").DeleteOne(ctx, bson.M{"_id": "dataset:" + sourceName}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.RefreshSalesOrderDeliverySummaryIfStale(ctx); err != nil {
+		t.Fatal(err)
 	}
 }

@@ -2,7 +2,11 @@
 
 set -Eeuo pipefail
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+if [[ "${1:-}" == "--remote" ]]; then
+  ROOT_DIR="${2:?remote deployment directory is required}"
+else
+  ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+fi
 DEPLOY_STAGE=""
 
 die() {

@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -16,9 +15,8 @@ import (
 )
 
 type syncManager struct {
-	mu                               sync.RWMutex
-	status                           syncStatus
-	refreshSalesOrderDeliverySummary func() error
+	mu     sync.RWMutex
+	status syncStatus
 }
 
 type syncStatus struct {
@@ -113,49 +111,12 @@ func (m *syncManager) startRun(request syncRunRequest) (syncStatus, error) {
 			} else {
 				status.Message = "同步失败"
 			}
-		} else if syncRequestIncludesTask(request, "sales_order_delivery_records") && m.refreshSalesOrderDeliverySummary != nil {
-			if refreshErr := m.refreshSalesOrderDeliverySummary(); refreshErr != nil {
-				log.Printf("sales order delivery summary refresh failed: %v", refreshErr)
-				status.Message = "同步完成，但销售订单汇总刷新失败"
-				if status.Summary == nil {
-					status.Summary = make(map[string]any)
-				}
-				status.Summary["salesOrderDeliverySummaryRefreshError"] = refreshErr.Error()
-			}
 		}
 		m.mu.Lock()
 		m.status = status
 		m.mu.Unlock()
 	}()
 	return m.status, nil
-}
-
-func syncRequestIncludesTask(request syncRunRequest, taskID string) bool {
-	pending := append([]string(nil), request.TaskIDs...)
-	if len(request.TaskIDs) == 0 {
-		for _, task := range managedSyncTasks {
-			pending = append(pending, task.ID)
-		}
-	}
-	visited := make(map[string]bool)
-	for len(pending) > 0 {
-		selected := pending[0]
-		pending = pending[1:]
-		if visited[selected] {
-			continue
-		}
-		visited[selected] = true
-		for _, task := range managedSyncTasks {
-			if task.ID == selected {
-				if selected == taskID {
-					return true
-				}
-				pending = append(pending, task.Dependencies...)
-				break
-			}
-		}
-	}
-	return false
 }
 
 func runSyncCommand(python, script string, args []string) (map[string]any, error) {

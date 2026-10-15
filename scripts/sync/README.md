@@ -10,7 +10,6 @@
 | `order_bom_postings.py` | BOM 过账 `order_bom_postings_sap` | `python scripts/sync/order_bom_postings.py --mode incremental --apply` |
 | `../maintenance/backfill_order_bom_planned_start.py` | BOM 计划开始时间 | `python scripts/maintenance/backfill_order_bom_planned_start.py --apply` |
 | `serial_bindings.py` | 序列号绑定 `serial_bindings_sap` | `python scripts/sync/serial_bindings.py --mode incremental --apply` |
-| `sales_order_delivery_records.py` | 2026 销售订单交付明细 `sales_order_delivery_records_sap` | 暂停同步，独立入口返回 `task_paused` |
 | `../sources/scs_doa_sync.py` | SCS DOA | `python scripts/sources/scs_doa_sync.py` |
 | `../sources/scs_change_sync.py` | SCS 换上换下 | `python scripts/sources/scs_change_sync.py` |
 
@@ -24,7 +23,14 @@
 .venv/bin/python scripts/sync/syncctl.py tasks
 ```
 
-自 2026-10-15 起暂停销售订单交付明细同步：任务已从注册表移除，全量、增量和单独指定该任务均不会执行；独立脚本也会以非零状态返回 `task_paused`，不访问 HANA 或 MongoDB。原有交付数据继续保留供查询。Go 的任务清单嵌入二进制，已运行的后端需重新构建并重启才能更新同步管理目录。恢复时需重新注册任务并解除脚本的 `SYNC_PAUSED` 保护；独立脚本默认查询 `ERDAT` 2026 全年，可通过 `--start-date` 和 `--end-date` 指定日期范围。
+自 2026-10-15 起停用销售订单交付明细，任务注册、同步脚本、HANA 视图配置、查询 API、页面和物化汇总均已移除。升级时先重新构建并重启 Go 后端，停止旧版本的汇总监听，再清理数据库：
+
+```bash
+.venv/bin/python scripts/maintenance/remove_sales_order_delivery.py --dry-run
+.venv/bin/python scripts/maintenance/remove_sales_order_delivery.py --apply
+```
+
+清理脚本只删除交付明细及其归档、物化汇总、汇总元数据，以及共享水位、运行记录和源版本集合中属于该视图的记录。正式执行持有交付集合资源锁和原同步入口的进程锁；默认仅预览，可重复执行，不访问 HANA。历史编排器运行记录保留。
 
 DOA 判定从详情中的合同/订单号提取 `sales_order`，详情无有效订单号时沿用已有 `sales_order`；去除首尾空白后，以大小写不敏感的 `XNC` 前缀判定，其他值及空值均为 false，不再对订单号补位。同步列表写入、历史详情补偿和历史归属重算使用同一判定函数。
 
@@ -66,9 +72,7 @@ HANA 和 SCS 先把完整源结果落入临时 SQLite，再校验业务键。相
 
 SCS 不按页码或行偏移跳过旧记录；重跑从窗口第一页读取，用业务键去重。分页错误、登录页和异常表结构均视为失败。DOA 详情失败保留旧有效详情，以 `_detail_pending`、`_detail_error` 和 `_detail_attempted_at` 记录补偿状态；每次额外补偿最多 `SCS_DETAIL_RETRY_LIMIT` 条历史待补记录，默认 100。两个 SCS 任务重算历史公司归属，只有值变化才写入。
 
-交付明细在源快照校验通过、写入前发布 `sync_dataset_versions` 的 `ZSGV_ZSD46N_SO_KK` 版本 `<run_id>:writing`，成功提交后发布 `<run_id>`。写入或清理失败时保留写入版本，使部分写入也能触发旧汇总失效；预览和源校验失败不更新版本。后端每 30 秒检查源版本，沿用现有 Go 物化汇总实现刷新；汇总构建前后检查源版本和写入锁，源发生变化则放弃发布。更新后需重启后端以启用此监听。检测到源同步或汇总刷新期间，查询回退到源聚合。
-
-序列号视图没有日期字段，`incremental` 仍读取全表并修复历史精确重复，但只在 `full` 时清理源中已消失记录。工位开始时间、交付创建日期和 SCS 创建日期不能反映所有历史修改，超出回看期的更正需要指定范围的全量对账。SCS 换上换下继续固定 2026 年范围，交付明细当前暂停同步。
+序列号视图没有日期字段，`incremental` 仍读取全表并修复历史精确重复，但只在 `full` 时清理源中已消失记录。工位开始时间和 SCS 创建日期不能反映所有历史修改，超出回看期的更正需要指定范围的全量对账。SCS 换上换下继续固定 2026 年范围。
 
 维修记录默认按 `ZDATE_WX` 维修日期刷新当月及前两个月。例如结束日期为 `2026-10-14` 时，窗口为 `2026-08-01` 至 `2026-10-14`（包含边界），最早不超过 `2026-01-01`。不再读取或推进维修 `ZDATE/ZTIME` 检查点，`--sync-lookback-days` 仅保留命令兼容。已有历史数据继续保留；首次导入全部历史仍需使用 `full`。
 

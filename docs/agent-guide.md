@@ -100,7 +100,7 @@ SCS DOA 支持 `doaCode`、`doaType`、`status`、`customer`、`serviceOrder`、
 
 例如，请求 `scs_change` 会实际按 `scs_doa -> scs_change` 执行。请求 `repair_records` 会先执行 `sales_orders -> station_records -> repair_records`。Agent 应把 API 返回的 `resolved_task_ids` 视为实际执行范围，而不是只复述提交时的 `taskIds`。
 
-销售订单交付明细同步自 2026-10-15 起暂停，已从任务目录移除，独立脚本返回 `task_paused`；现有数据保留供查询。
+销售订单交付明细自 2026-10-15 起停用，页面、查询 API、物化汇总和同步入口已移除，不再提供该数据。
 
 ## 6. 增量与全量的选择
 

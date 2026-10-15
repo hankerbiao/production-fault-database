@@ -31,7 +31,7 @@ ROOT = PROJECT_ROOT
 CHECKPOINT_PREFIX = "hana_views:"
 
 from scripts.sync_runtime import (
-    Snapshot, archive_cleanup, check_leases, publish_version, validate_snapshot_cleanup,
+    Snapshot, archive_cleanup, check_leases, validate_snapshot_cleanup,
 )
 
 
@@ -132,22 +132,6 @@ VIEW_SPECS: dict[str, ViewSpec] = {
         watermark_fields=("ACTUAL_START_TIME",),
         index_fields=("PCODE", "ACTUAL_START_TIME", "AUFNR", "SPEC"),
         start_date_field="ACTUAL_START_TIME",
-        fallback_to_full_row=True,
-    ),
-    "ZSGV_ZSD46N_SO_KK": ViewSpec(
-        view_id="ZSGV_ZSD46N_SO_KK",
-        qualified_name='"_SYS_BIC"."BW_LOCAL.SD/ZSGV_ZSD46N_SO_KK"',
-        columns=fields(
-            "MANDT VBELN POSNR MATNR MAKTX VBELN_L POSNR_L ERNAM ERDAT WADAT CMGST KUNNR BSTNK "
-            "WERKS LGORT VKBUR BEZEI_BGS KUNNR_SP NAME_SP KUNNR_ZU NAME_ZU BZIRK BZTXT VKORG "
-            "NAME1 STRAS TELF1 ORT01 NAME SERNR DATUM DATUM1 FPFHRQ KWMENG LFIMG KWMENG1"
-        ),
-        collection="sales_order_delivery_records_sap",
-        key_fields=("VBELN", "POSNR", "VBELN_L", "POSNR_L", "SERNR", "DATUM"),
-        order_by=("ERDAT", "VBELN", "POSNR", "SERNR"),
-        watermark_fields=("ERDAT",),
-        index_fields=("VBELN", "POSNR", "VBELN_L", "POSNR_L", "SERNR"),
-        start_date_field="ERDAT",
         fallback_to_full_row=True,
     ),
 }
@@ -388,7 +372,6 @@ def configured_spec(view_id: str) -> ViewSpec:
     collection_env = {
         "ZSGV_ZSD124": "BOM_COLLECTION", "Z_V_ZMES_T_001": "STATION_COLLECTION",
         "ZSGV_ZPP_SERNOLIST": "SERIAL_COLLECTION",
-        "ZSGV_ZSD46N_SO_KK": "SALES_ORDER_DELIVERY_COLLECTION",
     }
     return replace(spec, collection=env(collection_env[view_id], spec.collection))
 
@@ -485,9 +468,6 @@ def sync_view(
                         "_id": hashlib.sha256(key.encode()).hexdigest()})
             if not dry_run:
                 check_leases(verify=True)
-                if spec.view_id == "ZSGV_ZSD46N_SO_KK":
-                    # Persist invalidation even if a partial write fails between backend polls.
-                    publish_version(database, spec.view_id, f"{run_id}:writing")
                 ensure_index(collection, "_source_key", unique=spec.view_id != "ZSGV_ZPP_SERNOLIST",
                              name="source_key_lookup" if spec.view_id == "ZSGV_ZPP_SERNOLIST" else "source_key_unique")
                 for field in spec.index_fields:
@@ -563,8 +543,6 @@ def finalize_view_run(spec: ViewSpec, sync_result: Mapping[str, Any]) -> dict[st
             {"_id": f"{run_id}:{spec.view_id}"},
             {"$set": {"status": "success", "finished_at": now, "stats": dict(sync_result)}},
         )
-        if spec.view_id == "ZSGV_ZSD46N_SO_KK":
-            publish_version(database, spec.view_id, run_id)
         return {"deleted_out_of_scope": deleted}
     finally:
         client.close()

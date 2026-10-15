@@ -1,6 +1,6 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useState } from 'react';
 import { AlertTriangle, Boxes, ClipboardList, Search, SlidersHorizontal } from 'lucide-react';
-import { listView, viewDetail, viewOptions, viewStats } from '../api/views';
+import { listView, viewDetail, viewStats } from '../api/views';
 import { usePagedResource } from '../hooks/usePagedResource';
 import { useDetail } from '../hooks/useDetail';
 import { ActiveFilters } from '../components/ActiveFilters';
@@ -16,8 +16,8 @@ import { downloadCsv } from '../utils/export';
 import { formatCell, formatDate, formatDateRange, formatNumber } from '../utils/formatters';
 
 const emptyStats = { total: 0, salesOrders: 0, productionOrders: 0, missingSalesOrder: 0, missingProductionOrder: 0, missingProductionOrderDistinct: 0, is5000Count: 0, dataStartDate: '', dataEndDate: '', latestSyncedAt: '' };
-const initialFilters = { keyword: '', productionOrder: '', salesOrder: '', productModel: '', from: '', to: '', dateFrom: '', dateTo: '', stationCode: '', sn: '', base: '', orderType: '', materialCode: '', headOrder: '', itemOrder: '', deliveryOrder: '', customerPurchaseOrder: '', customerNumber: '', salesOrganization: '', salesOffice: '', bztxt: '', doaCode: '', status: '', judgment: '', customer: '', serviceOrder: '', changeType: '', partNumber: '', partSn: '', operator: '', needReturn: '', revoked: '', company5000: '' };
-const filterLabels = { keyword: '关键字', productionOrder: '生产订单', salesOrder: '销售订单', productModel: '机型', from: '开始时间', to: '结束时间', dateFrom: '开始日期', dateTo: '结束日期', stationCode: '工位', sn: '序列号', base: '工厂/库存地点', orderType: '订单类型', materialCode: '物料号', deliveryOrder: '交货单', customerPurchaseOrder: '客户采购订单', customerNumber: '客户编号', salesOrganization: '销售组织', salesOffice: '销售办事处', bztxt: '销售地区名称', headOrder: '机头订单', itemOrder: '小刀订单', doaCode: 'DOA单号', status: '处理状态', judgment: '判定结果', customer: '客户', serviceOrder: '服务单', changeType: '操作类型', partNumber: '备件PN', partSn: '备件SN', operator: '操作人', needReturn: '需归还', revoked: '已撤销', company5000: '是否为5000公司' };
+const initialFilters = { keyword: '', productionOrder: '', salesOrder: '', productModel: '', from: '', to: '', dateFrom: '', dateTo: '', stationCode: '', sn: '', base: '', orderType: '', materialCode: '', headOrder: '', itemOrder: '', doaCode: '', status: '', judgment: '', customer: '', serviceOrder: '', changeType: '', partNumber: '', partSn: '', operator: '', needReturn: '', revoked: '', company5000: '' };
+const filterLabels = { keyword: '关键字', productionOrder: '生产订单', salesOrder: '销售订单', productModel: '机型', from: '开始时间', to: '结束时间', dateFrom: '开始日期', dateTo: '结束日期', stationCode: '工位', sn: '序列号', base: '工厂/库存地点', orderType: '订单类型', materialCode: '物料号', headOrder: '机头订单', itemOrder: '小刀订单', doaCode: 'DOA单号', status: '处理状态', judgment: '判定结果', customer: '客户', serviceOrder: '服务单', changeType: '操作类型', partNumber: '备件PN', partSn: '备件SN', operator: '操作人', needReturn: '需归还', revoked: '已撤销', company5000: '是否为5000公司' };
 const hasActiveFilters = filters => Object.values(filters).some(value => value !== '' && value !== false && value !== undefined && value !== null);
 
 function AdvancedFilterField({ field, value, options, onChange }) {
@@ -28,7 +28,7 @@ function AdvancedFilterField({ field, value, options, onChange }) {
       <span>{field.label}</span>
     </label>;
   }
-  if (field.type === 'select' || field.type === 'remote-select') {
+  if (field.type === 'select') {
     return <select aria-label={field.label} value={value || ''} onChange={event => onChange(event.target.value)}>
       <option value="">{field.placeholder}</option>
       {options.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
@@ -42,25 +42,6 @@ export function ViewDashboardPage({ config, modelOptions = [], setConnected, set
   const defaultFilters = { ...initialFilters, ...config.defaultFilters };
   const isStationPreview = filters => config.id === 'Z_V_ZMES_T_001' && !hasActiveFilters(filters);
   const resource = usePagedResource({ loadPage: useCallback((filters, page, size) => listView(config.id, filters, page, size, isStationPreview(filters)), [config.id]), loadStats: useCallback(filters => isStationPreview(filters) ? Promise.resolve(emptyStats) : viewStats(config.id, filters), [config.id]), initialFilters: defaultFilters, initialStats: emptyStats, refreshToken, autoLoad: config.autoLoad !== false, onConnectionChange: setConnected, onRefreshing: setRefreshing });
-  const [dynamicOptions, setDynamicOptions] = useState({});
-  useEffect(() => {
-    let active = true;
-    const fields = (config.advancedFields || []).filter(field => field.type === 'remote-select' && field.sourceField);
-    if (!fields.length) {
-      setDynamicOptions({});
-      return () => { active = false; };
-    }
-    Promise.all(fields.map(async field => {
-      try {
-        const result = await viewOptions(config.id, field.sourceField);
-        const items = Array.isArray(result?.items) ? result.items : [];
-        return [field.key, items.map(value => ({ value, label: value }))];
-      } catch {
-        return [field.key, []];
-      }
-    })).then(entries => { if (active) setDynamicOptions(Object.fromEntries(entries)); });
-    return () => { active = false; };
-  }, [config.id, config.advancedFields]);
   const detail = useDetail(id => viewDetail(config.id, id), '无法读取该记录的详细字段');
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [exporting, setExporting] = useState(false);
@@ -84,7 +65,6 @@ export function ViewDashboardPage({ config, modelOptions = [], setConnected, set
     try {
       await downloadCsv({
         endpoint: `/api/views/${config.id}`,
-        allEndpoint: config.exportAllEndpoint,
         filters: extraFilters,
         filename,
         columns: columns.map(column => ({ key: column.key, label: column.label })),
@@ -120,7 +100,7 @@ export function ViewDashboardPage({ config, modelOptions = [], setConnected, set
               key={field.key}
               field={field}
               value={resource.filters[field.key]}
-              options={field.options || dynamicOptions[field.key] || []}
+              options={field.options || []}
               onChange={value => update(field.key, value)}
             />)}
           </div>

@@ -403,9 +403,10 @@ MongoDB 的 `sync_locks` 租约锁跨主机协调；租约时长由 `SYNC_MONGO_
 ```
 
 默认仅预览预计变更数，`--apply` 按集合资源锁分批更新，重复执行只更新变化值。
-销售订单交付明细同步自 2026-10-15 起暂停：已从统一任务清单移除，独立脚本返回
-`task_paused`，现有数据保留供查询。SCS DOA 无前置数据同步依赖，换上换下仍依赖 DOA。
-已运行的 Go 后端需重新构建并重启，以更新嵌入的任务目录。
+销售订单交付明细自 2026-10-15 起停用，页面、查询 API、物化汇总和同步入口已移除。
+SCS DOA 无前置数据同步依赖，换上换下仍依赖 DOA。升级时先重新构建并重启 Go 后端，
+再运行 `scripts/maintenance/remove_sales_order_delivery.py --apply` 清理明细、历史汇总及其同步元数据；
+不带 `--apply` 时仅预览。此脚本可重复执行，不访问 SAP HANA。
 
 在 `.env` 中配置 `SCS_USERNAME`、`SCS_PASSWORD`，以及已有的 MongoDB 配置。首次全量同步：
 

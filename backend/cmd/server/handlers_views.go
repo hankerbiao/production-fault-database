@@ -80,12 +80,3 @@ func (s *server) viewStats(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, result)
 }
-
-func (s *server) viewOptions(w http.ResponseWriter, r *http.Request) {
-	result, err := s.store.ViewOptions(r.Context(), r.PathValue("viewID"), strings.TrimSpace(r.URL.Query().Get("field")))
-	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
-		return
-	}
-	writeJSON(w, http.StatusOK, result)
-}

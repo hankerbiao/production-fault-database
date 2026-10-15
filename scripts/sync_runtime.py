@@ -196,15 +196,6 @@ def print_failure(exc: Exception) -> int:
     return 1
 
 
-def publish_version(db: Any, dataset: str, run_id: str) -> None:
-    check_leases(verify=True)
-    db["sync_dataset_versions"].update_one(
-        {"_id": dataset},
-        {"$set": {"run_id": run_id, "updated_at": datetime.now(timezone.utc)}},
-        upsert=True,
-    )
-
-
 class Snapshot:
     """Validate keyed source rows on disk before changing the target dataset."""
     def __init__(self) -> None:

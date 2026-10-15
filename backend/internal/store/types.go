@@ -10,26 +10,20 @@ import (
 )
 
 type Store struct {
-	client                             *mongo.Client
-	db                                 *mongo.Database
-	repairs                            *mongo.Collection
-	orders                             *mongo.Collection
-	views                              map[string]*mongo.Collection
-	salesOrderDeliverySummaryMeta      *mongo.Collection
-	salesOrderDeliverySummaryRefreshMu sync.Mutex
-	salesOrderDeliverySummaryStateMu   sync.RWMutex
-	salesOrderDeliverySummaryReady     chan struct{}
-	salesOrderDeliverySummaryReadyOnce sync.Once
-	salesOrderDeliverySummaryAvailable bool
-	bomCacheMu                         sync.RWMutex
-	bomCache                           map[string]bomStreamCacheEntry
-	bomWarmDone                        chan struct{}
-	stationCacheMu                     sync.RWMutex
-	stationCache                       map[string]bomStreamCacheEntry
-	stationWarmDone                    chan struct{}
-	companyOrderCacheMu                sync.Mutex
-	companyOrderCacheAt                time.Time
-	companyOrderCache                  []string
+	client              *mongo.Client
+	db                  *mongo.Database
+	repairs             *mongo.Collection
+	orders              *mongo.Collection
+	views               map[string]*mongo.Collection
+	bomCacheMu          sync.RWMutex
+	bomCache            map[string]bomStreamCacheEntry
+	bomWarmDone         chan struct{}
+	stationCacheMu      sync.RWMutex
+	stationCache        map[string]bomStreamCacheEntry
+	stationWarmDone     chan struct{}
+	companyOrderCacheMu sync.Mutex
+	companyOrderCacheAt time.Time
+	companyOrderCache   []string
 }
 
 // SyncRun is intentionally flexible because the Python orchestration runtime
@@ -150,9 +144,6 @@ type OrderListResult struct {
 const MaxBulkQueryRows = 10000
 const MaxOrderQueryRows = MaxBulkQueryRows
 const MaxViewQueryRows = MaxBulkQueryRows
-const MaxSalesOrderDeliverySummaryRows = 100000
-const salesOrderDeliverySummaryCollection = "sales_order_delivery_orders_summary_sap"
-const salesOrderDeliverySummaryMetaCollection = "sales_order_delivery_summary_meta"
 
 var bomStreamFields = []string{"id", "AUFNR_1", "AUART", "VBELN_EX", "GSTRS", "GSTRS_DATE", "MENGE_A", "MATNR", "LGORT", "BUDAT_MKPF", "MAKTX"}
 var stationStreamFields = []string{"id", "PCODE", "AUFNR", "KDAUF", "GSTRS", "SPEC", "SPEC_DESC", "OPERATION", "ACTUAL_START_TIME", "ACTUAL_END_TIME", "MAKTX_TH", "LGORT", "LINE_CODE"}
@@ -179,18 +170,15 @@ type OrderCustomerIDsResult struct {
 }
 
 type ViewFilters struct {
-	Keyword, From, To                                                                    string
-	DateFrom, DateTo, StationCode, SN, ProductionOrder, SalesOrder, Base, ProductModel   string
-	TimeField                                                                            string
-	HeadOrder, ItemOrder, HeadSN, ItemSN, MaterialCode, OrderType                        string
-	MissingSalesOrder                                                                    bool
-	DOACode, DOAType, Status, Customer, ServiceOrder                                     string
-	ChangeType, PartNumber, PartSN, Operator, NeedReturn, Revoked                        string
-	Company5000                                                                          string
-	Judgment, EnrichmentStatus, AcceptedDateFrom, AcceptedDateTo                         string
-	DeliveryOrder, CustomerPurchaseOrder, CustomerNumber, SalesOrganization, SalesOffice string
-	LimitedCompany                                                                       string
-	SalesRegionName                                                                      string
+	Keyword, From, To                                                                  string
+	DateFrom, DateTo, StationCode, SN, ProductionOrder, SalesOrder, Base, ProductModel string
+	TimeField                                                                          string
+	HeadOrder, ItemOrder, HeadSN, ItemSN, MaterialCode, OrderType                      string
+	MissingSalesOrder                                                                  bool
+	DOACode, DOAType, Status, Customer, ServiceOrder                                   string
+	ChangeType, PartNumber, PartSN, Operator, NeedReturn, Revoked                      string
+	Company5000                                                                        string
+	Judgment, EnrichmentStatus, AcceptedDateFrom, AcceptedDateTo                       string
 }
 type ViewListResult struct {
 	Items    []bson.M `json:"items"`
@@ -217,9 +205,6 @@ type ViewStatsResult struct {
 	LatestCreatedAt                string   `json:"latestCreatedAt,omitempty"`
 	Is5000Count                    int64    `json:"is5000Count,omitempty"`
 }
-type ViewOptionsResult struct {
-	Items []string `json:"items"`
-}
 type ViewDetailResult struct {
 	Item   bson.M  `json:"item"`
 	Fields []Field `json:"fields"`
@@ -245,7 +230,6 @@ var documentedViews = map[string]struct {
 	"ZSGV_ZSD124":        {"order_bom_postings_sap", "GSTRS_DATE", []string{"MBLNR", "MJAHR", "ZEILE", "MATNR", "AUFNR_1", "VBELN_EX", "KUNNR", "NAME1"}, []string{"GSTRS_DATE", "GSTRS", "MBLNR", "MJAHR", "ZEILE"}},
 	"ZSGV_ZPP_SERNOLIST": {"serial_bindings_sap", "", []string{"ZCODE_HEAD", "ZCODE_ITEM", "AUFNR_HEAD", "AUFNR_ITEM", "PRODH"}, []string{"ZCODE_HEAD", "ZCODE_ITEM", "AUFNR_HEAD", "AUFNR_ITEM"}},
 	"Z_V_ZMES_T_001":     {"station_records_sap", "GSTRS", []string{"HISTROYID", "PCODE", "OCODE", "AUFNR", "SPEC", "OPERATION", "GSTRS", "ACTUAL_START_TIME", "ACTUAL_END_TIME"}, []string{"ACTUAL_START_TIME", "HISTROYID", "SPEC_TIME"}},
-	"ZSGV_ZSD46N_SO_KK":  {"sales_order_delivery_records_sap", "ERDAT", []string{"VBELN", "POSNR", "VBELN_L", "POSNR_L", "MATNR", "MAKTX", "SERNR", "KUNNR", "BSTNK"}, []string{"ERDAT", "VBELN", "POSNR", "SERNR"}},
 	"SCS_DOA":            {"scs_doa_records", "declare_time", []string{"doa_code", "doa_type", "declare_reason", "service_uid", "status", "doa_judge", "customer_uid", "sugon_sn", "spare_part_sn", "product_name", "review_name", "detail_problem", "problem_conclusion", "declare_uid", "business_unit", "acceptance_uid"}, []string{"declare_time", "doa_code"}},
 	"SCS_CHANGE":         {"scs_change_records", "create_time", []string{"so_code", "customer_name", "device_sn", "change_type", "part_number", "part_sn", "part_name", "original_code", "remark", "operator", "is_5000_company"}, []string{"create_time", "so_code"}},
 }

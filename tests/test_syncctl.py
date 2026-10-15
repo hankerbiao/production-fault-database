@@ -36,7 +36,7 @@ def test_planned_start_task_resolves_bom_dependency_and_reports_run_id():
     assert command[-3:] == ["--apply", "--run-id", "run-1"]
 
 
-def test_paused_delivery_task_is_excluded_from_all_runs_and_explicit_requests():
+def test_retired_delivery_task_is_excluded_from_all_runs_and_explicit_requests():
     assert "sales_order_delivery_records" not in [task.id for task in resolve_tasks(None)]
     with pytest.raises(SyncError, match="未知同步任务"):
         resolve_tasks(["sales_order_delivery_records"])

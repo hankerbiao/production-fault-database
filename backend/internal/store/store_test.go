@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"testing"
@@ -204,162 +205,17 @@ func TestViewFilterIncludesEndDateForStationDatetimes(t *testing.T) {
 	}
 }
 
-func TestSalesOrderDeliveryFilterMapsDateAndBusinessFields(t *testing.T) {
-	filters := ViewFilters{
-		From: "2026-02-01", To: "2026-02-28", SalesOrder: "SO-1", DeliveryOrder: "DL-1",
-		CustomerPurchaseOrder: "PO-1", CustomerNumber: "C-1", SalesOrganization: "1000",
-		SalesOffice: "2000", MaterialCode: "MAT-1", SN: "SN-1",
-		SalesRegionName: "服务器产品事业部",
-	}
-	filter := viewFilter("ZSGV_ZSD46N_SO_KK", filters, nil, "ERDAT")
-	conditions := filter["$and"].(primitive.A)
-	want := map[string]string{
-		"VBELN": "SO-1", "VBELN_L": "DL-1", "BSTNK": "PO-1", "KUNNR": "C-1",
-		"VKORG": "1000", "VKBUR": "2000", "MATNR": "MAT-1", "SERNR": "SN-1", "BZTXT": "服务器产品事业部",
-	}
-	got := map[string]string{}
-	fromDate, toDate := false, false
-	for _, raw := range conditions {
-		condition := raw.(bson.M)
-		if date, ok := condition["ERDAT"].(bson.M); ok {
-			if date["$gte"] == "20260201" {
-				fromDate = true
-			}
-			if date["$lte"] == "20260228" {
-				toDate = true
-			}
-			if len(date) != 1 {
-				t.Fatalf("ERDAT range=%v", date)
-			}
-			continue
-		}
-		for field := range want {
-			if expression, ok := condition[field].(bson.M); ok {
-				got[field] = strings.Trim(expression["$regex"].(string), "^$")
-				if expression["$options"] != "i" {
-					t.Fatalf("%s options=%v", field, expression)
-				}
-			}
-		}
-	}
-	if !fromDate || !toDate {
-		t.Fatalf("ERDAT boundaries missing: from=%t to=%t", fromDate, toDate)
-	}
-	if len(got) != len(want) {
-		t.Fatalf("mapped filter fields=%v", got)
-	}
-	for field, value := range want {
-		if got[field] != value {
-			t.Errorf("%s=%q, want %q", field, got[field], value)
-		}
-	}
-}
-
-func TestSalesOrderDeliveryLimitedCompanyFilterUsesXNCOrderPrefix(t *testing.T) {
-	for _, test := range []struct {
-		name     string
-		value    string
-		operator string
-	}{
-		{name: "yes", value: "yes", operator: "$regex"},
-		{name: "no", value: "no", operator: "$not"},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			filter := viewFilter("ZSGV_ZSD46N_SO_KK", ViewFilters{LimitedCompany: test.value}, nil, "ERDAT")
-			conditions := filter["$and"].(primitive.A)
-			found := false
-			for _, raw := range conditions {
-				condition := raw.(bson.M)
-				expression, ok := condition["VBELN"].(bson.M)
-				if !ok {
-					continue
-				}
-				if _, ok := expression[test.operator]; !ok {
-					continue
-				}
-				found = true
-				if test.operator == "$regex" {
-					if expression["$regex"] != "^XNC" || expression["$options"] != "i" {
-						t.Fatalf("limited company condition=%v", expression)
-					}
-				} else {
-					negative := expression["$not"].(bson.M)
-					if negative["$regex"] != "^XNC" || negative["$options"] != "i" {
-						t.Fatalf("non-limited company condition=%v", negative)
-					}
-				}
-			}
-			if !found {
-				t.Fatalf("limited company condition missing: %v", filter)
-			}
-		})
-	}
-}
-
-func TestSalesOrderDeliveryStatsIncludeDistinctSalesOrders(t *testing.T) {
-	pipeline := viewStatsPipeline("ZSGV_ZSD46N_SO_KK", bson.M{"ERDAT": bson.M{"$gte": "20260101"}}, "ERDAT")
-	group := pipeline[1].Map()["$group"].(bson.M)
-	project := pipeline[2].Map()["$project"].(bson.M)
-	if _, ok := group["salesOrderValues"]; !ok {
-		t.Fatalf("sales order group missing: %#v", group)
-	}
-	if _, ok := project["salesOrders"]; !ok {
-		t.Fatalf("sales order projection missing: %#v", project)
-	}
-}
-
-func TestSalesOrderDeliverySummaryGroupsBeforePagingAndDeduplicatesQuantities(t *testing.T) {
-	pipeline := salesOrderDeliverySummaryPipeline(bson.M{"ERDAT": bson.M{"$gte": "20260101"}})
-	if len(pipeline) != 4 {
-		t.Fatalf("summary pipeline has %d stages, want 4", len(pipeline))
-	}
-	if _, ok := pipeline[0].Map()["$match"]; !ok {
-		t.Fatalf("summary pipeline does not apply filters before grouping: %v", pipeline[0])
-	}
-	deliveryGroup := pipeline[1].Map()["$group"].(bson.M)
-	deliveryKey := deliveryGroup["_id"].(bson.M)
-	for _, key := range []string{"order", "item", "delivery", "deliveryItem"} {
-		if _, ok := deliveryKey[key]; !ok {
-			t.Errorf("first grouping key missing %q: %v", key, deliveryKey)
-		}
-	}
-	orderGroup := pipeline[2].Map()["$group"].(bson.M)
-	if orderGroup["_id"] != "$_id.order" {
-		t.Fatalf("second grouping key=%v, want sales order", orderGroup["_id"])
-	}
-	for _, field := range []string{"orderLines", "deliveryLines"} {
-		if _, ok := orderGroup[field]; !ok {
-			t.Errorf("sales-order group missing %q", field)
-		}
-	}
-	project := pipeline[3].Map()["$project"].(bson.M)
-	for _, field := range []string{"orderItemCount", "deliveryCount", "deliveryLineCount", "materialCount", "serialCount", "KWMENG", "LFIMG"} {
-		if _, ok := project[field]; !ok {
-			t.Errorf("summary projection missing %q", field)
-		}
-	}
-	if _, ok := project["KWMENG"].(bson.M)["$reduce"]; !ok {
-		t.Fatalf("order quantity is not calculated from distinct order items: %v", project["KWMENG"])
-	}
-	if _, ok := project["LFIMG"].(bson.M)["$reduce"]; !ok {
-		t.Fatalf("delivery quantity is not calculated from distinct delivery items: %v", project["LFIMG"])
-	}
-	orderKey := deliveryKey["order"].(bson.M)["$cond"].(bson.A)
-	if _, ok := orderKey[1].(bson.M)["$concat"]; !ok {
-		t.Fatalf("missing sales orders are not kept separate by source key: %v", orderKey)
-	}
-}
-
-func TestSalesOrderDeliveryPrivateFieldsAreRemovedBeforeDetails(t *testing.T) {
-	doc := bson.M{"VBELN": "SO-1", "STRAS": "private", "TELF1": "private", "ORT01": "private"}
-	hideSalesOrderDeliveryPrivateFields("ZSGV_ZSD46N_SO_KK", doc)
-	if doc["STRAS"] != nil || doc["TELF1"] != nil || doc["ORT01"] != nil {
-		t.Fatalf("private values remain: %v", doc)
-	}
-	fields := viewDetailFields("ZSGV_ZSD46N_SO_KK", doc)
-	for _, field := range fields {
-		if field.Key == "STRAS" || field.Key == "TELF1" || field.Key == "ORT01" {
-			t.Errorf("private detail field returned: %s", field.Key)
+func TestRetiredDeliveryViewRejectsAllQueries(t *testing.T) {
+	s := &Store{}
+	ctx := context.Background()
+	const viewID = "ZSGV_ZSD46N_SO_KK"
+	_, listErr := s.ViewList(ctx, viewID, ViewFilters{}, 1, 20, false)
+	_, allErr := s.ViewListAll(ctx, viewID, ViewFilters{})
+	_, detailErr := s.ViewDetail(ctx, viewID, "removed")
+	_, statsErr := s.ViewStats(ctx, viewID, ViewFilters{})
+	for _, err := range []error{listErr, allErr, detailErr, statsErr} {
+		if err == nil || !strings.Contains(err.Error(), "unknown view") {
+			t.Fatalf("retired view error=%v", err)
 		}
 	}
 }

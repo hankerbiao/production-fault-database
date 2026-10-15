@@ -58,8 +58,6 @@ class Task:
                 args.extend(["--start-date", start_date or ""])
             if end_date:
                 args.extend(["--end-date", end_date])
-        elif self.id == "sales_order_delivery_records":
-            args.extend(["--mode", mode, "--apply"])
         elif self.id == "order_bom_planned_start":
             args.append("--apply")
             if run_id:

@@ -58,23 +58,6 @@ var bomPostingFieldLabels = map[string]string{
 	"MENGE": "数量", "USNAM_MKPF": "过账用户", "VSNMR_V": "版本号", "ZNAM": "名称",
 }
 
-var salesOrderDeliveryFieldOrder = []string{
-	"MANDT", "VBELN", "POSNR", "MATNR", "MAKTX", "VBELN_L", "POSNR_L", "ERNAM", "ERDAT", "WADAT",
-	"CMGST", "KUNNR", "BSTNK", "WERKS", "LGORT", "VKBUR", "BEZEI_BGS", "KUNNR_SP", "NAME_SP",
-	"KUNNR_ZU", "NAME_ZU", "BZIRK", "BZTXT", "VKORG", "NAME1", "NAME", "SERNR", "DATUM", "DATUM1",
-	"FPFHRQ", "KWMENG", "LFIMG", "KWMENG1",
-}
-
-var salesOrderDeliveryFieldLabels = map[string]string{
-	"MANDT": "集团", "VBELN": "销售订单", "POSNR": "销售订单行项目", "MATNR": "物料号", "MAKTX": "物料描述",
-	"VBELN_L": "交货单", "POSNR_L": "交货单行项目", "ERNAM": "创建人", "ERDAT": "创建日期", "WADAT": "交货日期",
-	"CMGST": "信用状态", "KUNNR": "客户编号", "BSTNK": "客户采购订单", "WERKS": "工厂", "LGORT": "库存地点",
-	"VKBUR": "销售办事处", "BEZEI_BGS": "销售办事处名称", "KUNNR_SP": "送达方编号", "NAME_SP": "送达方名称",
-	"KUNNR_ZU": "售达方编号", "NAME_ZU": "售达方名称", "BZIRK": "销售地区", "BZTXT": "销售地区名称",
-	"VKORG": "销售组织", "NAME1": "客户名称", "NAME": "序列号描述", "SERNR": "序列号", "DATUM": "业务日期",
-	"DATUM1": "业务日期1", "FPFHRQ": "需求日期", "KWMENG": "订单数量", "LFIMG": "交货数量", "KWMENG1": "数量",
-}
-
 var viewMetadataFieldLabels = map[string]string{
 	"_source_key":   "源记录键",
 	"_source_view":  "源视图",
@@ -117,11 +100,6 @@ func viewDetailFields(viewID string, doc bson.M) []Field {
 		for _, key := range keys {
 			seen[key] = true
 		}
-	} else if viewID == "ZSGV_ZSD46N_SO_KK" {
-		keys = append(keys, salesOrderDeliveryFieldOrder...)
-		for _, key := range keys {
-			seen[key] = true
-		}
 	}
 	if viewID == "SCS_DOA" {
 		for _, key := range []string{"doa_code", "doa_type", "declare_reason", "service_uid", "status", "doa_judge", "customer_uid", "sugon_sn", "spare_part_sn", "product_name", "review_name", "shipment_date", "problem_batch_number", "engineer_uid", "detail_problem", "problem_conclusion", "declare_uid", "declare_time", "review_time", "business_unit", "review_uid", "acceptance_time", "acceptance_uid", "sales_order", "is_5000_company", "_source"} {
@@ -161,10 +139,6 @@ func viewDetailFields(viewID string, doc bson.M) []Field {
 				}
 			} else if viewID == "ZSGV_ZSD124" {
 				if translated, ok := bomPostingFieldLabels[key]; ok {
-					label = translated
-				}
-			} else if viewID == "ZSGV_ZSD46N_SO_KK" {
-				if translated, ok := salesOrderDeliveryFieldLabels[key]; ok {
 					label = translated
 				}
 			} else if viewID == "SCS_DOA" {

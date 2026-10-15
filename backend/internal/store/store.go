@@ -57,9 +57,7 @@ func New(ctx context.Context, uri, database, repairCollection, orderCollection s
 	}
 	result := &Store{
 		client: client, db: db, repairs: db.Collection(repairCollection), orders: db.Collection(orderCollection), views: views,
-		salesOrderDeliverySummaryMeta:  db.Collection(salesOrderDeliverySummaryMetaCollection),
-		salesOrderDeliverySummaryReady: make(chan struct{}),
-		bomCache:                       make(map[string]bomStreamCacheEntry), bomWarmDone: make(chan struct{}),
+		bomCache: make(map[string]bomStreamCacheEntry), bomWarmDone: make(chan struct{}),
 		stationCache: make(map[string]bomStreamCacheEntry), stationWarmDone: make(chan struct{}),
 	}
 	// Warm the broad LRR raw snapshot after startup so the first dashboard read
@@ -97,13 +95,6 @@ func ensureCoreIndexes(ctx context.Context, db *mongo.Database, repairCollection
 	})
 	create("scs_change_records", "scs_change", []mongo.IndexModel{
 		{Keys: bson.D{{Key: "is_5000_company", Value: 1}, {Key: "create_time", Value: -1}}, Options: options.Index().SetName("scs_change_company_time")},
-	})
-	create("sales_order_delivery_records_sap", "sales_order_delivery", []mongo.IndexModel{
-		{Keys: bson.D{{Key: "VBELN", Value: 1}, {Key: "POSNR", Value: 1}}},
-		{Keys: bson.D{{Key: "VBELN_L", Value: 1}, {Key: "POSNR_L", Value: 1}}},
-		{Keys: bson.D{{Key: "SERNR", Value: 1}}},
-		{Keys: bson.D{{Key: "MATNR", Value: 1}, {Key: "ERDAT", Value: -1}}},
-		{Keys: bson.D{{Key: "KUNNR", Value: 1}, {Key: "ERDAT", Value: -1}}},
 	})
 	return errors.Join(errs...)
 }
@@ -264,7 +255,7 @@ func viewFilter(viewID string, f ViewFilters, searchFields []string, dateField s
 			}
 			from, to = "", ""
 			f.ProductModel = ""
-		} else if dateField == "BUDAT_MKPF" || dateField == "ERDAT" {
+		} else if dateField == "BUDAT_MKPF" {
 			from, to = strings.ReplaceAll(from, "-", ""), strings.ReplaceAll(to, "-", "")
 		} else if dateField == "GSTRS" || dateField == "GSTRS_DATE" {
 			if from != "" || to != "" {
@@ -343,26 +334,6 @@ func viewFilter(viewID string, f ViewFilters, searchFields []string, dateField s
 		addExactCompat("MATNR", f.ProductModel, false)
 		if f.MissingSalesOrder {
 			conditions = append(conditions, bson.M{"$expr": emptyViewField("VBELN_EX")})
-		}
-	case "ZSGV_ZSD46N_SO_KK":
-		addExactCompat("VBELN", f.SalesOrder, false)
-		addExactCompat("VBELN_L", f.DeliveryOrder, false)
-		addExactCompat("BSTNK", f.CustomerPurchaseOrder, false)
-		addExactCompat("KUNNR", f.CustomerNumber, false)
-		addExactCompat("VKORG", f.SalesOrganization, false)
-		addExactCompat("VKBUR", f.SalesOffice, false)
-		addExactCompat("SERNR", f.SN, false)
-		addExactCompat("WERKS", f.Base, false)
-		addExactCompat("BZTXT", f.SalesRegionName, false)
-		company5000 := f.Company5000
-		if company5000 == "" {
-			company5000 = f.LimitedCompany
-		}
-		switch strings.ToLower(strings.TrimSpace(company5000)) {
-		case "yes", "true", "1", "是":
-			conditions = append(conditions, bson.M{"VBELN": bson.M{"$regex": "^XNC", "$options": "i"}})
-		case "no", "false", "0", "否":
-			conditions = append(conditions, bson.M{"VBELN": bson.M{"$not": bson.M{"$regex": "^XNC", "$options": "i"}}})
 		}
 	case "ZSGV_ZPP_SERNOLIST":
 		if f.ProductionOrder != "" {

@@ -1,55 +1,17 @@
 from types import SimpleNamespace
 
-import pytest
 from pymongo.errors import OperationFailure
 
 from scripts.sources.hana import hana_view_sync as sync
-from scripts.sync import sales_order_delivery_records as delivery_sync
-
-
-def test_sales_order_delivery_sync_date_parser_accepts_iso_and_compact_dates():
-    assert delivery_sync.parse_date("2025-12-01") == "20251201"
-    assert delivery_sync.parse_date("20251231") == "20251231"
-
-
-def test_sales_order_delivery_sync_date_parser_rejects_invalid_dates():
-    import pytest
-
-    with pytest.raises(Exception, match="无效日期"):
-        delivery_sync.parse_date("2025-02-30")
-
-
-@pytest.mark.parametrize("arguments", [
-    [], ["--apply"], ["--dry-run"], ["--mode", "full", "--apply"],
-])
-def test_paused_delivery_entry_does_not_read_or_write_sources(monkeypatch, capsys, arguments):
-    import json
-
-    def forbidden(*_args, **_kwargs):
-        raise AssertionError("Paused delivery sync must not access MongoDB or HANA")
-
-    monkeypatch.setattr("sys.argv", ["sales_order_delivery_records.py", *arguments])
-    monkeypatch.setattr(delivery_sync, "sync_view", forbidden)
-    monkeypatch.setattr(delivery_sync, "MongoClient", forbidden)
-    assert delivery_sync.main() == 1
-    result = json.loads(capsys.readouterr().out)
-    assert result["success"] is False
-    assert result["error"]["code"] == "task_paused"
 
 
 def test_documented_view_specs_are_registered():
-    assert set(sync.VIEW_SPECS) == {"ZSGV_ZSD124", "ZSGV_ZPP_SERNOLIST", "Z_V_ZMES_T_001", "ZSGV_ZSD46N_SO_KK"}
+    assert set(sync.VIEW_SPECS) == {"ZSGV_ZSD124", "ZSGV_ZPP_SERNOLIST", "Z_V_ZMES_T_001"}
     assert sync.VIEW_SPECS["ZSGV_ZSD124"].collection == "order_bom_postings_sap"
     assert sync.VIEW_SPECS["ZSGV_ZPP_SERNOLIST"].watermark_fields == ()
     assert sync.VIEW_SPECS["Z_V_ZMES_T_001"].start_date_field == "ACTUAL_START_TIME"
     station_columns = sync.VIEW_SPECS["Z_V_ZMES_T_001"].columns
     assert station_columns[-4:] == ("HADE7", "HADE8", "STATU", "MESS")
-    delivery = sync.VIEW_SPECS["ZSGV_ZSD46N_SO_KK"]
-    assert delivery.qualified_name == '"_SYS_BIC"."BW_LOCAL.SD/ZSGV_ZSD46N_SO_KK"'
-    assert delivery.collection == "sales_order_delivery_records_sap"
-    assert len(delivery.columns) == 36
-    assert delivery.key_fields == ("VBELN", "POSNR", "VBELN_L", "POSNR_L", "SERNR", "DATUM")
-    assert delivery.fallback_to_full_row
 
 
 def test_queries_use_documented_watermarks():
@@ -63,35 +25,19 @@ def test_queries_use_documented_watermarks():
     assert '"ACTUAL_START_TIME" >= ?' in sql
     assert params == ["2026-01-01 00:00:00"]
 
-    spec = sync.VIEW_SPECS["ZSGV_ZSD46N_SO_KK"]
+    spec = sync.VIEW_SPECS["ZSGV_ZSD124"]
     sql, params = sync.build_query(spec, None, "full", "20260101", 7, "20261231")
-    assert '"ERDAT" >= ?' in sql and '"ERDAT" <= ?' in sql
+    assert '"BUDAT_MKPF" >= ?' in sql and '"BUDAT_MKPF" <= ?' in sql
     assert params == ["20260101", "20261231"]
     sql, params = sync.build_query(spec, {"watermark": "20260115"}, "incremental", "20260101", 7, "20261231")
-    assert '"ERDAT" >= ?' in sql and '"ERDAT" <= ?' in sql
+    assert '"BUDAT_MKPF" >= ?' in sql and '"BUDAT_MKPF" <= ?' in sql
     assert params == ["20260108", "20260101", "20261231"]
-
 
 def test_undated_view_uses_stable_full_row_key_when_business_key_missing():
     spec = sync.VIEW_SPECS["ZSGV_ZPP_SERNOLIST"]
     row = {field: None for field in spec.columns}
     key = sync.source_key(row, spec)
     assert key.startswith("full_row:")
-
-
-def test_delivery_source_key_uses_serial_and_hashes_incomplete_keys():
-    spec = sync.VIEW_SPECS["ZSGV_ZSD46N_SO_KK"]
-    row = {field: "x" for field in spec.columns}
-    row.update({"VBELN": "SO-1", "POSNR": "10", "VBELN_L": "DL-1", "POSNR_L": "10", "SERNR": "SN-1"})
-    first = sync.source_key(row, spec)
-    row["DATUM"] = "20260101"
-    first = sync.source_key(row, spec)
-    row["DATUM"] = "20260102"
-    assert sync.source_key(row, spec) != first
-    row["SERNR"] = "SN-2"
-    assert sync.source_key(row, spec) != first
-    row["SERNR"] = None
-    assert sync.source_key(row, spec).startswith("full_row:")
 
 
 def test_mongo_write_concern_options_are_configurable(monkeypatch):
@@ -257,7 +203,7 @@ def test_sync_view_closes_one_hana_session_cursor_and_mongo_client(monkeypatch):
 
 
 def test_sync_view_dry_run_deduplicates_identical_source_rows(monkeypatch):
-    row = ["x"] * len(sync.VIEW_SPECS["ZSGV_ZSD46N_SO_KK"].columns)
+    row = ["x"] * len(sync.VIEW_SPECS["ZSGV_ZSD124"].columns)
     connection = FakeHanaConnection()
     connection.cursor_instance.batches = [[tuple(row), tuple(row)], []]
     monkeypatch.setitem(__import__("sys").modules, "hdbcli", SimpleNamespace(dbapi=SimpleNamespace(connect=lambda **_kwargs: connection)))
@@ -267,7 +213,7 @@ def test_sync_view_dry_run_deduplicates_identical_source_rows(monkeypatch):
     monkeypatch.setattr(sync, "MongoClient", FakeMongoClient)
     monkeypatch.setenv("MONGODB_URI", "mongodb://test")
     result = sync.sync_view(
-        sync.VIEW_SPECS["ZSGV_ZSD46N_SO_KK"],
+        sync.VIEW_SPECS["ZSGV_ZSD124"],
         mode="full",
         start_date="20260101",
         end_date="20261231",

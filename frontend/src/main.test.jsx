@@ -25,10 +25,6 @@ function mockFetch({ fail = false } = {}) {
     if (String(url).startsWith('/api/views/ZSGV_ZSD124?')) return { ok: true, json: async () => ({ items: [{ id: 'bom-1', MATNR: 'MAT-1', AUART: 'ZP01' }], total: 2 }) };
     if (String(url).startsWith('/api/views/ZSGV_ZSD124/stats')) return { ok: true, json: async () => ({ total: 2, salesOrders: 1, productionOrders: 2, missingSalesOrder: 3, missingProductionOrder: 4, missingProductionOrderDistinct: 2, dataStartDate: '20260102', dataEndDate: '20260102', latestSyncedAt: '2026-01-02T03:04:05Z' }) };
     if (String(url).startsWith('/api/views/ZSGV_ZSD124/detail')) return { ok: true, json: async () => ({ fields: [{ key: 'MATNR', label: '物料号', value: 'MAT-1' }] }) };
-    if (String(url).startsWith('/api/views/ZSGV_ZSD46N_SO_KK?') || String(url) === '/api/views/ZSGV_ZSD46N_SO_KK/all' || String(url).startsWith('/api/views/ZSGV_ZSD46N_SO_KK/all?')) return { ok: true, json: async () => ({ items: [{ id: 'delivery-1', ERDAT: '20260102', VBELN: 'SO-1', KUNNR: 'C-1', NAME1: '示例客户', BSTNK: 'PO-1', BZTXT: '服务器产品事业部', VKORG: '1000', VKBUR: '001', CMGST: 'A', orderItemCount: 2, deliveryCount: 1, deliveryLineCount: 2, materialCount: 2, serialCount: 3, KWMENG: 10, LFIMG: 8, STRAS: 'private address', TELF1: 'private phone', ORT01: 'private city' }], total: 1 }) };
-    if (String(url).startsWith('/api/views/ZSGV_ZSD46N_SO_KK/options')) return { ok: true, json: async () => ({ items: ['服务器产品事业部', '金融业务群'] }) };
-    if (String(url).startsWith('/api/views/ZSGV_ZSD46N_SO_KK/stats')) return { ok: true, json: async () => ({ total: 1, salesOrders: 1, dataStartDate: '20260102', dataEndDate: '20260102', latestSyncedAt: '2026-01-02T03:04:05Z' }) };
-    if (String(url).startsWith('/api/views/ZSGV_ZSD46N_SO_KK/detail')) return { ok: true, json: async () => ({ fields: [{ key: 'VBELN', label: '销售订单', value: 'SO-1' }] }) };
     if (String(url).startsWith('/api/views/ZSGV_ZPP_SERNOLIST?')) return { ok: true, json: async () => ({ items: [{ id: 'serial-1', ZCODE_HEAD: 'HEAD-1', ZCODE_ITEM: 'ITEM-1', AUFNR_HEAD: 'PO-H', AUFNR_ITEM: 'PO-I', PRODH: '00100' }], total: 1 }) };
     if (String(url).startsWith('/api/views/ZSGV_ZPP_SERNOLIST/stats')) return { ok: true, json: async () => ({ total: 1, dataStartDate: '', dataEndDate: '', latestSyncedAt: '' }) };
     if (String(url).startsWith('/api/views/ZSGV_ZPP_SERNOLIST/detail')) return { ok: true, json: async () => ({ fields: [{ key: 'ZCODE_HEAD', label: '大刀/机头序列号（ZCODE_HEAD）', value: 'HEAD-1' }] }) };
@@ -41,57 +37,13 @@ function mockFetch({ fail = false } = {}) {
 }
 
 describe('operations workbench', () => {
-  it('shows and exports one sales-order summary per order using only public columns', async () => {
+  it('omits the retired delivery view from navigation and requests', async () => {
     const fetchMock = mockFetch();
     vi.stubGlobal('fetch', fetchMock);
-    const blobs = [];
-    const createObjectURL = vi.spyOn(URL, 'createObjectURL').mockImplementation(blob => { blobs.push(blob); return 'blob:delivery'; });
-    const revokeObjectURL = vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {});
-    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
     render(<App />);
-    fireEvent.click(screen.getAllByRole('button', { name: /销售订单交付明细/ })[0]);
-    expect(await screen.findByRole('heading', { name: '销售订单交付明细' })).toBeInTheDocument();
-    expect(fetchMock.mock.calls.some(([url]) => String(url).startsWith('/api/views/ZSGV_ZSD46N_SO_KK?'))).toBe(false);
-    expect(fetchMock.mock.calls.some(([url]) => String(url).startsWith('/api/views/ZSGV_ZSD46N_SO_KK/stats'))).toBe(false);
-    for (const column of ['创建日期', '销售订单', '客户采购订单', '销售地区名称', '订单行数', '交货单数', '交货行数', '物料数', '序列号数', '订单数量合计', '交货数量合计']) {
-      expect(screen.getByRole('columnheader', { name: column })).toBeInTheDocument();
-    }
-    for (const column of ['销售订单行项目', '交货单', '物料号', '序列号']) {
-      expect(screen.queryByRole('columnheader', { name: column })).not.toBeInTheDocument();
-    }
-    expect(screen.queryByRole('columnheader', { name: '地址' })).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: /高级条件/ }));
-    expect(await screen.findByRole('option', { name: '服务器产品事业部' })).toBeInTheDocument();
-    expect(screen.getByPlaceholderText('关键字')).toBeInTheDocument();
-    expect(screen.getByPlaceholderText('销售订单 / VBELN')).toBeInTheDocument();
-    expect(screen.queryByPlaceholderText('交货单 / VBELN_L')).not.toBeInTheDocument();
-    expect(screen.queryByPlaceholderText('客户编号 / KUNNR')).not.toBeInTheDocument();
-    fireEvent.change(screen.getByPlaceholderText('销售订单 / VBELN'), { target: { value: 'SO-1' } });
-    fireEvent.change(screen.getByLabelText('销售地区名称'), { target: { value: '服务器产品事业部' } });
-    fireEvent.click(screen.getByLabelText('是否为5000公司'));
-    fireEvent.click(screen.getByRole('button', { name: /筛选/ }));
-    await waitFor(() => expect(fetchMock.mock.calls.some(([url]) => String(url).includes('/api/views/ZSGV_ZSD46N_SO_KK?') && String(url).includes('salesOrder=SO-1') && String(url).includes('bztxt=%E6%9C%8D%E5%8A%A1%E5%99%A8%E4%BA%A7%E5%93%81%E4%BA%8B%E4%B8%9A%E9%83%A8') && String(url).includes('company5000=true') && !String(url).includes('deliveryOrder=') && !String(url).includes('customerNumber='))).toBe(true));
-    expect(screen.getByText('销售订单数据量').parentElement).toHaveTextContent('1');
-    fireEvent.click(screen.getByRole('button', { name: /导出数据/ }));
-    await waitFor(() => expect(blobs.length).toBe(1));
-    const csv = new TextDecoder().decode(await blobs[0].arrayBuffer());
-    expect(csv).toContain('SO-1');
-    expect(csv).toContain('订单行数');
-    expect(csv).toContain('交货数量合计');
-    expect(csv).not.toContain('交货单行项目');
-    const exportCalls = fetchMock.mock.calls.filter(([url]) => String(url).startsWith('/api/views/ZSGV_ZSD46N_SO_KK/all?'));
-    expect(exportCalls).toHaveLength(1);
-    const exportQuery = new URL(exportCalls[0][0], 'http://localhost').searchParams;
-    expect(exportQuery.get('salesOrder')).toBe('SO-1');
-    expect(exportQuery.has('page')).toBe(false);
-    expect(exportQuery.has('pageSize')).toBe(false);
-    expect(csv).not.toContain('private address');
-    expect(csv).not.toContain('private phone');
-    expect(csv).not.toContain('private city');
-    expect(click).toHaveBeenCalled();
-    createObjectURL.mockRestore();
-    revokeObjectURL.mockRestore();
-    click.mockRestore();
+    expect(await screen.findByRole('heading', { name: '维修故障记录' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /销售订单交付明细/ })).not.toBeInTheDocument();
+    expect(fetchMock.mock.calls.some(([url]) => String(url).includes('ZSGV_ZSD46N_SO_KK'))).toBe(false);
   });
 
   it('opens the service configuration panel with redacted database metadata', async () => {

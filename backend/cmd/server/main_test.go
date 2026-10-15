@@ -140,10 +140,6 @@ func (f *fakeStore) ViewDetail(context.Context, string, string) (store.ViewDetai
 func (f *fakeStore) ViewStats(context.Context, string, store.ViewFilters) (store.ViewStatsResult, error) {
 	return store.ViewStatsResult{}, f.err
 }
-func (f *fakeStore) ViewOptions(context.Context, string, string) (store.ViewOptionsResult, error) {
-	return store.ViewOptionsResult{}, f.err
-}
-
 func newTestServer(f *fakeStore) *server { return &server{store: f, sync: newSyncManager()} }
 
 func TestAPIDocumentEndpoints(t *testing.T) {
@@ -381,15 +377,6 @@ func TestFilterHelpers(t *testing.T) {
 	if parsedViewFilters.OrderType != "ZP01" {
 		t.Fatalf("orderType=%q", parsedViewFilters.OrderType)
 	}
-	deliveryFilters := viewFilters(url.Values{
-		"deliveryOrder": {"DL-1"}, "customerPurchaseOrder": {"PO-1"}, "customerNumber": {"C-1"},
-		"salesOrganization": {"1000"}, "salesOffice": {"2000"}, "limitedCompany": {"yes"},
-	})
-	if deliveryFilters.DeliveryOrder != "DL-1" || deliveryFilters.CustomerPurchaseOrder != "PO-1" ||
-		deliveryFilters.CustomerNumber != "C-1" || deliveryFilters.SalesOrganization != "1000" ||
-		deliveryFilters.SalesOffice != "2000" || deliveryFilters.LimitedCompany != "yes" {
-		t.Fatalf("delivery filters=%+v", deliveryFilters)
-	}
 }
 
 func TestViewAndDataStatusRoutes(t *testing.T) {
@@ -403,6 +390,23 @@ func TestViewAndDataStatusRoutes(t *testing.T) {
 	newTestServer(f).dataStatus(r, httptest.NewRequest(http.MethodGet, "/api/data-status", nil))
 	if r.Code != http.StatusOK {
 		t.Fatalf("data status=%d", r.Code)
+	}
+}
+
+func TestRetiredDeliveryRoutesDoNotReadMongoDB(t *testing.T) {
+	h := &server{store: &store.Store{}, sync: newSyncManager()}
+	mux := registerRoutes(h)
+	for _, suffix := range []string{"", "/all", "/detail?id=removed", "/stats", "/options?field=BZTXT", "/stream"} {
+		r := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "/api/views/ZSGV_ZSD46N_SO_KK"+suffix, nil)
+		mux.ServeHTTP(r, req)
+		want := http.StatusBadRequest
+		if strings.HasPrefix(suffix, "/options") {
+			want = http.StatusNotFound
+		}
+		if r.Code != want {
+			t.Errorf("retired endpoint %s status=%d, want %d", suffix, r.Code, want)
+		}
 	}
 }
 

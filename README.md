@@ -99,7 +99,7 @@ BACKEND_PORT=18080 FRONTEND_PORT=5174 ./scripts/devctl.sh restart
 
 ## 部署更新
 
-在本地项目目录执行 `bash scripts/deploy.sh`。脚本会提交全部本地改动并推送当前分支，然后通过 SSH 更新 `root@10.17.150.235:/data/production-fault-database`。SSH 使用密钥或交互式密码，密码不写入仓库。
+在本地项目目录执行 `bash scripts/deploy.sh`。脚本会提交全部本地改动并推送当前分支，然后通过 SSH 更新 `root@10.17.150.235:/data/production-fault-database`。脚本内置内部部署账号和密码，密码认证依赖本机安装 `sshpass`。可用 `DEPLOY_SSH_PASSWORD` 覆盖默认密码，设为空值时使用密钥或交互式密码。
 
 线上 `git pull --ff-only`、依赖下载使用 `http://10.2.51.151:7897` HTTP 代理及 `socks5://10.2.51.151:7897` SOCKS 代理。脚本检查线上分支、工作区和运行中的同步进程；更新依赖并完成前后端构建后，沿用 `devctl.sh` 重启服务，最后输出提交号、任务数量及健康检查结果。服务进程不会继承部署代理。
 

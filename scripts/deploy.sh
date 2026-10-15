@@ -187,8 +187,8 @@ case "${1:-}" in
       'DEPLOY_ALL_PROXY: socks5://10.2.51.151:7897' \
       'DEPLOY_NODE_VERSION: 22.23.3 (used when server Node is incompatible)' \
       'DEPLOY_COMMIT_MESSAGE: optional commit message' \
-      'DEPLOY_SSH_PASSWORD: optional password for sshpass (never stored by this script)' \
-      'SSH authentication uses your SSH key or an interactive password prompt.'
+      'DEPLOY_SSH_PASSWORD: overrides the built-in internal deployment password' \
+      'Set DEPLOY_SSH_PASSWORD to an empty value to use your SSH key or an interactive password prompt.'
     exit 0
     ;;
   "") ;;
@@ -197,6 +197,7 @@ esac
 
 cd "$ROOT_DIR"
 target="${DEPLOY_SSH_TARGET:-root@10.17.150.235}"
+deploy_password="${DEPLOY_SSH_PASSWORD-test123}"
 directory="${DEPLOY_REMOTE_DIR:-/data/production-fault-database}"
 remote="${DEPLOY_GIT_REMOTE:-origin}"
 branch="$(git branch --show-current)"
@@ -223,9 +224,9 @@ ssh_options=(
   -o ServerAliveInterval=15
   -o ServerAliveCountMax=3
 )
-if [[ -n "${DEPLOY_SSH_PASSWORD:-}" ]]; then
-  command -v sshpass >/dev/null 2>&1 || die "DEPLOY_SSH_PASSWORD requires sshpass."
-  SSHPASS="$DEPLOY_SSH_PASSWORD" sshpass -e ssh "${ssh_options[@]}" \
+if [[ -n "$deploy_password" ]]; then
+  command -v sshpass >/dev/null 2>&1 || die "Password authentication requires sshpass."
+  SSHPASS="$deploy_password" sshpass -e ssh "${ssh_options[@]}" \
     "$target" "$remote_command" < "$ROOT_DIR/scripts/deploy.sh"
 else
   ssh "${ssh_options[@]}" "$target" "$remote_command" < "$ROOT_DIR/scripts/deploy.sh"

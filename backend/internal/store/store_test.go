@@ -40,6 +40,18 @@ func TestRepairFilterMatchesNonCriticalMaterialSerial(t *testing.T) {
 	}
 }
 
+func TestRepairFilterMatchesMaterialCode(t *testing.T) {
+	filter := repairFilter(Filters{MaterialCode: "MAT-1"})
+	conditions, ok := filter["$and"].(primitive.A)
+	if !ok || len(conditions) != 1 {
+		t.Fatalf("filter=%v", filter)
+	}
+	material := conditions[0].(bson.M)["MATNR"].(bson.M)
+	if material["$regex"] != "^MAT-1$" || material["$options"] != "i" {
+		t.Fatalf("material filter=%v", material)
+	}
+}
+
 func TestRepairPlannedDateRangeFilterSupportsISOAndSAPDates(t *testing.T) {
 	filter := repairFilter(Filters{TimeField: "planned", DateFrom: "2026-08-04", DateTo: "20260902"})
 	conditions := filter["$and"].(primitive.A)

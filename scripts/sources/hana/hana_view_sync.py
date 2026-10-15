@@ -485,6 +485,9 @@ def sync_view(
                         "_id": hashlib.sha256(key.encode()).hexdigest()})
             if not dry_run:
                 check_leases(verify=True)
+                if spec.view_id == "ZSGV_ZSD46N_SO_KK":
+                    # Persist invalidation even if a partial write fails between backend polls.
+                    publish_version(database, spec.view_id, f"{run_id}:writing")
                 ensure_index(collection, "_source_key", unique=spec.view_id != "ZSGV_ZPP_SERNOLIST",
                              name="source_key_lookup" if spec.view_id == "ZSGV_ZPP_SERNOLIST" else "source_key_unique")
                 for field in spec.index_fields:

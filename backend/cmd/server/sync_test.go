@@ -22,8 +22,12 @@ func TestSyncRequestIncludesTask(t *testing.T) {
 		taskID  string
 		want    bool
 	}{
-		{name: "all tasks", request: syncRunRequest{}, taskID: "sales_order_delivery_records", want: true},
-		{name: "selected task", request: syncRunRequest{TaskIDs: []string{"sales_orders", "sales_order_delivery_records"}}, taskID: "sales_order_delivery_records", want: true},
+		{name: "all tasks exclude paused delivery", request: syncRunRequest{}, taskID: "sales_order_delivery_records", want: false},
+		{name: "explicit paused delivery", request: syncRunRequest{TaskIDs: []string{"sales_orders", "sales_order_delivery_records"}}, taskID: "sales_order_delivery_records", want: false},
+		{name: "DOA no longer depends on delivery", request: syncRunRequest{TaskIDs: []string{"scs_doa"}}, taskID: "sales_order_delivery_records", want: false},
+		{name: "change no longer depends on delivery", request: syncRunRequest{TaskIDs: []string{"scs_change"}}, taskID: "sales_order_delivery_records", want: false},
+		{name: "all tasks include DOA", request: syncRunRequest{}, taskID: "scs_doa", want: true},
+		{name: "change still depends on DOA", request: syncRunRequest{TaskIDs: []string{"scs_change"}}, taskID: "scs_doa", want: true},
 		{name: "unrelated task", request: syncRunRequest{TaskIDs: []string{"sales_orders"}}, taskID: "sales_order_delivery_records", want: false},
 	}
 	for _, test := range tests {

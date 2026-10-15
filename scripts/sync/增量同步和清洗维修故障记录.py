@@ -627,14 +627,12 @@ def run_workflow(
             hana_sync = sync_sales_orders.sync_repair(
                 db,
                 args.repair_collection,
-                env("SYNC_CHECKPOINT_COLLECTION", "sync_checkpoints"),
-                getattr(args, "mode", "incremental"),
-                getattr(args, "start_date", None),
-                args.sync_end_date,
-                args.sync_lookback_days,
-                args.batch_size,
-                not args.apply,
-                run_id,
+                mode=getattr(args, "mode", "incremental"),
+                start_date=getattr(args, "start_date", None),
+                end_date=args.sync_end_date,
+                batch_size=args.batch_size,
+                dry_run=not args.apply,
+                run_id=run_id,
                 defer_finalize=args.apply,
                 allow_large_cleanup=getattr(args, "allow_large_cleanup", False),
                 preview_snapshot=preview,
@@ -710,7 +708,6 @@ def run_workflow(
             hana_sync_commit = sync_sales_orders.finalize_repair_run(
                 db,
                 args.repair_collection,
-                env("SYNC_CHECKPOINT_COLLECTION", "sync_checkpoints"),
                 hana_sync,
                 run_id,
             )

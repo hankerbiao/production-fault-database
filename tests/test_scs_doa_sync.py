@@ -1,11 +1,15 @@
 from datetime import datetime, timedelta, timezone
+from contextlib import nullcontext
 from types import SimpleNamespace
+from unittest.mock import MagicMock, Mock
 
+import pytest
+
+from scripts.sources import scs_doa_sync as doa
 from scripts.sources.scs_doa_sync import (
     backfill_5000_company,
     classify_doa_document,
     extract_equipment,
-    load_5000_customer_purchase_orders,
     parse_datetime,
     parse_labels,
     parse_list,
@@ -61,32 +65,40 @@ def test_request_waits_within_default_range(monkeypatch):
     assert waits == [(3.0, 5.0), 4.5]
 
 
-def test_load_5000_customer_purchase_orders_uses_company_view_filter_and_bstnk():
-    class Collection:
-        def find(self, query, projection):
-            assert query == {"VBELN": {"$regex": "^XNC", "$options": "i"}}
-            assert projection == {"BSTNK": 1}
-            return [{"BSTNK": " PO-5000 "}, {"BSTNK": ""}, {}]
-
-    class Database:
-        def __getitem__(self, name):
-            assert name == "sales_order_delivery_records_sap"
-            return Collection()
-
-    assert load_5000_customer_purchase_orders(Database()) == {"PO-5000"}
-
-
-def test_classify_doa_document_uses_detail_order_number_against_bstnk():
-    assert classify_doa_document({"sales_order": "OLD", "details": {"fields": {"合同/订单号": "PO-5000"}}}, {"PO-5000"}) == {
-        "sales_order": "PO-5000", "is_5000_company": True,
+@pytest.mark.parametrize(("sales_order", "expected"), [
+    ("XNC2519570", True),
+    ("XNC251957", True),
+    (" xnc2519580 ", True),
+    ("XHG2609190", False),
+    ("PO-5000", False),
+    ("PREFIX-XNC2519570", False),
+    ("", False),
+    (None, False),
+])
+def test_classify_doa_document_uses_sales_order_prefix(sales_order, expected):
+    derived = classify_doa_document({"sales_order": sales_order})
+    assert derived == {
+        "sales_order": str(sales_order or "").strip(),
+        "is_5000_company": expected,
     }
-    assert classify_doa_document({"details": {"fields": {"合同/订单号": "PO-NOT-FOUND"}}}, {"PO-5000"})["is_5000_company"] is False
+
+
+def test_classify_doa_document_prefers_detail_order_and_falls_back_to_stored_order():
+    assert classify_doa_document({"sales_order": "OLD", "details": {"fields": {"合同/订单号": "XNC2519570"}}}) == {
+        "sales_order": "XNC2519570", "is_5000_company": True,
+    }
+    assert classify_doa_document({"sales_order": "XNC1", "details": {"fields": {"订单号": "XHG1"}}})["is_5000_company"] is False
+    assert classify_doa_document({"sales_order": "XNC1", "details": {"fields": {"订单号": ""}}})["is_5000_company"] is True
 
 
 def test_backfill_5000_company_re_evaluates_existing_documents():
     class Collection:
         def __init__(self):
-            self.documents = [{"_id": "1", "sales_order": "OLD", "details": {"fields": {"合同/订单号": "XHG1"}}, "is_5000_company": False}]
+            self.documents = [
+                {"_id": "1", "sales_order": "OLD", "details": {"fields": {"合同/订单号": "XNC1"}}, "is_5000_company": False},
+                {"_id": "2", "sales_order": "XHG1", "is_5000_company": True},
+                {"_id": "3", "sales_order": "XNC2", "is_5000_company": True},
+            ]
             self.operations = []
 
         def find(self, *_args, **_kwargs):
@@ -101,8 +113,60 @@ def test_backfill_5000_company_re_evaluates_existing_documents():
         def __getitem__(self, _name): return self.collection
 
     database = Database()
-    assert backfill_5000_company(database, "scs_doa_records", {"XHG1"}) == 1
-    assert database.collection.operations
+    assert backfill_5000_company(database, "scs_doa_records") == 2
+    operations = database.collection.operations
+    assert operations[0]._doc["$set"] == {"sales_order": "XNC1", "is_5000_company": True}
+    assert operations[1]._doc["$set"] == {"sales_order": "XHG1", "is_5000_company": False}
+
+
+@pytest.mark.parametrize(("existing", "detail_order", "expected"), [
+    (None, "XNC260001", True),
+    ({"sales_order": "XNC-old"}, "XHG260001", False),
+    ({"sales_order": "XNC260001"}, None, True),
+])
+def test_sync_classifies_without_reference_tables_and_preserves_order_on_detail_failure(
+        monkeypatch, existing, detail_order, expected):
+    collection, checkpoints, client = Mock(), Mock(), Mock()
+    database = {"doa": collection, "sync_checkpoints": checkpoints}
+    client.__getitem__ = Mock(return_value=database)
+    checkpoints.find_one.return_value = {"watermark": "2026-10-15"}
+    collection.find_one.return_value = existing
+    pending = MagicMock()
+    pending.sort.return_value = pending
+    pending.limit.return_value = pending
+    collection.find.side_effect = [pending, []]
+    written = []
+
+    def bulk_write(operations, **_kwargs):
+        written.extend(operations)
+        return SimpleNamespace(upserted_count=1, modified_count=0)
+
+    collection.bulk_write.side_effect = bulk_write
+    monkeypatch.setenv("SCS_DOA_COLLECTION", "doa")
+    monkeypatch.setenv("MONGODB_DATABASE", "test")
+    monkeypatch.setattr(doa, "load_dotenv", lambda *_args: None)
+    monkeypatch.setattr(doa, "mongo_uri", lambda: "mongodb://test")
+    monkeypatch.setattr(doa, "MongoClient", lambda *_args, **_kwargs: client)
+    monkeypatch.setattr(doa, "resource_lock", lambda *_args: nullcontext())
+    monkeypatch.setattr(doa, "login", lambda *_args: None)
+    monkeypatch.setattr(doa, "iter_list", lambda *_args: [[{
+        "doa_code": "DOA-1", "declare_time": "2026-10-15 08:00:00",
+    }]])
+    detail = Mock(return_value={"fields": {"销售订单": detail_order}})
+    if detail_order is None:
+        detail.side_effect = RuntimeError("detail unavailable")
+    monkeypatch.setattr(doa, "fetch_detail", detail)
+
+    result = doa.sync(SimpleNamespace(
+        full=False, dry_run=False, page_size=500, lookback_days=2, end_date="2026-10-15",
+    ))
+    assert result["success"] is True
+    assert len(written) == 1
+    document = written[0]._doc["$set"]
+    assert document["is_5000_company"] is expected
+    assert document["sales_order"] == (detail_order or existing["sales_order"])
+    assert document["_detail_pending"] is (detail_order is None)
+    client.close.assert_called_once()
 
 
 def test_parse_datetime_accepts_iso_watermark():

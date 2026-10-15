@@ -14,6 +14,7 @@ async function mockApi(page) {
     else if (url.pathname === '/api/orders') body = { items: [{ id: 'SG:PO-1', source: 'SG', aufnr: 'PO-1', salesOrder: 'SO-1', customerId: 'C1', materialDescription: '物料', orderQuantity: 3, storageQuantity: 2, recordCount: 1 }], total: 1, page: 1, pageSize: 20 };
     else if (url.pathname === '/api/orders/stats') body = { total: 1, salesOrders: 1, sg: 1, kk: 0, orderQuantity: 3, storageQuantity: 2 };
     else if (url.pathname === '/api/orders/detail') body = { order: { aufnr: 'PO-1', salesOrder: 'SO-1', orderQuantity: 3, storageQuantity: 2 }, fields: [] };
+    else if (url.pathname === '/api/views/ZSGV_ZSD46N_SO_KK/options') body = { items: ['服务器产品事业部'] };
     else if (url.pathname.endsWith('/stats')) body = { total: 1, salesOrders: 1, productionOrders: 1, missingSalesOrder: 0, missingProductionOrder: 0 };
     else if (url.pathname.endsWith('/detail')) body = { record: { id: 'v1' }, fields: [{ key: 'ID', label: '记录编号', value: 'v1' }] };
     else if (url.pathname.startsWith('/api/views/')) body = { items: [{ id: 'v1', hostBarcode: 'PC-1', salesOrder: 'SO-1', productionOrder: 'PO-1', aufnr: 'PO-1', pcode: 'PC-1', serialNumber: 'SN-1', stationCode: 'ST-1' }], total: 1, page: 1, pageSize: 20 };
@@ -52,10 +53,39 @@ test('switches to orders and filters by source', async ({ page }) => {
   await page.goto('/');
   await navigate(page, /销售订单看板/);
   await expect(page.getByRole('heading', { name: '销售订单看板' })).toBeVisible();
-  await page.getByRole('combobox').selectOption('SG');
+  await page.getByRole('combobox', { name: '订单来源' }).selectOption('SG');
   await page.getByRole('button', { name: /筛选/ }).click();
   if (isMobile(page)) await expect(page.locator('.mobile-record').filter({ hasText: 'PO-1' })).toBeVisible();
   else await expect(page.getByText('PO-1').first()).toBeVisible();
+});
+
+test('filters and exports delivery records', async ({ page }) => {
+  await page.goto('/');
+  await navigate(page, /销售订单交付明细/);
+  await expect(page.getByRole('heading', { name: '销售订单交付明细', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: /高级条件/ }).click();
+  await page.getByRole('combobox', { name: '销售地区名称' }).selectOption('服务器产品事业部');
+  await page.getByRole('checkbox', { name: '是否为5000公司' }).check();
+  const filteredRequest = page.waitForRequest(request => {
+    const url = new URL(request.url());
+    return url.pathname === '/api/views/ZSGV_ZSD46N_SO_KK'
+      && url.searchParams.get('bztxt') === '服务器产品事业部'
+      && url.searchParams.get('company5000') === 'true';
+  });
+  await page.getByRole('button', { name: '搜索 / 筛选', exact: true }).click();
+  await filteredRequest;
+  const exportRequest = page.waitForRequest(request => new URL(request.url()).pathname.endsWith('/all'));
+  const download = page.waitForEvent('download');
+  await page.getByRole('button', { name: '导出数据', exact: true }).click();
+  const exportUrl = new URL((await exportRequest).url());
+  expect(exportUrl.searchParams.get('bztxt')).toBe('服务器产品事业部');
+  expect(exportUrl.searchParams.get('company5000')).toBe('true');
+  expect(exportUrl.searchParams.has('page')).toBe(false);
+  expect(exportUrl.searchParams.has('pageSize')).toBe(false);
+  expect((await download).suggestedFilename()).toBe('销售订单交付明细.csv');
+  await page.getByRole('button', { name: '重置', exact: true }).click();
+  await expect(page.getByRole('combobox', { name: '销售地区名称' })).toHaveValue('');
+  await expect(page.getByRole('checkbox', { name: '是否为5000公司' })).not.toBeChecked();
 });
 
 test('opens API documentation and copies a request example', async ({ page }) => {

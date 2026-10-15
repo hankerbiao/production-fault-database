@@ -93,19 +93,18 @@ def test_aggregate_preserves_order_lines():
     assert sync.aggregate("KK", rows, datetime.now(timezone.utc))[0][0]["_id"] == "KK:100"
 
 
-def test_repair_query_modes():
-    sql, params = sync.repair_query("full", None, date(2026, 1, 1), date(2026, 1, 31))
+def test_repair_query_uses_repair_date_range():
+    sql, params = sync.repair_query(date(2026, 1, 1), date(2026, 1, 31))
     assert '"ZDATE_WX" >= ?' in sql and '"ZDATE_WX" <= ?' in sql
     assert params == ["20260101", "20260131"]
-    checkpoint = {"watermark": {"ZDATE": "20260115", "ZTIME": "101010"}}
-    sql, params = sync.repair_query("incremental", checkpoint, date(2026, 1, 8), date(2026, 1, 31))
+    sql, params = sync.repair_query(date(2026, 1, 8), date(2026, 1, 31))
     assert params == ["20260108", "20260131"]
     assert '"ZDATE" >' not in sql and '"ZTIME" >=' not in sql
 
 
 def test_repair_sync_start_date_is_hard_limited():
     assert sync.REPAIR_START_DATE == date(2026, 1, 1)
-    sql, params = sync.repair_query("full", None, sync.REPAIR_START_DATE, date(2026, 1, 31))
+    sql, params = sync.repair_query(sync.REPAIR_START_DATE, date(2026, 1, 31))
     assert '"ZDATE_WX" >= ?' in sql
     assert params[0] == "20260101"
 
@@ -437,7 +436,8 @@ def test_sync_repair_retains_unmatched_orders_and_leaves_legacy_watermark(monkey
         yield Connection()
 
     monkeypatch.setattr(sync, "hana_connection", fake_hana_connection)
-    result = sync.sync_repair(db, "repairs", "checkpoints", "incremental", date(2026, 1, 1), date(2026, 1, 2), 7, 1, False, "run-1")
+    result = sync.sync_repair(db, "repairs", mode="incremental", start_date=date(2026, 1, 1),
+                             end_date=date(2026, 1, 2), batch_size=1, dry_run=False, run_id="run-1")
     assert result["success"] is True
     assert result["source_rows"] == 3 and result["matched_sales_orders"] == 1 and result["empty_sales_orders_retained"] == 1
     assert result["unmatched_sales_orders_retained"] == 1
@@ -456,7 +456,7 @@ def test_monthly_repair_cleanup_is_limited_to_the_selected_month_and_keeps_water
     db["checkpoints"].docs = [{"_id": "repair_records", "watermark": {"ZDATE": "20261012", "ZTIME": "010000"}}]
 
     result = sync.finalize_repair_run(
-        db, "repairs", "checkpoints",
+        db, "repairs",
         {"success": True, "snapshot_complete": True, "run_id": "run-1", "unique_rows": 1, "mode": "monthly", "range": {"start": "2026-09-01", "end": "2026-09-30"}},
         "run-1",
     )

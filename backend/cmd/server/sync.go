@@ -131,12 +131,28 @@ func (m *syncManager) startRun(request syncRunRequest) (syncStatus, error) {
 }
 
 func syncRequestIncludesTask(request syncRunRequest, taskID string) bool {
+	pending := append([]string(nil), request.TaskIDs...)
 	if len(request.TaskIDs) == 0 {
-		return true
+		for _, task := range managedSyncTasks {
+			pending = append(pending, task.ID)
+		}
 	}
-	for _, selected := range request.TaskIDs {
-		if selected == taskID {
-			return true
+	visited := make(map[string]bool)
+	for len(pending) > 0 {
+		selected := pending[0]
+		pending = pending[1:]
+		if visited[selected] {
+			continue
+		}
+		visited[selected] = true
+		for _, task := range managedSyncTasks {
+			if task.ID == selected {
+				if selected == taskID {
+					return true
+				}
+				pending = append(pending, task.Dependencies...)
+				break
+			}
 		}
 	}
 	return false

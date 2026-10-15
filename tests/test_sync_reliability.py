@@ -58,7 +58,7 @@ def test_doa_backfill_projection_includes_compared_classification():
     collection = Mock()
     db.__getitem__ = Mock(return_value=collection)
     collection.find.return_value = []
-    doa.backfill_5000_company(db, "doa", set())
+    doa.backfill_5000_company(db, "doa")
     assert collection.find.call_args.args[1]["is_5000_company"] == 1
 
 
@@ -174,6 +174,112 @@ def test_hana_conflicting_keys_fail_before_any_writes(monkeypatch):
     collection.delete_many.assert_not_called()
 
 
+@pytest.fixture
+def delivery_snapshot(monkeypatch):
+    spec = hana.VIEW_SPECS["ZSGV_ZSD46N_SO_KK"]
+    target, checkpoints, runs, versions = Mock(), Mock(), Mock(), Mock()
+    checkpoints.find_one.return_value = None
+    target.bulk_write.return_value = SimpleNamespace(
+        upserted_count=1, matched_count=0, modified_count=0,
+    )
+    db = {
+        spec.collection: target, "sync_checkpoints": checkpoints,
+        "sync_runs": runs, "sync_dataset_versions": versions,
+    }
+    client = Mock()
+    client.__getitem__ = Mock(return_value=db)
+    cursor = Mock()
+    cursor.fetchmany.side_effect = [
+        [tuple("first" for _field in spec.columns)],
+        [tuple("second" for _field in spec.columns)], [],
+    ]
+
+    @contextmanager
+    def connection():
+        yield SimpleNamespace(cursor=lambda: cursor)
+
+    monkeypatch.setattr(hana, "MongoClient", lambda *_args, **_kwargs: client)
+    monkeypatch.setattr(hana, "mongo_uri", lambda: "mongodb://test")
+    monkeypatch.setattr(hana, "hana_connection", connection)
+    return spec, target, versions, cursor
+
+
+@pytest.mark.parametrize("failed_batch", [1, 2])
+def test_delivery_version_changes_before_a_failed_target_write(delivery_snapshot, failed_batch):
+    spec, target, versions, _cursor = delivery_snapshot
+    attempts = 0
+
+    def write(_operations, **_kwargs):
+        nonlocal attempts
+        attempts += 1
+        assert versions.update_one.call_count == 1
+        if attempts == failed_batch:
+            raise RuntimeError("target write failed")
+        return SimpleNamespace(upserted_count=1, matched_count=0, modified_count=0)
+
+    target.bulk_write.side_effect = write
+    with pytest.raises(RuntimeError, match="target write failed"):
+        hana.sync_view(spec, mode="incremental", start_date=None, batch_size=1,
+                       lookback_days=7, dry_run=False)
+    update = versions.update_one.call_args.args[1]["$set"]
+    assert update["run_id"].endswith(":writing")
+    assert attempts == failed_batch
+
+
+def test_delivery_success_publishes_completed_version(delivery_snapshot):
+    spec, _target, versions, _cursor = delivery_snapshot
+    result = hana.sync_view(spec, mode="incremental", start_date=None, batch_size=1,
+                            lookback_days=7, dry_run=False)
+    assert result["success"] and result["finalized"]
+    assert [call.args[1]["$set"]["run_id"] for call in versions.update_one.call_args_list] == [
+        result["run_id"] + ":writing", result["run_id"],
+    ]
+
+
+def test_delivery_version_write_failure_prevents_target_mutation(delivery_snapshot):
+    spec, target, versions, _cursor = delivery_snapshot
+    versions.update_one.side_effect = RuntimeError("version write failed")
+    with pytest.raises(RuntimeError, match="version write failed"):
+        hana.sync_view(spec, mode="incremental", start_date=None, batch_size=1,
+                       lookback_days=7, dry_run=False)
+    target.bulk_write.assert_not_called()
+    target.create_index.assert_not_called()
+
+
+def test_delivery_cleanup_failure_preserves_writing_version(delivery_snapshot, monkeypatch):
+    spec, target, versions, _cursor = delivery_snapshot
+    monkeypatch.setattr(hana, "validate_snapshot_cleanup", Mock())
+    cleanup = Mock(side_effect=RuntimeError("cleanup failed"))
+    monkeypatch.setattr(hana, "archive_cleanup", cleanup)
+    with pytest.raises(RuntimeError, match="cleanup failed"):
+        hana.sync_view(spec, mode="full", start_date="20260101", end_date="20261231",
+                       batch_size=1, lookback_days=7, dry_run=False)
+    assert target.bulk_write.call_count == 2
+    cleanup.assert_called_once()
+    versions.update_one.assert_called_once()
+    assert versions.update_one.call_args.args[1]["$set"]["run_id"].endswith(":writing")
+
+
+@pytest.mark.parametrize("dry_run", [False, True])
+def test_delivery_source_validation_failure_preserves_version(delivery_snapshot, dry_run):
+    spec, target, versions, cursor = delivery_snapshot
+    cursor.fetchmany.side_effect = RuntimeError("source read failed")
+    with pytest.raises(RuntimeError, match="source read failed"):
+        hana.sync_view(spec, mode="incremental", start_date=None, batch_size=1,
+                       lookback_days=7, dry_run=dry_run)
+    target.bulk_write.assert_not_called()
+    versions.update_one.assert_not_called()
+
+
+def test_delivery_preview_preserves_version(delivery_snapshot):
+    spec, target, versions, _cursor = delivery_snapshot
+    result = hana.sync_view(spec, mode="incremental", start_date=None, batch_size=1,
+                            lookback_days=7, dry_run=True)
+    assert result["success"]
+    target.bulk_write.assert_not_called()
+    versions.update_one.assert_not_called()
+
+
 def test_table_preview_has_zero_db_writes_and_cleans_new_snapshot(monkeypatch):
     from scripts import table_pipeline as pipeline
     target = Mock()
@@ -232,7 +338,7 @@ def test_scs_change_failed_page_does_not_write_or_finish_checkpoint(monkeypatch)
 
 
 def test_tasks_manifest_is_unique_valid_and_complete():
-    assert len(syncctl.TASKS) == len(syncctl.TASK_BY_ID) == 9
+    assert len(syncctl.TASKS) == len(syncctl.TASK_BY_ID) == 8
     for task in syncctl.TASKS:
         assert (syncctl.ROOT / task.script).is_file()
         assert all(syncctl.TASK_BY_ID[name].priority < task.priority for name in task.dependencies)

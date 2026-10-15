@@ -7,7 +7,19 @@ from scripts.sync.syncctl import SyncError, is_retryable, json_result, resolve_t
 
 def test_resolve_tasks_adds_dependencies_in_stable_order():
     tasks = resolve_tasks(["scs_change", "repair_records"])
-    assert [task.id for task in tasks] == ["sales_orders", "station_records", "repair_records", "scs_doa", "scs_change"]
+    assert [task.id for task in tasks] == [
+        "sales_orders", "station_records", "repair_records",
+        "scs_doa", "scs_change",
+    ]
+
+
+@pytest.mark.parametrize("requested", ["scs_doa", "scs_change"])
+def test_scs_classification_does_not_depend_on_delivery_or_sales_orders(requested):
+    tasks = [task.id for task in resolve_tasks([requested])]
+    assert tasks[0] == "scs_doa"
+    assert "sales_order_delivery_records" not in tasks
+    assert "sales_orders" not in tasks
+    assert tasks[-1] == requested
 
 
 def test_full_requires_start_date_and_rejects_unknown_tasks():
@@ -24,13 +36,10 @@ def test_planned_start_task_resolves_bom_dependency_and_reports_run_id():
     assert command[-3:] == ["--apply", "--run-id", "run-1"]
 
 
-def test_sales_order_delivery_task_is_registered_without_dependencies_and_has_fixed_scope():
-    task, = resolve_tasks(["sales_order_delivery_records"])
-    assert task.dependencies == ()
-    assert task.full_supported
-    command = task.command("python", "full", "2026-03-01", "2026-03-31")
-    assert command[-3:] == ["--mode", "full", "--apply"]
-    assert command[1].endswith("sales_order_delivery_records.py")
+def test_paused_delivery_task_is_excluded_from_all_runs_and_explicit_requests():
+    assert "sales_order_delivery_records" not in [task.id for task in resolve_tasks(None)]
+    with pytest.raises(SyncError, match="未知同步任务"):
+        resolve_tasks(["sales_order_delivery_records"])
 
 
 def test_script_result_uses_last_json_line_and_preserves_contract():

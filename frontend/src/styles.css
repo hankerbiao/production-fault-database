@@ -57,6 +57,7 @@ th.column-judgment,td.column-judgment{width:78px;min-width:78px;max-width:78px;p
 .advanced-filters-head span{font-size:10px;color:var(--ink-muted)}
 .advanced-filters-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:9px}
 .advanced-filters-grid .filter-text,.advanced-filters-grid select,.advanced-filters-grid .filter-checkbox{width:100%;min-width:0;grid-column:auto}
+.advanced-filters-grid .filter-field{grid-column:auto}
 .advanced-filters-grid .filter-checkbox{height:40px}
 
 @media(max-width:1080px){.filter-form-body{grid-template-columns:repeat(8,minmax(0,1fr))}.filter-field,.filter-field-date{grid-column:span 2}.filter-field-compact{grid-column:span 2}.advanced-filters-grid{grid-template-columns:repeat(3,minmax(0,1fr))}}

@@ -434,12 +434,12 @@ def test_hana_sync_runs_before_backfill_and_commits_after_success(monkeypatch):
     workflow_args.sync_repair_hana = True
     calls = []
 
-    def fake_sync(_db, collection, checkpoint_collection, mode, start_date, end_date, lookback_days, batch_size, dry_run, run_id, defer_finalize, **_kwargs):
-        calls.append(("sync", collection, checkpoint_collection, mode, start_date, end_date, lookback_days, batch_size, dry_run, run_id, defer_finalize))
-        return {"success": True, "mode": "incremental", "watermark": {"ZDATE": "20260903", "ZTIME": "010000"}}
+    def fake_sync(_db, collection, *, mode, start_date, end_date, batch_size, dry_run, run_id, defer_finalize, **_kwargs):
+        calls.append(("sync", collection, mode, start_date, end_date, batch_size, dry_run, run_id, defer_finalize))
+        return {"success": True, "mode": "incremental"}
 
-    def fake_finalize(_db, collection, checkpoint_collection, sync_result, run_id):
-        calls.append(("commit", collection, checkpoint_collection, sync_result, run_id))
+    def fake_finalize(_db, collection, sync_result, run_id):
+        calls.append(("commit", collection, sync_result, run_id))
         return {"deleted_out_of_scope": 0}
 
     monkeypatch.setattr(backfill.sync_sales_orders, "sync_repair", fake_sync)
@@ -448,8 +448,8 @@ def test_hana_sync_runs_before_backfill_and_commits_after_success(monkeypatch):
     result = backfill.run_workflow(db, workflow_args, run_id="run-1")
 
     assert calls == [
-        ("sync", "repairs", "sync_checkpoints", "incremental", None, date(2026, 9, 3), 7, 2, False, "run-1", True),
-        ("commit", "repairs", "sync_checkpoints", result["hana_sync"], "run-1"),
+        ("sync", "repairs", "incremental", None, date(2026, 9, 3), 2, False, "run-1", True),
+        ("commit", "repairs", result["hana_sync"], "run-1"),
     ]
     assert result["updated"] == 1
     assert result["hana_sync_commit"] == {"deleted_out_of_scope": 0}

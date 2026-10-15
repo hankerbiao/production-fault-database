@@ -145,16 +145,10 @@ def aggregate(source: str, records: list[dict[str, Any]], synced_at: datetime) -
     return documents, {"fetched": len(records), "unique": len(documents), "skipped": skipped}
 
 
-def repair_query(mode: str, checkpoint: dict[str, Any] | None, start_date: date | None, end_date: date) -> tuple[str, list[Any]]:
-    conditions: list[str] = []
-    params: list[Any] = []
-    if start_date:
-        conditions.append('"ZDATE_WX" >= ?')
-        params.append(start_date.strftime("%Y%m%d"))
-    conditions.append('"ZDATE_WX" <= ?')
-    params.append(end_date.strftime("%Y%m%d"))
+def repair_query(start_date: date, end_date: date) -> tuple[str, list[Any]]:
+    params = [start_date.strftime("%Y%m%d"), end_date.strftime("%Y%m%d")]
     selected = ", ".join(f'"{field}"' for field in REPAIR_COLUMNS)
-    where = f" WHERE {' AND '.join(conditions)}" if conditions else ""
+    where = ' WHERE "ZDATE_WX" >= ? AND "ZDATE_WX" <= ?'
     order = ", ".join(f'"{field}"' for field in REPAIR_ID_FIELDS)
     return f"SELECT {selected} FROM {REPAIR_VIEW}{where} ORDER BY {order}", params
 
@@ -166,7 +160,7 @@ def repair_scope_filter(start_date: date, end_date: date) -> dict[str, Any]:
     }
 
 
-def repair_cleanup_filter(mode: str, run_id: str, start_date: date, end_date: date) -> dict[str, Any]:
+def repair_cleanup_filter(run_id: str, start_date: date, end_date: date) -> dict[str, Any]:
     return {**repair_scope_filter(start_date, end_date), "_scope_run_id": {"$ne": run_id}}
 
 
@@ -247,13 +241,18 @@ def is_complete_month(start_date: date, end_date: date) -> bool:
 
 
 def sales_order_vbelns(db: Any) -> set[str]:
-    """Return exact non-empty sales-order numbers accepted for repairs."""
+    """Return exact non-empty sales-order numbers for repair match statistics."""
     return stream_nonempty_field_values(
         db[env("TARGET_COLLECTION", "sales_orders_sap")], "data.VBELN"
     )
 
 
-def sync_repair(db: Any, collection: str, checkpoint_collection: str, mode: str, start_date: date | None, end_date: date, lookback_days: int, batch_size: int, dry_run: bool, run_id: str, defer_finalize: bool = False, *, allow_large_cleanup: bool = False, preview_snapshot: Snapshot | None = None) -> dict[str, Any]:
+def sync_repair(
+    db: Any, collection: str, *, mode: str, start_date: date | None,
+    end_date: date, batch_size: int, dry_run: bool, run_id: str,
+    defer_finalize: bool = False, allow_large_cleanup: bool = False,
+    preview_snapshot: Snapshot | None = None,
+) -> dict[str, Any]:
     if mode not in {"incremental", "full", "monthly"}:
         raise ValueError("未知维修同步模式")
     if batch_size < 1 or not run_id:
@@ -268,14 +267,12 @@ def sync_repair(db: Any, collection: str, checkpoint_collection: str, mode: str,
     if start_date > end_date:
         raise ValueError("维修同步起始日期不能晚于结束日期")
     allowed_vbelns = sales_order_vbelns(db)
-    if not allowed_vbelns:
-        raise RuntimeError("sales_orders_sap 中没有有效 VBELN，拒绝同步维修数据")
-    sql, params = repair_query(mode, None, start_date, end_date)
+    sql, params = repair_query(start_date, end_date)
     stats: dict[str, Any] = {
         "success": False, "mode": mode, "strategy": "rolling_snapshot" if mode == "incremental" else "snapshot",
         "run_id": run_id, "snapshot_complete": False, "source_rows": 0, "unique_rows": 0,
         "duplicate_source_rows": 0, "matched_sales_orders": 0, "empty_sales_orders_retained": 0,
-        "unmatched_sales_orders_retained": 0, "filtered_missing_sales_order": 0, "batches": 0,
+        "unmatched_sales_orders_retained": 0, "batches": 0,
         "inserted": 0, "updated": 0, "unchanged": 0, "relinked": 0, "would_insert": 0, "would_update": 0,
         "sales_order_vbelns": len(allowed_vbelns), "allow_large_cleanup": allow_large_cleanup,
         "range": {"start": start_date.isoformat(), "end": end_date.isoformat()},
@@ -374,11 +371,11 @@ def sync_repair(db: Any, collection: str, checkpoint_collection: str, mode: str,
             target.bulk_write(operations, ordered=False)
     stats["success"] = True
     if not dry_run and not defer_finalize:
-        stats.update(finalize_repair_run(db, collection, checkpoint_collection, stats, run_id))
+        stats.update(finalize_repair_run(db, collection, stats, run_id))
     return stats
 
 
-def finalize_repair_run(db: Any, collection: str, checkpoint_collection: str, sync_result: Mapping[str, Any], run_id: str) -> dict[str, int]:
+def finalize_repair_run(db: Any, collection: str, sync_result: Mapping[str, Any], run_id: str) -> dict[str, int]:
     """Archive stale window records only after the validated workflow succeeds."""
     if not sync_result.get("success") or not sync_result.get("snapshot_complete") or sync_result.get("run_id") != run_id:
         raise ValueError("不能提交未完整校验或 run_id 不匹配的维修快照")
@@ -391,7 +388,7 @@ def finalize_repair_run(db: Any, collection: str, checkpoint_collection: str, sy
     })
     if covered_count != sync_result["unique_rows"]:
         raise RuntimeError("本次维修快照尚未完整写入，拒绝清理旧记录")
-    query = repair_cleanup_filter(str(sync_result["mode"]), run_id, start_date, end_date)
+    query = repair_cleanup_filter(run_id, start_date, end_date)
     stale_count = target.count_documents(query)
     existing_count = target.count_documents(repair_scope_filter(start_date, end_date))
     validate_repair_cleanup(existing_count, stale_count, sync_result["unique_rows"], sync_result.get("allow_large_cleanup", False))

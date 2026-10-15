@@ -82,7 +82,7 @@ GET /api/views/SCS_CHANGE?changeType=换上-up&partNumber=33000306&page=1&pageSi
 GET /api/views/SCS_CHANGE?serviceOrder=SH001&company5000=true
 ```
 
-SCS DOA 支持 `doaCode`、`doaType`、`status`、`customer`、`serviceOrder`、`sn`、`salesOrder`、`company5000`；时间字段是 `declare_time`。SCS 换上换下支持 `serviceOrder`、`customer`、`sn`、`changeType`、`partNumber`、`partSn`、`operator`、`needReturn`、`revoked`、`company5000`；时间字段是 `create_time`。
+SCS DOA 支持 `doaCode`、`doaType`、`status`、`customer`、`serviceOrder`、`sn`、`salesOrder`、`company5000`；时间字段是 `declare_time`。DOA 的 `is_5000_company` 直接按其销售订单号是否以 `XNC` 开头判定（忽略大小写、去除首尾空白），不关联交付明细。SCS 换上换下支持 `serviceOrder`、`customer`、`sn`、`changeType`、`partNumber`、`partSn`、`operator`、`needReturn`、`revoked`、`company5000`；时间字段是 `create_time`，公司归属通过服务单号继承 DOA。
 
 ## 5. 同步任务目录与依赖
 
@@ -95,10 +95,12 @@ SCS DOA 支持 `doaCode`、`doaType`、`status`、`customer`、`serviceOrder`、
 | `repair_records` | 维修故障 | `sales_orders`, `station_records` | 同步维修记录并执行关联清洗 |
 | `order_bom_postings` | BOM 过账 | `sales_orders` | 同步订单 BOM 过账记录 |
 | `serial_bindings` | 序列号绑定 | 无 | 同步机头与部件 SN 映射 |
-| `scs_doa` | SCS DOA | `sales_orders` | 同步 SCS DOA 申报及订单关联 |
+| `scs_doa` | SCS DOA | 无 | 同步 SCS DOA 申报，按订单号 `XNC` 前缀判定公司归属 |
 | `scs_change` | SCS 换上换下 | `scs_doa` | 同步换上换下记录及 5000 公司标识 |
 
-例如，请求 `scs_change` 会实际按 `sales_orders -> scs_doa -> scs_change` 执行。请求 `repair_records` 会先执行 `sales_orders -> station_records -> repair_records`。Agent 应把 API 返回的 `resolved_task_ids` 视为实际执行范围，而不是只复述提交时的 `taskIds`。
+例如，请求 `scs_change` 会实际按 `scs_doa -> scs_change` 执行。请求 `repair_records` 会先执行 `sales_orders -> station_records -> repair_records`。Agent 应把 API 返回的 `resolved_task_ids` 视为实际执行范围，而不是只复述提交时的 `taskIds`。
+
+销售订单交付明细同步自 2026-10-15 起暂停，已从任务目录移除，独立脚本返回 `task_paused`；现有数据保留供查询。
 
 ## 6. 增量与全量的选择
 

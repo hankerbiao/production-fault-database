@@ -1,7 +1,13 @@
-import { fetchPage } from '../api/client';
+import { fetchPage, get } from '../api/client';
 import { createCsv } from './formatters';
 
-export async function downloadCsv({ endpoint, filters, filename, columns, resolveColumns, pageSize = 100 }) {
+async function loadExportRows({ endpoint, allEndpoint, filters, pageSize }) {
+  if (allEndpoint) {
+    const data = await get(allEndpoint, filters);
+    const items = Array.isArray(data?.items) ? data.items : [];
+    const total = Number(data?.total);
+    if (Number.isFinite(total) && items.length >= total) return items;
+  }
   let page = 1;
   let total = Infinity;
   const rows = [];
@@ -13,6 +19,11 @@ export async function downloadCsv({ endpoint, filters, filename, columns, resolv
     if (items.length === 0 || items.length < pageSize) break;
     page += 1;
   }
+  return rows;
+}
+
+export async function downloadCsv({ endpoint, allEndpoint, filters, filename, columns, resolveColumns, pageSize = 100 }) {
+  const rows = await loadExportRows({ endpoint, allEndpoint, filters, pageSize });
   const csv = createCsv(rows, resolveColumns ? resolveColumns(rows) : columns);
   const blob = new Blob([`\uFEFF${csv}`], { type: 'text/csv;charset=utf-8' });
   const url = URL.createObjectURL(blob);

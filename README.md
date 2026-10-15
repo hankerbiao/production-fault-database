@@ -273,7 +273,7 @@ SAP SN 存在任一失败批次时，`--apply` 会在写入前停止。只有明
 | 数据来源 | SAP HANA 视图 `"_SYS_BIC"."BW_LOCAL.PP/ZSGV_ZZT_WLJL"` |
 | 目标集合 | `.env` 的 `REPAIR_COLLECTION`，默认 `repair_records_sap` |
 | 日期范围 | 按 `ZDATE_WX` 刷新当月及前两个月，最早 `2026-01-01`；结束日期由 `--sync-end-date` 指定。首次全部历史导入使用 `--mode full --start-date 2026-01-01` |
-| 销售订单匹配 | 必须有本地销售订单参考数据；空值和未匹配 VBELN 均保留并计数 |
+| 销售订单匹配 | 本地销售订单仅用于匹配统计；参考数据为空不阻断同步，空值和未匹配 VBELN 均保留并计数 |
 | 业务唯一键 | `MANDT + PCODE + ZWXDT + ZMCOD1 + ZMCOD2`；身份缺失或冲突阻断，不使用可变整行哈希 |
 | 增量水位 | 不再读取或推进旧 `ZDATE + ZTIME` 水位，使用滚动快照 |
 | 写入方式 | 完整源数据在临时 SQLite 校验后，MongoDB 分批幂等写入和回填 |
@@ -387,6 +387,22 @@ MongoDB 的 `sync_locks` 租约锁跨主机协调；租约时长由 `SYNC_MONGO_
 `scripts/sources/scs_doa_sync.py` 登录 SCS 后同步 DOA 申报列表，并沿服务单和物料 SN
 补充设备、产品实体信息。目标集合默认为 `scs_doa_records`，检查点写入
 `sync_checkpoints` 的 `_id=scs_doa`，以 `declare_time` 作为增量水位；DOA 申报单号是稳定幂等键。
+
+`is_5000_company` 直接按 DOA 自身销售订单号是否以 `XNC` 开头判定，去除首尾空白并忽略大小写；
+订单号为空或其他前缀时为 false，不再关联销售订单交付明细，也不对订单号补位。
+同步写入、详情补偿和历史刷新均使用同一规则。详情无有效订单号时保留已有 `sales_order`。
+
+刷新已有 DOA 以及依赖其服务单归属的换上换下记录：
+
+```bash
+.venv/bin/python scripts/maintenance/refresh_scs_5000_company.py
+.venv/bin/python scripts/maintenance/refresh_scs_5000_company.py --apply
+```
+
+默认仅预览预计变更数，`--apply` 按集合资源锁分批更新，重复执行只更新变化值。
+销售订单交付明细同步自 2026-10-15 起暂停：已从统一任务清单移除，独立脚本返回
+`task_paused`，现有数据保留供查询。SCS DOA 无前置数据同步依赖，换上换下仍依赖 DOA。
+已运行的 Go 后端需重新构建并重启，以更新嵌入的任务目录。
 
 在 `.env` 中配置 `SCS_USERNAME`、`SCS_PASSWORD`，以及已有的 MongoDB 配置。首次全量同步：
 

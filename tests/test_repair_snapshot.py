@@ -113,8 +113,9 @@ def source(monkeypatch, rows, *, fail_after_first=False):
 
 def run(db, run_id="run-1", **kwargs):
     return sync.sync_repair(
-        db, "repairs", "checkpoints", "incremental", None,
-        date(2026, 10, 14), 7, 1, False, run_id, **kwargs,
+        db, "repairs", mode="incremental", start_date=None,
+        end_date=date(2026, 10, 14), batch_size=1,
+        dry_run=kwargs.pop("dry_run", False), run_id=run_id, **kwargs,
     )
 
 
@@ -126,7 +127,8 @@ def run(db, run_id="run-1", **kwargs):
 def test_window_uses_three_calendar_months_and_hard_lower_bound(monkeypatch, end, expected):
     db = seed_db(monkeypatch)
     calls = source(monkeypatch, [])
-    result = sync.sync_repair(db, "repairs", "checkpoints", "incremental", None, end, 7, 1, True, "dry")
+    result = sync.sync_repair(db, "repairs", mode="incremental", start_date=None,
+                             end_date=end, batch_size=1, dry_run=True, run_id="dry")
     assert result["range"] == {"start": expected.isoformat(), "end": end.isoformat()}
     assert calls[0][1] == (expected.strftime("%Y%m%d"), end.strftime("%Y%m%d"))
     assert '"ZDATE" >' not in calls[0][0]
@@ -204,10 +206,23 @@ def test_invalid_snapshot_does_not_write_or_cleanup(monkeypatch, broken):
 def test_dry_run_predicts_changes_without_writing(monkeypatch):
     db = seed_db(monkeypatch)
     source(monkeypatch, [repair(), repair()])
-    result = sync.sync_repair(db, "repairs", "checkpoints", "incremental", None, date(2026, 10, 14), 7, 1, True, "dry")
+    result = run(db, run_id="dry", dry_run=True)
     assert result["unique_rows"] == 1 and result["duplicate_source_rows"] == 1
     assert result["would_insert"] == 1
     assert db["repairs"].docs == [] and db["repairs"].indexes == []
+
+
+@pytest.mark.parametrize("dry_run", [False, True])
+def test_snapshot_retains_repairs_when_sales_reference_is_empty(monkeypatch, dry_run):
+    db = seed_db(monkeypatch)
+    db["orders"].docs = []
+    source(monkeypatch, [repair(), repair(PCODE="PC-2", VBELN="")])
+    result = run(db, dry_run=dry_run)
+    assert result["success"]
+    assert result["sales_order_vbelns"] == 0
+    assert result["unmatched_sales_orders_retained"] == 1
+    assert result["empty_sales_orders_retained"] == 1
+    assert len(db["repairs"].docs) == (0 if dry_run else 2)
 
 
 def test_cleanup_uses_repair_date_and_keeps_outside_window(monkeypatch):
@@ -246,9 +261,9 @@ def test_deferred_cleanup_requires_validated_matching_run(monkeypatch):
     source(monkeypatch, [repair()])
     result = run(db, defer_finalize=True)
     with pytest.raises(ValueError):
-        sync.finalize_repair_run(db, "repairs", "checkpoints", result, "wrong-run")
+        sync.finalize_repair_run(db, "repairs", result, "wrong-run")
     with pytest.raises(ValueError):
-        sync.finalize_repair_run(db, "repairs", "checkpoints", {**result, "snapshot_complete": False}, "run-1")
+        sync.finalize_repair_run(db, "repairs", {**result, "snapshot_complete": False}, "run-1")
 
 
 def test_source_refresh_preserves_backfilled_orders_and_invalidates_changed_production(monkeypatch):
@@ -330,7 +345,7 @@ def test_archive_failure_never_deletes_stale_documents(monkeypatch):
 
     monkeypatch.setattr(db["repairs_archive"], "bulk_write", fail)
     with pytest.raises(RuntimeError, match="archive failed"):
-        sync.finalize_repair_run(db, "repairs", "checkpoints", result, "run-1")
+        sync.finalize_repair_run(db, "repairs", result, "run-1")
     assert any(doc["_id"] == "old" for doc in db["repairs"].docs)
 
 
@@ -387,7 +402,7 @@ def test_partial_target_write_is_detected_before_cleanup(monkeypatch):
     result = run(db, defer_finalize=True)
     db["repairs"].docs = [doc for doc in db["repairs"].docs if doc["_id"] == "old"]
     with pytest.raises(RuntimeError, match="尚未完整写入"):
-        sync.finalize_repair_run(db, "repairs", "checkpoints", result, "run-1")
+        sync.finalize_repair_run(db, "repairs", result, "run-1")
     assert db["repairs"].docs[0]["_id"] == "old"
     assert db["repairs_archive"].docs == []
 

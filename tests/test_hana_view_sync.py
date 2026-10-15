@@ -1,8 +1,40 @@
 from types import SimpleNamespace
 
+import pytest
 from pymongo.errors import OperationFailure
 
 from scripts.sources.hana import hana_view_sync as sync
+from scripts.sync import sales_order_delivery_records as delivery_sync
+
+
+def test_sales_order_delivery_sync_date_parser_accepts_iso_and_compact_dates():
+    assert delivery_sync.parse_date("2025-12-01") == "20251201"
+    assert delivery_sync.parse_date("20251231") == "20251231"
+
+
+def test_sales_order_delivery_sync_date_parser_rejects_invalid_dates():
+    import pytest
+
+    with pytest.raises(Exception, match="无效日期"):
+        delivery_sync.parse_date("2025-02-30")
+
+
+@pytest.mark.parametrize("arguments", [
+    [], ["--apply"], ["--dry-run"], ["--mode", "full", "--apply"],
+])
+def test_paused_delivery_entry_does_not_read_or_write_sources(monkeypatch, capsys, arguments):
+    import json
+
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("Paused delivery sync must not access MongoDB or HANA")
+
+    monkeypatch.setattr("sys.argv", ["sales_order_delivery_records.py", *arguments])
+    monkeypatch.setattr(delivery_sync, "sync_view", forbidden)
+    monkeypatch.setattr(delivery_sync, "MongoClient", forbidden)
+    assert delivery_sync.main() == 1
+    result = json.loads(capsys.readouterr().out)
+    assert result["success"] is False
+    assert result["error"]["code"] == "task_paused"
 
 
 def test_documented_view_specs_are_registered():

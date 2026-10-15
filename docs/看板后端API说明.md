@@ -295,7 +295,7 @@ GET /api/views/{viewID}/detail?id={id}
 
 `ZSGV_ZSD124` 的 BOM 过账详情字段使用业务中文标签，例如 `MBLNR` 为“物料凭证号”、`MJAHR` 为“物料凭证年度”、`ZEILE` 为“物料凭证行项目”、`MATNR` 为“物料号”、`BWART` 为“移动类型”、`MENGE_A` 为“过账数量”、`AUFNR_1` 为“生产订单”、`VBELN_EX` 为“销售订单”、`GSTRS` 为“计划开始时间”、`BUDAT_MKPF` 为“过账日期”。同步审计字段也会显示为“源记录键”“源视图”“同步批次标识”“同步时间”等中文标签。
 
-`SCS_DOA` 详情保留 DOA 列表字段、`sales_order`、`is_5000_company` 以及 `details` 中的申报、服务单、设备和产品实体字段；`details` 是 JSON 字符串。`is_5000_company` 表示 `sales_order` 是否存在于 `sales_orders_sap.data.VBELN`。
+`SCS_DOA` 详情保留 DOA 列表字段、`sales_order`、`is_5000_company` 以及 `details` 中的申报、服务单、设备和产品实体字段；`details` 是 JSON 字符串。`is_5000_company` 表示 DOA 自身 `sales_order` 去除首尾空白后是否以 `XNC` 开头（忽略大小写）；空值或其他前缀均为 false，不再关联销售订单交付明细或销售订单表。
 
 `SCS_CHANGE` 详情保留换上换下结果表字段：`so_code`、`customer_name`、`device_sn`、`change_type`、`part_number`、`part_sn`、`part_name`、`original_code`、`remark`、`need_return`、`operator`、`create_time`、`is_revoked`、`revoked_by`、`revoked_time` 和 `is_5000_company`。该标识通过服务单号匹配已判定为 5000 公司的 `SCS_DOA` 记录。
 

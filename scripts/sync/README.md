@@ -10,22 +10,32 @@
 | `order_bom_postings.py` | BOM 过账 `order_bom_postings_sap` | `python scripts/sync/order_bom_postings.py --mode incremental --apply` |
 | `../maintenance/backfill_order_bom_planned_start.py` | BOM 计划开始时间 | `python scripts/maintenance/backfill_order_bom_planned_start.py --apply` |
 | `serial_bindings.py` | 序列号绑定 `serial_bindings_sap` | `python scripts/sync/serial_bindings.py --mode incremental --apply` |
-| `sales_order_delivery_records.py` | 2026 销售订单交付明细 `sales_order_delivery_records_sap` | `python scripts/sync/sales_order_delivery_records.py --mode incremental --apply` |
+| `sales_order_delivery_records.py` | 2026 销售订单交付明细 `sales_order_delivery_records_sap` | 暂停同步，独立入口返回 `task_paused` |
 | `../sources/scs_doa_sync.py` | SCS DOA | `python scripts/sources/scs_doa_sync.py` |
 | `../sources/scs_change_sync.py` | SCS 换上换下 | `python scripts/sources/scs_change_sync.py` |
 
 ## 执行顺序
 
-`syncctl.py run --mode incremental` 按注册表串行运行销售订单、工位、维修、BOM、BOM 计划开始时间回填、序列号、交付明细、SCS DOA 和 SCS 换上换下；会自动补齐选中任务的依赖。Python 与 Go 共用 `backend/internal/syncmanifest/tasks.json`，修改任务时只维护这一份目录。维修任务在该入口下完整刷新当月及前两个月，其他任务继续使用各自的增量机制。运行状态、阶段摘要和失败原因存入 MongoDB 的 `sync_orchestrator_runs`。维修清洗依赖已同步的销售订单和工位数据。
+`syncctl.py run --mode incremental` 按注册表串行运行销售订单、工位、维修、BOM、BOM 计划开始时间回填、序列号、SCS DOA 和 SCS 换上换下；会自动补齐选中任务的依赖。Python 与 Go 共用 `backend/internal/syncmanifest/tasks.json`，修改任务时只维护这一份目录。维修任务在该入口下完整刷新当月及前两个月，其他任务继续使用各自的增量机制。运行状态、阶段摘要和失败原因存入 MongoDB 的 `sync_orchestrator_runs`。维修清洗使用销售订单和工位参考数据；SCS DOA 直接按自身销售订单号是否以 `XNC` 开头判定 5000 公司，不读取交付明细或销售订单参考表。换上换下继续依赖 DOA，以服务单号继承公司归属。
 
 ```bash
 .venv/bin/python scripts/sync/syncctl.py run --mode incremental
 .venv/bin/python scripts/sync/syncctl.py run --mode full --tasks repair_records --start-date 2026-01-01
-.venv/bin/python scripts/sync/syncctl.py run --mode full --tasks sales_order_delivery_records --start-date 2026-01-01 --end-date 2026-12-31
 .venv/bin/python scripts/sync/syncctl.py tasks
 ```
 
-销售订单交付明细任务的日期边界固定为 `ERDAT` 2026 全年，编排器的其他日期参数不会扩大或缩小该数据集。首次可先运行 `python scripts/sync/sales_order_delivery_records.py --mode full --dry-run` 核对读取量，再通过同步管理页执行全量写入；日常编排使用增量模式并回看 7 天。源视图没有修改时间字段，因此超过回看期的历史更正需通过全量任务重新对账。
+自 2026-10-15 起暂停销售订单交付明细同步：任务已从注册表移除，全量、增量和单独指定该任务均不会执行；独立脚本也会以非零状态返回 `task_paused`，不访问 HANA 或 MongoDB。原有交付数据继续保留供查询。Go 的任务清单嵌入二进制，已运行的后端需重新构建并重启才能更新同步管理目录。恢复时需重新注册任务并解除脚本的 `SYNC_PAUSED` 保护；独立脚本默认查询 `ERDAT` 2026 全年，可通过 `--start-date` 和 `--end-date` 指定日期范围。
+
+DOA 判定从详情中的合同/订单号提取 `sales_order`，详情无有效订单号时沿用已有 `sales_order`；去除首尾空白后，以大小写不敏感的 `XNC` 前缀判定，其他值及空值均为 false，不再对订单号补位。同步列表写入、历史详情补偿和历史归属重算使用同一判定函数。
+
+刷新已有 DOA 及其关联换上换下记录，无需重新抓取 SCS 或同步交付明细：
+
+```bash
+.venv/bin/python scripts/maintenance/refresh_scs_5000_company.py
+.venv/bin/python scripts/maintenance/refresh_scs_5000_company.py --apply
+```
+
+默认只读预览输出两类记录的预计变更数。`--apply` 持有两个目标集合的资源锁，先更新 DOA，再按更新后的 DOA 服务单集合重算换上换下标记；只写入变化值，重复执行应为零变更。
 
 销售订单全量默认只在 `start-date` 不晚于 `2026-01-01` 且结束日期覆盖当天时清理范围外旧单。从更晚日期重建只会 upsert，不会删除历史月份。强制整表替换需直接调用脚本并同时传入 `--replace-collection --confirm-delete`。
 
@@ -43,15 +53,15 @@ HANA 和 SCS 先把完整源结果落入临时 SQLite，再校验业务键。相
 
 SCS 不按页码或行偏移跳过旧记录；重跑从窗口第一页读取，用业务键去重。分页错误、登录页和异常表结构均视为失败。DOA 详情失败保留旧有效详情，以 `_detail_pending`、`_detail_error` 和 `_detail_attempted_at` 记录补偿状态；每次额外补偿最多 `SCS_DETAIL_RETRY_LIMIT` 条历史待补记录，默认 100。两个 SCS 任务重算历史公司归属，只有值变化才写入。
 
-交付明细成功提交后发布 `sync_dataset_versions` 的 `ZSGV_ZSD46N_SO_KK` 版本。后端每 30 秒检查源版本，沿用现有 Go 物化汇总实现刷新；汇总构建前后检查源版本和写入锁，源发生变化则放弃发布。更新后需重启后端以启用此监听；首次成功同步会使旧汇总失效。检测到源同步或汇总刷新期间，查询回退到源聚合。
+交付明细在源快照校验通过、写入前发布 `sync_dataset_versions` 的 `ZSGV_ZSD46N_SO_KK` 版本 `<run_id>:writing`，成功提交后发布 `<run_id>`。写入或清理失败时保留写入版本，使部分写入也能触发旧汇总失效；预览和源校验失败不更新版本。后端每 30 秒检查源版本，沿用现有 Go 物化汇总实现刷新；汇总构建前后检查源版本和写入锁，源发生变化则放弃发布。更新后需重启后端以启用此监听。检测到源同步或汇总刷新期间，查询回退到源聚合。
 
-序列号视图没有日期字段，`incremental` 仍读取全表并修复历史精确重复，但只在 `full` 时清理源中已消失记录。工位开始时间、交付创建日期和 SCS 创建日期不能反映所有历史修改，超出回看期的更正需要指定范围的全量对账。交付明细与 SCS 换上换下继续固定 2026 年范围。
+序列号视图没有日期字段，`incremental` 仍读取全表并修复历史精确重复，但只在 `full` 时清理源中已消失记录。工位开始时间、交付创建日期和 SCS 创建日期不能反映所有历史修改，超出回看期的更正需要指定范围的全量对账。SCS 换上换下继续固定 2026 年范围，交付明细当前暂停同步。
 
 维修记录默认按 `ZDATE_WX` 维修日期刷新当月及前两个月。例如结束日期为 `2026-10-14` 时，窗口为 `2026-08-01` 至 `2026-10-14`（包含边界），最早不超过 `2026-01-01`。不再读取或推进维修 `ZDATE/ZTIME` 检查点，`--sync-lookback-days` 仅保留命令兼容。已有历史数据继续保留；首次导入全部历史仍需使用 `full`。
 
 维修明细身份为 `MANDT + PCODE + ZWXDT + ZMCOD1 + ZMCOD2`，允许更换前后部件码为空；不包含读取日期和时间。相同维修时间可能对应多条部件明细，不能仅按主机和时间合并。身份缺失或同一身份对应不同源内容时，整次快照在 MongoDB 写入前失败。同内容源重复只保留一份。部件码更正会改变明细身份，但成功的窗口对账会归档清除旧明细。
 
-脚本先把完整 HANA 结果保存到临时 SQLite 快照并校验，再按 `_repair_id` 写入和回填，最后核对正式集合的本次覆盖数量与快照一致后，归档清理该维修日期范围内未覆盖的旧记录。窗口之外和其他源视图不参与清理；订单未匹配的源维修记录保留并单独计数。旧文档优先原地迁移并保存 `_legacy_ids`，后端详情查询同时接受这些旧 ID。被清理的完整记录保存在 `<维修集合>_archive`，带有运行 ID、日期范围及归档原因。源内容无变化时只更新覆盖标记和最近核对时间，不改 `_synced_at`。
+脚本先把完整 HANA 结果保存到临时 SQLite 快照并校验，再按 `_repair_id` 写入和回填，最后核对正式集合的本次覆盖数量与快照一致后，归档清理该维修日期范围内未覆盖的旧记录。窗口之外和其他源视图不参与清理；本地销售订单仅用于匹配统计，参考数据为空不阻断同步，订单空值和未匹配的源维修记录保留并单独计数。旧文档优先原地迁移并保存 `_legacy_ids`，后端详情查询同时接受这些旧 ID。被清理的完整记录保存在 `<维修集合>_archive`，带有运行 ID、日期范围及归档原因。源内容无变化时只更新覆盖标记和最近核对时间，不改 `_synced_at`。
 
 源内容变化时保留已回填的订单字段；源生产订单变化时清空原计划日期及不适用的销售订单，以便重新回填。日常回填只处理当前快照，工位查询按对应主机条码限制范围；`--skip-hana-sync` 保留单独回填历史未解决记录的入口。源读取、写入、回填或归档失败都不会进入后续清理；写入和清理不是整窗口原子操作，失败后可重跑恢复。
 

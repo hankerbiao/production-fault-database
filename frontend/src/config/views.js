@@ -10,7 +10,8 @@ export const viewConfigs = {
     totalStatKey: "total",
     resultCountUnit: "个销售订单",
     resultItemUnit: "个销售订单",
-    exportEndpoint: "/api/views/ZSGV_ZSD46N_SO_KK/all",
+    exportAllEndpoint: "/api/views/ZSGV_ZSD46N_SO_KK/all",
+    autoLoad: false,
     showProductionOrder: false,
     showSalesOrder: false,
     showProductModel: false,
@@ -181,6 +182,8 @@ export const viewConfigs = {
     showSalesOrder: false,
     showProductModel: false,
     bilingual: false,
+    defaultFilters: { company5000: "true" },
+    showCompany5000: true,
     advancedFields: [
       { key: "doaCode", placeholder: "DOA申报单号" },
       { key: "serviceOrder", placeholder: "服务单号 / SH" },
@@ -206,7 +209,6 @@ export const viewConfigs = {
         ],
       },
       { key: "salesOrder", placeholder: "销售订单" },
-      { key: "company5000", type: "checkbox", label: "是否为5000公司" },
     ],
     columns: [
       "doa_code", "doa_type", "service_uid", "status", "doa_judge", "customer_uid",

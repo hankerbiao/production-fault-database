@@ -362,49 +362,36 @@ def extract_sales_order(details: dict[str, Any]) -> str:
     return ""
 
 
-def load_5000_customer_purchase_orders(
-    database: Any,
-    collection_name: str | None = None,
-) -> set[str]:
-    """Load BSTNK values for delivery rows classified as 5000-company orders."""
-    collection_name = collection_name or env(
-        "SALES_ORDER_DELIVERY_COLLECTION",
-        "sales_order_delivery_records_sap",
-    )
-    values: set[str] = set()
-    query = {"VBELN": {"$regex": "^XNC", "$options": "i"}}
-    for document in database[collection_name].find(query, {"BSTNK": 1}):
-        value = text(document.get("BSTNK"))
-        if value:
-            values.add(value)
-    return values
-
-
-def classify_doa_document(document: dict[str, Any], customer_purchase_orders: set[str]) -> dict[str, Any]:
-    """Classify a DOA by matching its order number to a 5000-company BSTNK."""
+def classify_doa_document(document: dict[str, Any]) -> dict[str, Any]:
+    """Classify a DOA directly by its sales-order prefix."""
     sales_order = extract_sales_order(document.get("details", {})) or text(document.get("sales_order"))
     return {
         "sales_order": sales_order,
-        "is_5000_company": bool(sales_order and sales_order in customer_purchase_orders),
+        "is_5000_company": sales_order.upper().startswith("XNC"),
     }
 
 
-def backfill_5000_company(database: Any, collection_name: str, customer_purchase_orders: set[str]) -> int:
-    """Re-evaluate every existing DOA document against delivery-order rows."""
+def backfill_5000_company(database: Any, collection_name: str) -> int:
+    """Re-evaluate every existing DOA document using the sales-order prefix."""
     collection = database[collection_name]
     operations: list[UpdateOne] = []
     modified = 0
-    for document in collection.find({}, {"sales_order": 1, "details.fields": 1, "is_5000_company": 1}):
-        derived = classify_doa_document(document, customer_purchase_orders)
-        if document.get("sales_order") != derived["sales_order"] or document.get("is_5000_company") != derived["is_5000_company"]:
-            operations.append(UpdateOne({"_id": document["_id"]}, {"$set": derived}))
-        if len(operations) >= 500:
+    cursor = collection.find({}, {"sales_order": 1, "details.fields": 1, "is_5000_company": 1})
+    try:
+        for document in cursor:
+            derived = classify_doa_document(document)
+            if document.get("sales_order") != derived["sales_order"] or document.get("is_5000_company") != derived["is_5000_company"]:
+                operations.append(UpdateOne({"_id": document["_id"]}, {"$set": derived}))
+            if len(operations) >= 500:
+                check_leases(verify=True)
+                modified += collection.bulk_write(operations, ordered=False).modified_count
+                operations.clear()
+        if operations:
             check_leases(verify=True)
             modified += collection.bulk_write(operations, ordered=False).modified_count
-            operations.clear()
-    if operations:
-        check_leases(verify=True)
-        modified += collection.bulk_write(operations, ordered=False).modified_count
+    finally:
+        if hasattr(cursor, "close"):
+            cursor.close()
     return modified
 
 
@@ -452,7 +439,6 @@ def sync(args: argparse.Namespace) -> dict[str, Any]:
                 "query_start": start, "query_end": end, "run_id": run_id,
                 "updated_at": datetime.now(timezone.utc),
             }}, upsert=True)
-            customer_purchase_orders = load_5000_customer_purchase_orders(db)
             coll.create_index("_source_key", unique=True, name="scs_doa_source_key")
             operations: list[UpdateOne] = []
             watermark = parse_datetime((checkpoint or {}).get("watermark"))
@@ -476,7 +462,7 @@ def sync(args: argparse.Namespace) -> dict[str, Any]:
                 doc.update({"_source_key": key, "_source": "scs", "_context_value": row.get("_context_value", ""),
                     "_detail_href": row.get("_detail_href", ""), "_sync_run_id": run_id,
                     "_synced_at": datetime.now(timezone.utc)})
-                doc.update(classify_doa_document(doc, customer_purchase_orders))
+                doc.update(classify_doa_document({**(existing or {}), **doc}))
                 operations.append(UpdateOne({"_source_key": key}, {"$set": doc,
                     "$setOnInsert": {"_id": hashlib.sha256(key.encode()).hexdigest()}}, upsert=True))
                 if len(operations) >= batch_size:
@@ -497,12 +483,12 @@ def sync(args: argparse.Namespace) -> dict[str, Any]:
                     row = {**document, "_context_value": document.get("_context_value") or
                            (document.get("details") or {}).get("context_value", "")}
                     updates = refreshed_details(http, row, document, stats)
-                    updates.update(classify_doa_document({**document, **updates}, customer_purchase_orders))
+                    updates.update(classify_doa_document({**document, **updates}))
                     check_leases(verify=True)
                     coll.update_one({"_id": document["_id"]}, {"$set": updates})
             finally:
                 pending.close()
-            stats["5000_company_backfilled"] = backfill_5000_company(db, collection_name, customer_purchase_orders)
+            stats["5000_company_backfilled"] = backfill_5000_company(db, collection_name)
             check_leases(verify=True)
             checkpoints.update_one({"_id": CHECKPOINT_ID}, {"$set": {
                 "status": "completed", "watermark": watermark.isoformat() if watermark else None,

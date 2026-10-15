@@ -29,7 +29,6 @@ from scripts.sources.scs_change_sync import (
 from scripts.sources.scs_doa_sync import (
     backfill_5000_company,
     classify_doa_document,
-    load_5000_customer_purchase_orders,
 )
 from scripts.sync_runtime import resource_lock
 
@@ -39,7 +38,6 @@ def build_refresh_plan(
     *,
     doa_collection: str,
     change_collection: str,
-    customer_purchase_orders: set[str],
 ) -> dict[str, int]:
     doa = database[doa_collection]
     company_service_orders: set[str] = set()
@@ -57,7 +55,7 @@ def build_refresh_plan(
     )
     try:
         for document in cursor:
-            derived = classify_doa_document(document, customer_purchase_orders)
+            derived = classify_doa_document(document)
             if (
                 document.get("sales_order") != derived["sales_order"]
                 or document.get("is_5000_company") != derived["is_5000_company"]
@@ -91,29 +89,19 @@ def build_refresh_plan(
 def refresh(database: Any, *, apply: bool) -> dict[str, Any]:
     doa_collection = env("SCS_DOA_COLLECTION", "scs_doa_records")
     change_collection = env("SCS_CHANGE_COLLECTION", "scs_change_records")
-    delivery_collection = env(
-        "SALES_ORDER_DELIVERY_COLLECTION",
-        "sales_order_delivery_records_sap",
-    )
 
     def run() -> dict[str, Any]:
-        customer_purchase_orders = load_5000_customer_purchase_orders(
-            database,
-            delivery_collection,
-        )
         plan = build_refresh_plan(
             database,
             doa_collection=doa_collection,
             change_collection=change_collection,
-            customer_purchase_orders=customer_purchase_orders,
         )
         result: dict[str, Any] = {
             "success": True,
             "dry_run": not apply,
-            "delivery_collection": delivery_collection,
+            "classification_rule": "sales_order_prefix_XNC",
             "doa_collection": doa_collection,
             "change_collection": change_collection,
-            "company_purchase_orders": len(customer_purchase_orders),
             **plan,
         }
         if not apply:
@@ -122,7 +110,6 @@ def refresh(database: Any, *, apply: bool) -> dict[str, Any]:
         result["doa_updated"] = backfill_5000_company(
             database,
             doa_collection,
-            customer_purchase_orders,
         )
         company_service_orders = load_5000_service_orders(database, doa_collection)
         result["change_updated"] = backfill_company(
@@ -143,7 +130,7 @@ def refresh(database: Any, *, apply: bool) -> dict[str, Any]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="按销售订单交付明细中的 BSTNK 重算现有 SCS 5000 公司标记"
+        description="按 DOA 销售订单号 XNC 前缀重算现有 SCS 5000 公司标记"
     )
     parser.add_argument(
         "--apply",

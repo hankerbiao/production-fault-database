@@ -366,12 +366,12 @@ func TestOrderCustomerIDs(t *testing.T) {
 }
 
 func TestFilterHelpers(t *testing.T) {
-	q := url.Values{"keyword": {" a "}, "source": {" SG "}, "sns": {"SN1,SN2"}, "productionOrders": {"00012,13"}, "dateFrom": {"2026-01-01"}, "station": {"ST-1"}, "timeField": {" planned "}, "company5000": {" 是 "}, "nonCriticalMaterialSerial": {" 37001343 "}}
+	q := url.Values{"keyword": {" a "}, "source": {" SG "}, "sns": {"SN1,SN2"}, "productionOrders": {"00012,13"}, "dateFrom": {"2026-01-01"}, "station": {"ST-1"}, "timeField": {" planned "}, "company5000": {" 是 "}, "nonCriticalMaterialSerial": {" 37001343 "}, "materialCode": {" MAT-1 "}}
 	if repairFilters(q).Keyword != "a" || orderFilters(q).Source != "SG" {
 		t.Fatal("query values were not trimmed")
 	}
 	filters := repairFilters(q)
-	if filters.SNS != "SN1,SN2" || filters.ProductionOrders != "00012,13" || filters.DateFrom != "2026-01-01" || filters.Station != "ST-1" || filters.TimeField != "planned" || filters.Company5000 != "yes" || filters.NonCriticalMaterialSerial != "37001343" {
+	if filters.SNS != "SN1,SN2" || filters.ProductionOrders != "00012,13" || filters.DateFrom != "2026-01-01" || filters.Station != "ST-1" || filters.TimeField != "planned" || filters.Company5000 != "yes" || filters.NonCriticalMaterialSerial != "37001343" || filters.MaterialCode != "MAT-1" {
 		t.Fatalf("extended filters=%+v", filters)
 	}
 	parsedViewFilters := viewFilters(url.Values{"missingSalesOrder": {" true "}, "orderType": {" ZP01 "}})

@@ -25,7 +25,7 @@ function mockFetch({ fail = false } = {}) {
     if (String(url).startsWith('/api/views/ZSGV_ZSD124?')) return { ok: true, json: async () => ({ items: [{ id: 'bom-1', MATNR: 'MAT-1', AUART: 'ZP01' }], total: 2 }) };
     if (String(url).startsWith('/api/views/ZSGV_ZSD124/stats')) return { ok: true, json: async () => ({ total: 2, salesOrders: 1, productionOrders: 2, missingSalesOrder: 3, missingProductionOrder: 4, missingProductionOrderDistinct: 2, dataStartDate: '20260102', dataEndDate: '20260102', latestSyncedAt: '2026-01-02T03:04:05Z' }) };
     if (String(url).startsWith('/api/views/ZSGV_ZSD124/detail')) return { ok: true, json: async () => ({ fields: [{ key: 'MATNR', label: '物料号', value: 'MAT-1' }] }) };
-    if (String(url).startsWith('/api/views/ZSGV_ZSD46N_SO_KK?') || String(url).startsWith('/api/views/ZSGV_ZSD46N_SO_KK/all?')) return { ok: true, json: async () => ({ items: [{ id: 'delivery-1', ERDAT: '20260102', VBELN: 'SO-1', KUNNR: 'C-1', NAME1: '示例客户', BSTNK: 'PO-1', BZTXT: '服务器产品事业部', VKORG: '1000', VKBUR: '001', CMGST: 'A', orderItemCount: 2, deliveryCount: 1, deliveryLineCount: 2, materialCount: 2, serialCount: 3, KWMENG: 10, LFIMG: 8, STRAS: 'private address', TELF1: 'private phone', ORT01: 'private city' }], total: 1 }) };
+    if (String(url).startsWith('/api/views/ZSGV_ZSD46N_SO_KK?') || String(url) === '/api/views/ZSGV_ZSD46N_SO_KK/all' || String(url).startsWith('/api/views/ZSGV_ZSD46N_SO_KK/all?')) return { ok: true, json: async () => ({ items: [{ id: 'delivery-1', ERDAT: '20260102', VBELN: 'SO-1', KUNNR: 'C-1', NAME1: '示例客户', BSTNK: 'PO-1', BZTXT: '服务器产品事业部', VKORG: '1000', VKBUR: '001', CMGST: 'A', orderItemCount: 2, deliveryCount: 1, deliveryLineCount: 2, materialCount: 2, serialCount: 3, KWMENG: 10, LFIMG: 8, STRAS: 'private address', TELF1: 'private phone', ORT01: 'private city' }], total: 1 }) };
     if (String(url).startsWith('/api/views/ZSGV_ZSD46N_SO_KK/options')) return { ok: true, json: async () => ({ items: ['服务器产品事业部', '金融业务群'] }) };
     if (String(url).startsWith('/api/views/ZSGV_ZSD46N_SO_KK/stats')) return { ok: true, json: async () => ({ total: 1, salesOrders: 1, dataStartDate: '20260102', dataEndDate: '20260102', latestSyncedAt: '2026-01-02T03:04:05Z' }) };
     if (String(url).startsWith('/api/views/ZSGV_ZSD46N_SO_KK/detail')) return { ok: true, json: async () => ({ fields: [{ key: 'VBELN', label: '销售订单', value: 'SO-1' }] }) };
@@ -51,6 +51,8 @@ describe('operations workbench', () => {
     render(<App />);
     fireEvent.click(screen.getAllByRole('button', { name: /销售订单交付明细/ })[0]);
     expect(await screen.findByRole('heading', { name: '销售订单交付明细' })).toBeInTheDocument();
+    expect(fetchMock.mock.calls.some(([url]) => String(url).startsWith('/api/views/ZSGV_ZSD46N_SO_KK?'))).toBe(false);
+    expect(fetchMock.mock.calls.some(([url]) => String(url).startsWith('/api/views/ZSGV_ZSD46N_SO_KK/stats'))).toBe(false);
     for (const column of ['创建日期', '销售订单', '客户采购订单', '销售地区名称', '订单行数', '交货单数', '交货行数', '物料数', '序列号数', '订单数量合计', '交货数量合计']) {
       expect(screen.getByRole('columnheader', { name: column })).toBeInTheDocument();
     }
@@ -77,7 +79,12 @@ describe('operations workbench', () => {
     expect(csv).toContain('订单行数');
     expect(csv).toContain('交货数量合计');
     expect(csv).not.toContain('交货单行项目');
-    expect(fetchMock.mock.calls.some(([url]) => String(url).startsWith('/api/views/ZSGV_ZSD46N_SO_KK/all?'))).toBe(true);
+    const exportCalls = fetchMock.mock.calls.filter(([url]) => String(url).startsWith('/api/views/ZSGV_ZSD46N_SO_KK/all?'));
+    expect(exportCalls).toHaveLength(1);
+    const exportQuery = new URL(exportCalls[0][0], 'http://localhost').searchParams;
+    expect(exportQuery.get('salesOrder')).toBe('SO-1');
+    expect(exportQuery.has('page')).toBe(false);
+    expect(exportQuery.has('pageSize')).toBe(false);
     expect(csv).not.toContain('private address');
     expect(csv).not.toContain('private phone');
     expect(csv).not.toContain('private city');
@@ -193,6 +200,29 @@ describe('operations workbench', () => {
     await waitFor(() => expect(fetchMock.mock.calls.some(([url]) => String(url).includes('nonCriticalMaterialSerial=37001343'))).toBe(true));
   });
 
+  it('keeps common repair filters visible and filters advanced sales order, model, and material', async () => {
+    const fetchMock = mockFetch();
+    vi.stubGlobal('fetch', fetchMock);
+    render(<App />);
+    await screen.findByRole('heading', { name: '维修故障记录' });
+    expect(screen.getByLabelText('关键字').closest('.filter-form-body')).not.toBeNull();
+    expect(screen.getByLabelText('主机条码').closest('.filter-form-body')).not.toBeNull();
+    expect(screen.queryByLabelText('销售订单')).not.toBeInTheDocument();
+    expect(screen.queryByRole('textbox', { name: '机型 / ZJXMC' })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /高级条件/ }));
+    expect(screen.getByLabelText('销售订单').closest('.advanced-filters-grid')).not.toBeNull();
+    expect(screen.getByLabelText('机型 / ZJXMC').closest('.advanced-filters-grid')).not.toBeNull();
+    expect(screen.getByLabelText('物料号').closest('.advanced-filters-grid')).not.toBeNull();
+    fireEvent.change(screen.getByLabelText('销售订单'), { target: { value: 'SO-7' } });
+    fireEvent.change(screen.getByLabelText('物料号'), { target: { value: 'MAT-7' } });
+    fireEvent.click(screen.getByRole('button', { name: /筛选/ }));
+    await waitFor(() => expect(fetchMock.mock.calls.some(([url]) => {
+      const query = new URL(String(url), 'http://localhost').searchParams;
+      return query.get('salesOrder') === 'SO-7' && query.get('materialCode') === 'MAT-7';
+    })).toBe(true));
+  });
+
   it('exports every field of the current repair result', async () => {
     const baseFetch = mockFetch();
     const fetchMock = vi.fn(async (url, options) => {
@@ -232,6 +262,7 @@ describe('operations workbench', () => {
     vi.stubGlobal('fetch', mockFetch());
     render(<App />);
     await screen.findByRole('heading', { name: '维修故障记录' });
+    fireEvent.click(screen.getByRole('button', { name: /高级条件/ }));
     const modelInput = screen.getByRole('textbox', { name: '机型 / ZJXMC' });
     fireEvent.focus(modelInput);
     fireEvent.change(modelInput, { target: { value: 'Model-B' } });
@@ -309,18 +340,44 @@ describe('operations workbench', () => {
     expect(within(dialog).getByText('大刀/机头序列号（ZCODE_HEAD）')).toBeInTheDocument();
   });
 
-  it('filters SCS DOA records with the 5000 company checkbox', async () => {
+  it('defaults SCS DOA to 5000 companies with a visible checkbox and restores it on reset', async () => {
     const fetchMock = mockFetch();
     vi.stubGlobal('fetch', fetchMock);
     render(<App />);
     fireEvent.click(screen.getByRole('button', { name: 'SCS DOA 申报' }));
     expect(await screen.findByRole('heading', { name: 'SCS DOA 申报明细' })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: /高级条件展开/ }));
     const checkbox = await screen.findByRole('checkbox', { name: '是否为5000公司' });
-    expect(checkbox).not.toBeChecked();
+    expect(checkbox).toBeChecked();
+    expect(checkbox.closest('.filter-form-body')).not.toBeNull();
+    expect(screen.getByRole('button', { name: /高级条件展开/ })).toHaveAttribute('aria-expanded', 'false');
+    await waitFor(() => {
+      for (const endpoint of ['/api/views/SCS_DOA?', '/api/views/SCS_DOA/stats']) {
+        const requests = fetchMock.mock.calls.filter(([url]) => String(url).startsWith(endpoint));
+        expect(requests.length).toBeGreaterThan(0);
+        expect(requests.every(([url]) => new URL(String(url), 'http://localhost').searchParams.get('company5000') === 'true')).toBe(true);
+      }
+    });
+    fireEvent.click(screen.getByRole('button', { name: /高级条件展开/ }));
+    expect(screen.getAllByRole('checkbox', { name: '是否为5000公司' })).toHaveLength(1);
     fireEvent.click(checkbox);
+    expect(checkbox).not.toBeChecked();
     fireEvent.click(screen.getByRole('button', { name: /筛选/ }));
-    await waitFor(() => expect(fetchMock.mock.calls.some(([url]) => String(url).includes('/api/views/SCS_DOA?') && String(url).includes('company5000=true'))).toBe(true));
+    await waitFor(() => {
+      for (const endpoint of ['/api/views/SCS_DOA?', '/api/views/SCS_DOA/stats']) {
+        const requests = fetchMock.mock.calls.filter(([url]) => String(url).startsWith(endpoint));
+        expect(new URL(String(requests.at(-1)[0]), 'http://localhost').searchParams.has('company5000')).toBe(false);
+      }
+    });
+    await waitFor(() => expect(screen.getByRole('button', { name: '重置' })).toBeEnabled());
+    fireEvent.click(screen.getByRole('button', { name: '重置' }));
+    expect(checkbox).toBeChecked();
+    await waitFor(() => {
+      const requests = fetchMock.mock.calls.filter(([url]) => String(url).startsWith('/api/views/SCS_DOA?'));
+      expect(new URL(String(requests.at(-1)[0]), 'http://localhost').searchParams.get('company5000')).toBe('true');
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'SCS 换上换下' }));
+    fireEvent.click(screen.getByRole('button', { name: 'SCS DOA 申报' }));
+    expect(await screen.findByRole('checkbox', { name: '是否为5000公司' })).toBeChecked();
   });
 
   it('filters SCS DOA records by status and judgment', async () => {

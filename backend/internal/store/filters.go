@@ -15,6 +15,9 @@ func repairFilter(f Filters) bson.M {
 	if f.NonCriticalMaterialSerial != "" {
 		conditions = append(conditions, exactBatch("RECORD01REPAIRM", f.NonCriticalMaterialSerial, false))
 	}
+	if f.MaterialCode != "" {
+		conditions = append(conditions, exactBatch("MATNR", f.MaterialCode, false))
+	}
 	if f.SalesOrder != "" {
 		conditions = append(conditions, exactBatch("VBELN", f.SalesOrder, true))
 	}

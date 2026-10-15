@@ -14,7 +14,7 @@ from typing import Any, Callable, Iterator
 from uuid import uuid4
 
 from bson import BSON
-from pymongo import ReturnDocument, UpdateOne
+from pymongo import ReturnDocument
 from pymongo.errors import DuplicateKeyError
 
 
@@ -136,43 +136,37 @@ def validate_cleanup(existing: int, stale: int, source_rows: int, allow: bool = 
         raise RuntimeError("Cleanup exceeds 100 rows and half the local scope; refusing cleanup")
 
 
-def archive_cleanup(
+def cleanup_records(
     db: Any, collection: str, scope: dict[str, Any], stale_query: dict[str, Any],
-    run_id: str, source_rows: int, *, allow_large_cleanup: bool = False,
-    batch_size: int = 1000, reason: str = "not_in_validated_snapshot",
+    source_rows: int, *, allow_large_cleanup: bool = False,
+    batch_size: int = 1000,
 ) -> int:
+    """Delete validated stale records in batches without retaining source copies."""
+    if batch_size < 1:
+        raise ValueError("batch_size must be greater than zero")
     target = db[collection]
     validate_cleanup(
         target.count_documents(scope), target.count_documents(stale_query),
         source_rows, allow_large_cleanup,
     )
-    archive = db[collection + "_archive"]
     deleted = 0
-    documents: list[dict[str, Any]] = []
+    identifiers: list[Any] = []
 
     def flush() -> None:
         nonlocal deleted
-        if not documents:
+        if not identifiers:
             return
         check_leases(verify=True)
-        archive.bulk_write([
-            UpdateOne({"_id": f"{run_id}:{doc['_id']}"}, {"$setOnInsert": {
-                "document": doc, "run_id": run_id,
-                "archived_at": datetime.now(timezone.utc), "scope": scope,
-                "reason": reason,
-            }}, upsert=True) for doc in documents
-        ], ordered=False)
-        check_leases(verify=True)
         deleted += target.delete_many({
-            **stale_query, "_id": {"$in": [doc["_id"] for doc in documents]},
+            **stale_query, "_id": {"$in": list(identifiers)},
         }).deleted_count
-        documents.clear()
+        identifiers.clear()
 
-    cursor = target.find(stale_query)
+    cursor = target.find(stale_query, {"_id": 1})
     try:
         for document in cursor:
-            documents.append(document)
-            if len(documents) >= batch_size:
+            identifiers.append(document["_id"])
+            if len(identifiers) >= batch_size:
                 flush()
         flush()
     finally:

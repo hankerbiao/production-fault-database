@@ -40,8 +40,7 @@ class DB:
         self.collection = collection
 
     def __getitem__(self, _name):
-        if _name.endswith("_archive"):
-            return SimpleNamespace(bulk_write=lambda *args, **kwargs: None)
+        assert not _name.endswith("_archive")
         return self.collection
 
 

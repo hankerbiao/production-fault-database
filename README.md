@@ -113,7 +113,7 @@ BACKEND_PORT=18080 FRONTEND_PORT=5174 ./scripts/devctl.sh restart
 
 ### 维修故障主同步与清洗
 
-`scripts/sync/增量同步和清洗维修故障记录.py` 是维修故障记录唯一的同步和清洗脚本：默认按 `ZDATE_WX` 刷新当月及前两个月的完整快照，再回填订单和计划生产时间，成功后归档清理窗口内未覆盖的旧记录。具体恢复和保护机制以 [`scripts/sync/README.md`](scripts/sync/README.md) 为准。它从工位记录表构建集合 A：仅保留
+`scripts/sync/增量同步和清洗维修故障记录.py` 是维修故障记录唯一的同步和清洗脚本：默认按 `ZDATE_WX` 刷新当月及前两个月的完整快照，再回填订单和计划生产时间，成功后清理窗口内未覆盖的旧记录，不另存归档副本。具体恢复和保护机制以 [`scripts/sync/README.md`](scripts/sync/README.md) 为准。它从工位记录表构建集合 A：仅保留
 `PCODE`、`AUFNR`、`KDAUF` 均非空且同一 `PCODE` 仅对应一个不同 `(AUFNR, KDAUF)`
 组合的数据。发生多订单冲突的序列号会在汇总中计数并跳过。随后脚本只处理维修表中
 `VBELN` 缺失、`null`、空串或仅空白的记录，并同时回填 `AUFNR` 和 `VBELN`。
@@ -223,7 +223,7 @@ PCODE 查询 SG（client 800）。该模式只回填当前为空的 AUFNR，始�
   --apply --skip-hana-sync
 ```
 
-默认顺序为：完整读取并校验 HANA 滚动快照、写入维修表、构建订单来源并回填空字段、核对覆盖数量并归档清理窗口内旧记录。
+默认顺序为：完整读取并校验 HANA 滚动快照、写入维修表、构建订单来源并回填空字段、核对覆盖数量并清理窗口内旧记录。
 回填或 SAP 查询失败时不进入后续快照清理，重跑会重新校验窗口。`--sync-end-date YYYY-MM-DD` 控制窗口结束日期；
 `--sync-lookback-days` 仅保留命令兼容，不控制当前滚动快照范围，也不再推进旧维修水位线。
 
@@ -280,7 +280,7 @@ SAP SN 存在任一失败批次时，`--apply` 会在写入前停止。只有明
 | 业务唯一键 | `MANDT + PCODE + ZWXDT + ZMCOD1 + ZMCOD2`；身份缺失或冲突阻断，不使用可变整行哈希 |
 | 增量水位 | 不再读取或推进旧 `ZDATE + ZTIME` 水位，使用滚动快照 |
 | 写入方式 | 完整源数据在临时 SQLite 校验后，MongoDB 分批幂等写入和回填 |
-| 快照清理 | 成功且覆盖数量一致后，先归档再删除窗口内未覆盖记录；窗口之外保留 |
+| 快照清理 | 成功且覆盖数量一致后，直接删除窗口内未覆盖记录；窗口之外保留，原始数据由外部系统备份 |
 
 维修原始字段来自 HANA 视图，脚本当前同步以下字段：
 
@@ -299,7 +299,7 @@ RECORD01REPAIRM SLOT AUFNR VBELN POSNR U_FIND U_RMA_NAME RMA_RESULT RMA_TYPE2
 
 | 脚本 | 目标集合 | 同步后自动处理 |
 |---|---|---|
-| `scripts/sync/增量同步和清洗维修故障记录.py` | `repair_records_sap` | HANA 滚动快照、订单与 `GSTRS` 回填、窗口内旧记录归档清理 |
+| `scripts/sync/增量同步和清洗维修故障记录.py` | `repair_records_sap` | HANA 滚动快照、订单与 `GSTRS` 回填、窗口内旧记录清理 |
 | `scripts/sync/station_records.py` | `station_records_sap` | 销售订单/生产订单字段补全和无效销售订单清理 |
 | `scripts/sync/order_bom_postings.py` | `order_bom_postings_sap` | 仅保留 `CPX=5000公司` |
 | `scripts/sync/serial_bindings.py` | `serial_bindings_sap` | 仅删除完整业务键的精确重复记录，保留并统计不完整键 |
@@ -421,7 +421,7 @@ python scripts/sources/scs_doa_sync.py
 python scripts/sources/scs_doa_sync.py --dry-run
 ```
 
-详情请求失败时保留列表和旧有效详情，并用 `_detail_pending`、`_detail_error` 记录待补状态；完整全量成功后才归档清理
+详情请求失败时保留列表和旧有效详情，并用 `_detail_pending`、`_detail_error` 记录待补状态；完整全量成功后才清理
 读取窗口内未覆盖的 SCS 文档。可用 `SCS_DOA_COLLECTION`、`SCS_LOOKBACK_DAYS`、`SCS_TIMEOUT`
 和 `SCS_PAGE_SIZE` 覆盖默认配置。每次 HTTP 请求默认随机等待 3–5 秒，可通过
 `SCS_REQUEST_DELAY_MIN` 和 `SCS_REQUEST_DELAY_MAX` 调整。

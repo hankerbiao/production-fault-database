@@ -516,7 +516,7 @@ def test_monthly_repair_cleanup_is_limited_to_the_selected_month_and_keeps_water
     assert result == {"deleted_out_of_scope": 1}
     assert {doc["_id"] for doc in db["repairs"].docs} == {"sep-current", "oct-stale", "other-view"}
     assert db["checkpoints"].find_one({"_id": "repair_records"})["watermark"]["ZDATE"] == "20261012"
-    assert db["repairs_archive"].docs[0]["document"]["_id"] == "sep-stale"
+    assert "repairs_archive" not in db.collections
 
 
 def test_monthly_repair_requires_a_complete_calendar_month():

@@ -155,7 +155,7 @@ def test_changed_read_time_updates_same_document_and_unchanged_run_skips_content
     assert db["checkpoints"].docs[0]["watermark"]["ZDATE"] == "20261013"
 
 
-def test_legacy_duplicates_migrate_in_place_and_archive_old_copy(monkeypatch):
+def test_legacy_duplicates_migrate_in_place_and_delete_old_copy(monkeypatch):
     db = seed_db(monkeypatch)
     old = repair()
     current = repair(ZDATE="20260926", ZTIME="221507")
@@ -170,7 +170,7 @@ def test_legacy_duplicates_migrate_in_place_and_archive_old_copy(monkeypatch):
     assert result["deleted_out_of_scope"] == 1
     assert len(db["repairs"].docs) == 1 and db["repairs"].docs[0]["_id"] == "current"
     assert {"old", "current", sync.source_key(old, sync.REPAIR_KEY_FIELDS)} <= set(db["repairs"].docs[0]["_legacy_ids"])
-    assert db["repairs_archive"].docs[0]["document"]["_id"] == "old"
+    assert "repairs_archive" not in db.collections
 
 
 def test_replacement_details_at_same_event_time_remain_separate(monkeypatch):
@@ -200,7 +200,7 @@ def test_invalid_snapshot_does_not_write_or_cleanup(monkeypatch, broken):
         run(db)
     assert db["repairs"].docs == before
     assert db["repairs"].indexes == []
-    assert db["repairs_archive"].docs == []
+    assert "repairs_archive" not in db.collections
 
 
 def test_dry_run_predicts_changes_without_writing(monkeypatch):
@@ -253,7 +253,8 @@ def test_empty_or_large_shrinking_snapshot_is_blocked_before_write(monkeypatch):
     source(monkeypatch, [])
     result = run(db, allow_large_cleanup=True)
     assert result["deleted_out_of_scope"] == 250
-    assert len(db["repairs_archive"].docs) == 250
+    assert db["repairs"].docs == []
+    assert "repairs_archive" not in db.collections
 
 
 def test_deferred_cleanup_requires_validated_matching_run(monkeypatch):
@@ -326,7 +327,7 @@ def test_backfill_failure_keeps_stale_rows_and_retry_completes(monkeypatch):
     with pytest.raises(RuntimeError, match="backfill failed"):
         backfill.run_workflow(db, workflow, run_id="failed")
     assert any(doc["_id"] == "old" for doc in db["repairs"].docs)
-    assert db["repairs_archive"].docs == []
+    assert "repairs_archive" not in db.collections
     monkeypatch.setattr(backfill, "backfill_repairs", original)
     source(monkeypatch, [repair()])
     result = backfill.run_workflow(db, workflow, run_id="retry")
@@ -334,17 +335,17 @@ def test_backfill_failure_keeps_stale_rows_and_retry_completes(monkeypatch):
     assert len(db["repairs"].docs) == 1
 
 
-def test_archive_failure_never_deletes_stale_documents(monkeypatch):
+def test_delete_failure_propagates_and_preserves_stale_documents(monkeypatch):
     db = seed_db(monkeypatch)
     db["repairs"].docs = [{**repair(PCODE="deleted"), "_id": "old", "_source_view": sync.REPAIR_VIEW_ID}]
     source(monkeypatch, [repair()])
     result = run(db, defer_finalize=True)
 
     def fail(*_args, **_kwargs):
-        raise RuntimeError("archive failed")
+        raise RuntimeError("delete failed")
 
-    monkeypatch.setattr(db["repairs_archive"], "bulk_write", fail)
-    with pytest.raises(RuntimeError, match="archive failed"):
+    monkeypatch.setattr(db["repairs"], "delete_many", fail)
+    with pytest.raises(RuntimeError, match="delete failed"):
         sync.finalize_repair_run(db, "repairs", result, "run-1")
     assert any(doc["_id"] == "old" for doc in db["repairs"].docs)
 
@@ -404,7 +405,7 @@ def test_partial_target_write_is_detected_before_cleanup(monkeypatch):
     with pytest.raises(RuntimeError, match="尚未完整写入"):
         sync.finalize_repair_run(db, "repairs", result, "run-1")
     assert db["repairs"].docs[0]["_id"] == "old"
-    assert db["repairs_archive"].docs == []
+    assert "repairs_archive" not in db.collections
 
 
 def test_reported_five_versions_reconcile_to_three_distinct_repairs(monkeypatch):
@@ -427,7 +428,7 @@ def test_reported_five_versions_reconcile_to_three_distinct_repairs(monkeypatch)
     assert result["inserted"] == 0 and result["deleted_out_of_scope"] == 2
     assert len(db["repairs"].docs) == 3
     assert {doc["ZGZMS"] for doc in db["repairs"].docs} == {"chain", "board", "third"}
-    assert len(db["repairs_archive"].docs) == 2
+    assert "repairs_archive" not in db.collections
     source(monkeypatch, [chain_new, board_new, third])
     repeated = run(db, "repeat")
     assert repeated["inserted"] == repeated["deleted_out_of_scope"] == 0

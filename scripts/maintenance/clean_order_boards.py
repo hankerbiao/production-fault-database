@@ -28,7 +28,7 @@ from scripts.sources.hana.hana_view_sync import (  # noqa: E402
     mongo_write_concern_summary,
     process_lock,
 )
-from scripts.sync_runtime import archive_cleanup, check_leases, order_key, resource_lock
+from scripts.sync_runtime import cleanup_records, check_leases, order_key, resource_lock
 
 
 CONFIRMATION = "DELETE-ORDER-BOARD-INVALID"
@@ -168,15 +168,13 @@ def process_bom_cpx_cleanup(
         "updated": 0, "deleted": 0,
     }
     deletes: list[dict[str, Any]] = []
-    run_id = uuid4().hex
 
     def flush() -> None:
         if deletes and apply:
             identities = [{"_id": row["_id"], "_source_view": spec.source_view, "CPX": row.get("CPX")} for row in deletes]
             selected = {"$or": identities}
-            stats["deleted"] += archive_cleanup(db, collection_name, selected, selected, run_id,
-                                               1, allow_large_cleanup=True, batch_size=batch_size,
-                                               reason="non_5000_company")
+            stats["deleted"] += cleanup_records(db, collection_name, selected, selected,
+                                               1, allow_large_cleanup=True, batch_size=batch_size)
         deletes.clear()
 
     cursor = collection.find(query, {"_id": 1, "CPX": 1})
@@ -271,7 +269,6 @@ def process_board(
     actions: list[tuple[str, dict[str, Any], dict[str, str] | None]] = []
     unresolved_productions: set[str] = set()
     update_candidates = 0
-    run_id = uuid4().hex
 
     def flush() -> None:
         if actions and apply:
@@ -289,9 +286,8 @@ def process_board(
                 stats["updated"] += db[collection_name].bulk_write(updates, ordered=False).modified_count
             if deletes:
                 selected = {"$or": deletes}
-                stats["deleted"] += archive_cleanup(db, collection_name, selected, selected,
-                    run_id, 1, allow_large_cleanup=True, batch_size=batch_size,
-                    reason="sales_order_not_in_reference")
+                stats["deleted"] += cleanup_records(db, collection_name, selected, selected,
+                    1, allow_large_cleanup=True, batch_size=batch_size)
         actions.clear()
 
     cursor = db[collection_name].find(query, {"_id": 1, spec.production_field: 1, spec.sales_field: 1})

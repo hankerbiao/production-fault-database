@@ -37,7 +37,7 @@ from scripts.sources.hana.hana_view_sync import (
     mongo_uri,
     install_graceful_shutdown,
 )
-from scripts.sync_runtime import Snapshot, archive_cleanup, check_leases, print_failure, resource_lock, validate_snapshot_cleanup
+from scripts.sync_runtime import Snapshot, cleanup_records, check_leases, print_failure, resource_lock, validate_snapshot_cleanup
 
 ROOT = PROJECT_ROOT
 BASE_URL = "https://scs.sugon.com/prod"
@@ -470,8 +470,8 @@ def sync(args: argparse.Namespace) -> dict[str, Any]:
                     LOGGER.info("SCS DOA 已写入 %d 条，待补详情 %d 条", stats["upserted"], stats["detail_errors"])
             flush()
             if args.full:
-                stats["deleted_out_of_scope"] = archive_cleanup(db, collection_name, scope,
-                    {**scope, "_sync_run_id": {"$ne": run_id}}, run_id, snapshot.count,
+                stats["deleted_out_of_scope"] = cleanup_records(db, collection_name, scope,
+                    {**scope, "_sync_run_id": {"$ne": run_id}}, snapshot.count,
                     allow_large_cleanup=allow_cleanup)
             # Retry historical failures even after the list watermark has passed them.
             pending = coll.find({"$or": [{"_detail_pending": True}, {"details.error": {"$exists": True}}]}).sort(

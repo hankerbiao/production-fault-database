@@ -102,15 +102,55 @@ def test_cleanup_guards(existing, stale, source):
         runtime.validate_cleanup(existing, stale, source)
 
 
-def test_archive_failure_prevents_delete():
-    target, archive = Mock(), Mock()
-    target.count_documents.return_value = 1
-    target.find.return_value = [{"_id": "old"}]
-    archive.bulk_write.side_effect = RuntimeError("archive unavailable")
-    db = {"target": target, "target_archive": archive}
-    with pytest.raises(RuntimeError, match="archive unavailable"):
-        runtime.archive_cleanup(db, "target", {}, {}, "run", 1)
+def test_cleanup_batches_ids_preserves_scope_and_never_accesses_archive(monkeypatch):
+    target = Mock()
+    target.count_documents.return_value = 3
+    target.find.return_value = iter([{"_id": value} for value in ["a", "b", "c"]])
+    target.delete_many.side_effect = [
+        SimpleNamespace(deleted_count=2), SimpleNamespace(deleted_count=1),
+    ]
+    leases = Mock()
+    monkeypatch.setattr(runtime, "check_leases", leases)
+    query = {"_source_view": "view", "_sync_run_id": {"$ne": "current"}}
+    deleted = runtime.cleanup_records(
+        {"target": target}, "target", {"_source_view": "view"}, query, 3, batch_size=2,
+    )
+    assert deleted == 3
+    target.find.assert_called_once_with(query, {"_id": 1})
+    assert [call.args[0] for call in target.delete_many.call_args_list] == [
+        {**query, "_id": {"$in": ["a", "b"]}},
+        {**query, "_id": {"$in": ["c"]}},
+    ]
+    assert leases.call_count == 2
+    assert all(call.kwargs == {"verify": True} for call in leases.call_args_list)
+
+
+@pytest.mark.parametrize("existing,stale,source", [(1, 1, 0), (500, 400, 100)])
+def test_cleanup_guard_prevents_deletion(existing, stale, source):
+    target = Mock()
+    target.count_documents.side_effect = [existing, stale]
+    with pytest.raises(RuntimeError):
+        runtime.cleanup_records({"target": target}, "target", {}, {}, source)
+    target.find.assert_not_called()
     target.delete_many.assert_not_called()
+
+
+@pytest.mark.parametrize("failure", ["lease", "delete"])
+def test_cleanup_failure_propagates_and_closes_cursor(monkeypatch, failure):
+    target = Mock()
+    target.count_documents.return_value = 1
+    cursor = Mock()
+    cursor.__iter__ = Mock(return_value=iter([{"_id": "old"}]))
+    target.find.return_value = cursor
+    if failure == "lease":
+        monkeypatch.setattr(runtime, "check_leases", Mock(side_effect=RuntimeError("lease lost")))
+    else:
+        target.delete_many.side_effect = RuntimeError("delete failed")
+    with pytest.raises(RuntimeError, match=failure):
+        runtime.cleanup_records({"target": target}, "target", {}, {}, 1)
+    cursor.close.assert_called_once()
+    if failure == "lease":
+        target.delete_many.assert_not_called()
 
 
 def test_snapshot_accepts_identical_rows_and_rejects_conflicts():
@@ -275,7 +315,7 @@ def test_monthly_hana_commit_preserves_newer_checkpoint_and_scopes_cleanup(monke
     monkeypatch.setattr(hana, "MongoClient", lambda *_args, **_kwargs: client)
     monkeypatch.setattr(hana, "mongo_uri", lambda: "mongodb://test")
     cleanup = Mock(return_value=1)
-    monkeypatch.setattr(hana, "archive_cleanup", cleanup)
+    monkeypatch.setattr(hana, "cleanup_records", cleanup)
     from dataclasses import replace
     spec = replace(hana.VIEW_SPECS["ZSGV_ZSD124"], collection="orders")
     hana.finalize_view_run(spec, {

@@ -45,7 +45,7 @@ from scripts.sources.hana.hana_view_sync import (
     mongo_uri,
     install_graceful_shutdown,
 )
-from scripts.sync_runtime import Snapshot, archive_cleanup, check_leases, error_payload, print_failure, resource_lock
+from scripts.sync_runtime import Snapshot, cleanup_records, check_leases, error_payload, print_failure, resource_lock
 from scripts.sources.sap_http.client import headers as sap_headers, records as validate_records
 
 
@@ -378,7 +378,7 @@ def sync_repair(
 
 
 def finalize_repair_run(db: Any, collection: str, sync_result: Mapping[str, Any], run_id: str) -> dict[str, int]:
-    """Archive stale window records only after the validated workflow succeeds."""
+    """Delete stale window records only after the validated workflow succeeds."""
     if not sync_result.get("success") or not sync_result.get("snapshot_complete") or sync_result.get("run_id") != run_id:
         raise ValueError("不能提交未完整校验或 run_id 不匹配的维修快照")
     sync_range = sync_result["range"]
@@ -394,8 +394,8 @@ def finalize_repair_run(db: Any, collection: str, sync_result: Mapping[str, Any]
     stale_count = target.count_documents(query)
     existing_count = target.count_documents(repair_scope_filter(start_date, end_date))
     validate_repair_cleanup(existing_count, stale_count, sync_result["unique_rows"], sync_result.get("allow_large_cleanup", False))
-    deleted = archive_cleanup(db, collection, repair_scope_filter(start_date, end_date), query,
-                              run_id, sync_result["unique_rows"],
+    deleted = cleanup_records(db, collection, repair_scope_filter(start_date, end_date), query,
+                              sync_result["unique_rows"],
                               allow_large_cleanup=bool(sync_result.get("allow_large_cleanup")))
     return {"deleted_out_of_scope": deleted}
 
@@ -626,8 +626,8 @@ def cleanup_sales_orders(
             "或显式传入 --replace-collection --confirm-delete"
         )
         return result
-    result["deleted_out_of_scope"] = archive_cleanup(db, collection,
-        {"source": {"$in": list(SOURCES)}}, query, run_id, written, allow_large_cleanup=confirm_delete)
+    result["deleted_out_of_scope"] = cleanup_records(db, collection,
+        {"source": {"$in": list(SOURCES)}}, query, written, allow_large_cleanup=confirm_delete)
     result["cleanup"] = "replaced"
     return result
 

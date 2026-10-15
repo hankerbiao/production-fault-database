@@ -31,7 +31,7 @@ ROOT = PROJECT_ROOT
 CHECKPOINT_PREFIX = "hana_views:"
 
 from scripts.sync_runtime import (
-    Snapshot, archive_cleanup, check_leases, validate_snapshot_cleanup,
+    Snapshot, cleanup_records, check_leases, validate_snapshot_cleanup,
 )
 
 
@@ -524,8 +524,8 @@ def finalize_view_run(spec: ViewSpec, sync_result: Mapping[str, Any]) -> dict[st
         deleted = 0
         if sync_result.get("mode") == "full":
             scope = view_scope(spec, sync_result["range"]["start"], sync_result["range"]["end"])
-            deleted = archive_cleanup(database, spec.collection, scope,
-                {**scope, "_sync_run_id": {"$ne": run_id}}, run_id, int(sync_result["unique_rows"]),
+            deleted = cleanup_records(database, spec.collection, scope,
+                {**scope, "_sync_run_id": {"$ne": run_id}}, int(sync_result["unique_rows"]),
                 allow_large_cleanup=bool(sync_result.get("allow_large_cleanup")))
         check_leases(verify=True)
         now = datetime.now(timezone.utc)

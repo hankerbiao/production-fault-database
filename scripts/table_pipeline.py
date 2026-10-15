@@ -22,7 +22,7 @@ from scripts.sources.hana.hana_view_sync import (
     process_lock,
     sync_view,
 )
-from scripts.sync_runtime import Snapshot, archive_cleanup, check_leases, resource_lock
+from scripts.sync_runtime import Snapshot, cleanup_records, check_leases, resource_lock
 
 
 SERIAL_KEY_FIELDS = ("ZCODE_HEAD", "ZCODE_ITEM", "AUFNR_HEAD", "AUFNR_ITEM", "PRODH")
@@ -77,9 +77,8 @@ def serial_cleanup(db: Any, spec: Any, *, apply: bool, run_id: str, batch_size: 
         nonlocal deleted
         if duplicate_ids and apply:
             selected = {**query, "_id": {"$in": list(duplicate_ids)}}
-            deleted += archive_cleanup(db, spec.collection, selected, selected, run_id, 1,
-                                       allow_large_cleanup=True, batch_size=batch_size,
-                                       reason="duplicate_business_key")
+            deleted += cleanup_records(db, spec.collection, selected, selected, 1,
+                                       allow_large_cleanup=True, batch_size=batch_size)
         duplicate_ids.clear()
 
     try:

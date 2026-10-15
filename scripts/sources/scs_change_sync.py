@@ -38,7 +38,7 @@ from scripts.sources.scs_doa_sync import (
     validate_list,
     validate_scs_row,
 )
-from scripts.sync_runtime import Snapshot, archive_cleanup, check_leases, print_failure, resource_lock, validate_snapshot_cleanup
+from scripts.sync_runtime import Snapshot, cleanup_records, check_leases, print_failure, resource_lock, validate_snapshot_cleanup
 
 ROOT = PROJECT_ROOT
 CHANGE_PATH = "/PM_sp_change_Result_01.pml"
@@ -272,8 +272,8 @@ def sync(args: argparse.Namespace) -> dict[str, Any]:
                     flush()
             flush()
             if args.full:
-                stats["deleted_out_of_scope"] = archive_cleanup(db, collection_name, scope,
-                    {**scope, "_sync_run_id": {"$ne": run_id}}, run_id, snapshot.count,
+                stats["deleted_out_of_scope"] = cleanup_records(db, collection_name, scope,
+                    {**scope, "_sync_run_id": {"$ne": run_id}}, snapshot.count,
                     allow_large_cleanup=allow_cleanup)
             stats["5000_company_backfilled"] = backfill_company(collection, company_orders)
             save_checkpoint("completed")

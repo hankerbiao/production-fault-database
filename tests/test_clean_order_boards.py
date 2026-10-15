@@ -59,14 +59,7 @@ class DB:
         self.collections = {"bom": bom, "station": station, "orders": orders}
 
     def __getitem__(self, key):
-        if key.endswith("_archive"):
-            self.collections.setdefault(key, Archive())
         return self.collections[key]
-
-
-class Archive:
-    def bulk_write(self, operations, **_kwargs):
-        return SimpleNamespace(upserted_count=len(operations))
 
 
 def test_bom_keeps_only_5000_company_cpx_values():

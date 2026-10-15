@@ -589,7 +589,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--log-file", default=env("LOG_FILE", ""), help="追加写入日志文件")
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--dry-run", action="store_true", help="仅生成预览和汇总，不写入（默认）")
-    mode.add_argument("--apply", action="store_true", help="写入维修快照、回填订单，并归档清理窗口内旧记录")
+    mode.add_argument("--apply", action="store_true", help="写入维修快照、回填订单，并清理窗口内旧记录")
     parser.set_defaults(
         repair_collection=env("REPAIR_COLLECTION", "repair_records_sap"),
         station_collection=env("STATION_COLLECTION", "station_records_sap"),

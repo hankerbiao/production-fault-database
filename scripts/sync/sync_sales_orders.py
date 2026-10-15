@@ -4,6 +4,7 @@
 The default mode is incremental.  Each SAP source has its own date watermark;
 the watermark is advanced only after that source has fetched and written
 successfully. Use ``--full --start-date YYYY-MM-DD`` for the initial load.
+Incremental runs also recheck historical order statuses before committing watermarks.
 Collection-wide cleanup only runs when the full window covers 2026-01-01 through
 today, or when ``--replace-collection --confirm-delete`` is passed.
 """
@@ -44,7 +45,7 @@ from scripts.sources.hana.hana_view_sync import (
     mongo_uri,
     install_graceful_shutdown,
 )
-from scripts.sync_runtime import Snapshot, archive_cleanup, check_leases, print_failure, resource_lock
+from scripts.sync_runtime import Snapshot, archive_cleanup, check_leases, error_payload, print_failure, resource_lock
 from scripts.sources.sap_http.client import headers as sap_headers, records as validate_records
 
 
@@ -71,6 +72,7 @@ REPAIR_VIEW_ID = "ZSGV_ZZT_WLJL"
 REPAIR_START_DATE = date(2026, 1, 1)
 SALES_SCOPE_START = date(2026, 1, 1)
 CLEANUP_DELETE_RATIO = 2
+STATUS_LINE_FIELDS = ("MANDT", "AUFNR", "VBELN", "POSNR", "ETENR", "MATNR")
 
 
 def parse_date(value: str) -> date:
@@ -404,6 +406,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--start-date", type=parse_date, help="全量起始日期 YYYY-MM-DD")
     parser.add_argument("--end-date", type=parse_date, default=date.today(), help="结束日期，默认今天")
     parser.add_argument("--lookback-days", type=int, default=int(env("SYNC_LOOKBACK_DAYS", "7")), help="增量回看天数，默认 .env 中的值")
+    parser.add_argument("--status-start-date", type=parse_date, default=SALES_SCOPE_START, help="增量同步后历史状态核对的起始日期，默认 2026-01-01")
+    parser.add_argument("--skip-status-refresh", action="store_true", help="跳过增量同步后的历史状态核对")
     group = parser.add_mutually_exclusive_group()
     group.add_argument("--prodh-list", nargs="+", help="覆盖产品层次过滤，例如 --prodh-list 00100 00200")
     group.add_argument("--all-prodh", action="store_true", help="取消产品层次过滤")
@@ -437,6 +441,154 @@ def date_windows(start: date, end: date, days: int) -> list[tuple[date, date]]:
         windows.append((cursor, window_end))
         cursor = window_end + timedelta(days=1)
     return windows
+
+
+def status_line_key(row: Mapping[str, Any]) -> tuple[str, ...]:
+    return tuple(str(row.get(field) or "").strip() for field in STATUS_LINE_FIELDS)
+
+
+def refresh_order_statuses(
+    db: Any,
+    http: Any,
+    *,
+    start: date,
+    end: date,
+    prodh: list[str] | None,
+    apply: bool,
+    run_id: str,
+) -> dict[str, Any]:
+    """Read both SAP sources completely, then patch statuses on existing orders."""
+    window_days = int(env("FULL_WINDOW_DAYS", "7"))
+    batch_size = int(env("SYNC_BATCH_SIZE", "1000"))
+    if start > end or window_days < 1 or batch_size < 1:
+        raise ValueError("状态刷新日期范围、FULL_WINDOW_DAYS 或 SYNC_BATCH_SIZE 无效")
+    collection = db[env("TARGET_COLLECTION", "sales_orders_sap")]
+    result: dict[str, Any] = {
+        "success": True, "dry_run": not apply, "run_id": run_id,
+        "range": {"start": start.isoformat(), "end": end.isoformat()},
+        "existing": 0, "matched": 0, "missing_orders": 0,
+        "missing_status": 0, "unmatched_details": 0,
+        "unchanged": 0, "would_update": 0, "updated": 0, "checked": 0,
+        "sources": {}, "transitions": {}, "missing_order_samples": [],
+    }
+    windows = date_windows(start, end, window_days)
+    # Validate the entire read before any target writes, including the second source.
+    with Snapshot() as snapshot:
+        for source, url in SOURCES.items():
+            stats = {"windows": len(windows), "fetched": 0}
+            result["sources"][source] = stats
+            for index, (window_start, window_end) in enumerate(windows, 1):
+                check_leases()
+                response = http.post(
+                    url, json=payload(window_start, window_end, prodh),
+                    headers=request_headers(),
+                )
+                response.raise_for_status()
+                rows = validate_records(response.json(), source)
+                for row in rows:
+                    key = status_line_key(row)
+                    if not key[1]:
+                        raise RuntimeError(f"{source}: 状态快照缺少 AUFNR，拒绝写入")
+                    status = row.get("ZSTAT")
+                    if status is not None and not isinstance(status, str):
+                        raise RuntimeError(f"{source}: ZSTAT 必须为字符串或空值")
+                    snapshot.add(json.dumps([source, *key]), {
+                        "source": source, "line": list(key), "status": status,
+                    })
+                stats["fetched"] += len(rows)
+                if index == 1 or index % 10 == 0 or index == len(windows):
+                    print(json.dumps({
+                        "stage": "sales_status_fetch", "source": source,
+                        "window": index, "windows": len(windows),
+                        "fetched": stats["fetched"],
+                    }), file=sys.stderr, flush=True)
+
+        orders: dict[tuple[str, str], dict[tuple[str, ...], str | None]] = {}
+        for _key, row in snapshot:
+            line = tuple(row["line"])
+            orders.setdefault((row["source"], line[1]), {})[line] = row["status"]
+
+        checked_at = datetime.now(timezone.utc)
+        operations: list[Any] = []
+        changed_in_batch = 0
+
+        def flush() -> None:
+            nonlocal changed_in_batch
+            if not operations:
+                return
+            check_leases(verify=True)
+            written = collection.bulk_write(operations, ordered=False)
+            if written.matched_count != len(operations):
+                raise RuntimeError("状态刷新时已有订单发生变化或消失，请重新核对")
+            result["checked"] += written.matched_count
+            result["updated"] += changed_in_batch
+            operations.clear()
+            changed_in_batch = 0
+
+        query = {"source": {"$in": list(SOURCES)}}
+        cursor = collection.find(query, {"source": 1, "aufnr": 1, "data": 1, "records": 1})
+        try:
+            for document in cursor:
+                result["existing"] += 1
+                source = document["source"]
+                aufnr = str(document.get("aufnr") or "").strip()
+                lines = orders.get((source, aufnr))
+                if not lines:
+                    result["missing_orders"] += 1
+                    if len(result["missing_order_samples"]) < 20:
+                        result["missing_order_samples"].append(str(document["_id"]))
+                    continue
+                result["matched"] += 1
+                data = document.get("data") or {}
+                current_lines = list(lines.items())
+                # Match the stored representative row; a single source row is
+                # unambiguous even if another order field was corrected upstream.
+                latest = lines.get(status_line_key(data))
+                if latest is None and len(current_lines) == 1:
+                    latest = current_lines[0][1]
+                changes: dict[str, Any] = {}
+                missing_status = latest is None
+                if latest is not None and data.get("ZSTAT") != latest:
+                    changes["data.ZSTAT"] = latest
+                    transition = f"{data.get('ZSTAT')!s} -> {latest}"
+                    result["transitions"][transition] = result["transitions"].get(transition, 0) + 1
+                for index, record in enumerate(document.get("records") or []):
+                    key = status_line_key(record)
+                    if key not in lines:
+                        result["unmatched_details"] += 1
+                        continue
+                    status = lines[key]
+                    if status is None:
+                        missing_status = True
+                    elif record.get("ZSTAT") != status:
+                        changes[f"records.{index}.ZSTAT"] = status
+                if missing_status:
+                    result["missing_status"] += 1
+                if changes:
+                    result["would_update"] += 1
+                else:
+                    result["unchanged"] += 1
+                if apply and not missing_status:
+                    update = {**changes, "_status_checked_at": checked_at, "_status_run_id": run_id}
+                    if changes:
+                        update["_status_changed_at"] = checked_at
+                    operations.append(UpdateOne(
+                        {"_id": document["_id"]}, {"$set": update}, upsert=False,
+                    ))
+                    changed_in_batch += bool(changes)
+                    if len(operations) >= batch_size:
+                        flush()
+        finally:
+            if hasattr(cursor, "close"):
+                cursor.close()
+        # An empty or shrunken snapshot never deletes local orders. Report
+        # incomplete coverage explicitly so a daily sync cannot silently succeed.
+        result["success"] = not (
+            result["missing_orders"] or result["missing_status"] or result["unmatched_details"]
+        )
+        if apply:
+            flush()
+    return result
 
 
 def out_of_scope_query(run_id: str) -> dict[str, Any]:
@@ -587,13 +739,32 @@ def sync_sales(args: argparse.Namespace) -> dict[str, Any]:
                             inserted, updated = upsert(db, target_collection, documents, synced_at)
                             item["inserted"] += inserted
                             item["updated"] += updated
-                    if not args.dry_run and not args.full:
-                        save_watermark(db, checkpoint_collection, source, end, run_id)
                     item["success"] = True
                 except Exception as exc:
                     item.update({"success": False, "error": str(exc)})
                     summary["success"] = False
                 summary["sources"][source] = item
+            if not args.full and summary["success"] and not getattr(args, "skip_status_refresh", False):
+                try:
+                    summary["status_refresh"] = refresh_order_statuses(
+                        db, http,
+                        start=getattr(args, "status_start_date", SALES_SCOPE_START),
+                        end=args.end_date, prodh=prodh, apply=not args.dry_run, run_id=run_id,
+                    )
+                    summary["success"] = summary["status_refresh"]["success"]
+                    if not summary["success"]:
+                        summary["error"] = {
+                            "code": "incomplete_status_refresh",
+                            "message": "历史订单状态核对未完成，请检查 status_refresh 中的缺失统计",
+                            "retryable": False,
+                        }
+                except Exception as exc:
+                    summary["status_refresh"] = {"success": False, "error": str(exc)}
+                    summary["error"] = error_payload(exc)
+                    summary["success"] = False
+        if not args.full and not args.dry_run and summary["success"]:
+            for source in SOURCES:
+                save_watermark(db, checkpoint_collection, source, args.end_date, run_id)
         if args.full and not args.dry_run and summary["success"]:
             cleanup = cleanup_sales_orders(
                 db, target_collection,

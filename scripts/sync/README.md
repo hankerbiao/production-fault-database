@@ -39,6 +39,19 @@ DOA 判定从详情中的合同/订单号提取 `sales_order`，详情无有效�
 
 销售订单全量默认只在 `start-date` 不晚于 `2026-01-01` 且结束日期覆盖当天时清理范围外旧单。从更晚日期重建只会 upsert，不会删除历史月份。强制整表替换需直接调用脚本并同时传入 `--replace-collection --confirm-delete`。
 
+销售订单日常增量完成后，默认额外按 7 天窗口读取 `2026-01-01` 至本次结束日期的 SG/KK 历史数据，刷新已有订单的 `data.ZSTAT` 及对应 `records` 明细状态。明细按 `MANDT/AUFNR/VBELN/POSNR/ETENR/MATNR` 匹配，来源和生产订单号共同限定订单。完整读取两来源并校验状态快照后才写入；只修改状态及独立的 `_status_checked_at`、`_status_changed_at`、`_status_run_id` 元数据，不导入或删除历史订单，不覆盖数量等其他字段。空字符串是明确的源状态，允许写入；状态字段缺失或 null 时保留原值。源中未返回的本地订单、状态缺失或明细未匹配均报告数量并使任务失败，不推进本次销售订单水位。写入阶段并非事务，失败后可重跑；已成功核对的订单可能已更新。
+
+`--status-start-date` 可调整历史状态范围；`--skip-status-refresh` 可显式跳过该核对。全量同步直接覆盖所选范围内的源字段，不重复执行状态读取。`--dry-run` 也预览历史状态差异，但不写入元数据或水位。
+
+仅刷新已有订单状态，使用维护脚本（不推进增量水位）：
+
+```bash
+.venv/bin/python scripts/maintenance/refresh_sales_order_status.py
+.venv/bin/python scripts/maintenance/refresh_sales_order_status.py --apply
+```
+
+维护脚本默认只读预览，支持 `--start-date`、`--end-date`、`--prodh-list` 和 `--all-prodh`；正式写入与日常销售订单同步共用集合锁。输出已有数量、匹配数量、未返回数量、预计及实际变更数和状态迁移统计，正式运行摘要写入 `sync_runs`。
+
 ## 运行与恢复
 
 所有正式入口按实际集合持有 `dataset:<集合名>` 的续租锁，BOM 回填与 BOM 同步共享同一资源锁；编排器另持有流程锁。`SYNC_MONGO_LOCK_TTL_SECONDS` 默认 120 秒，续租异常或持有者变化会阻止后续写入、归档和提交。升级前应等待旧版本同步进程结束，旧脚本的锁名与新资源锁不兼容。

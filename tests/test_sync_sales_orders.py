@@ -2,6 +2,7 @@ from datetime import date, datetime, timezone
 from decimal import Decimal
 from contextlib import contextmanager
 from types import SimpleNamespace
+from unittest.mock import Mock
 
 import pytest
 
@@ -287,6 +288,57 @@ def test_sync_sales_dry_run_does_not_write(monkeypatch):
     assert result["success"] is True
     db = FakeMongoClient.instances[0].db
     assert db.collections == {}
+
+
+@pytest.mark.parametrize("status_success", [True, False, RuntimeError("connection timed out")])
+def test_incremental_rechecks_history_before_committing_watermark(monkeypatch, status_success):
+    FakeMongoClient.instances.clear()
+    monkeypatch.setenv("MONGODB_DATABASE", "test")
+    monkeypatch.setenv("MONGODB_HOSTS", "localhost:27017")
+    monkeypatch.setenv("TARGET_COLLECTION", "orders")
+    monkeypatch.setenv("SYNC_CHECKPOINT_COLLECTION", "checkpoints")
+    monkeypatch.setenv("SYNC_RUN_COLLECTION", "runs")
+    monkeypatch.setattr(sync, "SOURCES", {"SG": "http://sg", "KK": "http://kk"})
+
+    def client(*args, **kwargs):
+        instance = FakeMongoClient(*args, **kwargs)
+        for source in sync.SOURCES:
+            sync.save_watermark(instance.db, "checkpoints", source, date(2026, 1, 1), "old")
+        return instance
+
+    monkeypatch.setattr(sync, "MongoClient", client)
+    http = FakeHTTPClient({
+        "http://sg": [FakeResponse({"DATA": []})],
+        "http://kk": [FakeResponse({"DATA": []})],
+    })
+    monkeypatch.setattr(sync.httpx, "Client", lambda **kwargs: http)
+
+    def recheck(db, passed_http, **kwargs):
+        assert passed_http is http
+        assert kwargs["start"] == date(2026, 1, 1)
+        assert kwargs["end"] == date(2026, 1, 2)
+        assert kwargs["apply"] is True
+        for source in sync.SOURCES:
+            assert sync.read_watermark(db, "checkpoints", source) == date(2026, 1, 1)
+        if isinstance(status_success, Exception):
+            raise status_success
+        return {"success": status_success}
+
+    refresh = Mock(side_effect=recheck)
+    monkeypatch.setattr(sync, "refresh_order_statuses", refresh)
+    args = SimpleNamespace(
+        full=False, start_date=None, end_date=date(2026, 1, 2),
+        lookback_days=0, dry_run=False, all_prodh=True, prodh_list=None,
+    )
+    result = sync.sync_sales(args)
+    assert result["success"] is (status_success is True)
+    if isinstance(status_success, Exception):
+        assert result["error"]["retryable"] is True
+    refresh.assert_called_once()
+    for source in sync.SOURCES:
+        assert sync.read_watermark(FakeMongoClient.instances[-1].db, "checkpoints", source) == (
+            date(2026, 1, 2) if status_success is True else date(2026, 1, 1)
+        )
 
 
 def test_sync_sales_full_cleans_old_source_documents_after_success(monkeypatch):

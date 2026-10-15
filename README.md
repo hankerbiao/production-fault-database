@@ -246,6 +246,9 @@ SAP SN 存在任一失败批次时，`--apply` 会在写入前停止。只有明
 | 增量水位 | `sync_checkpoints` 中的 `sales_orders:SG`、`sales_orders:KK`，按接口查询日期推进 |
 | 增量窗口 | 水位日期向前回看 `SYNC_LOOKBACK_DAYS` 天（默认 7 天）到当天，覆盖迟到或修改记录 |
 | 全量窗口 | `--full --start-date YYYY-MM-DD`；按 `FULL_WINDOW_DAYS`（默认 7 天）分段请求，SAP `No Data` 视为空窗。仅当起始日期不晚于 `2026-01-01` 且结束日期覆盖当天时，成功后才清理本次未覆盖的 SG/KK 旧订单；更晚的起始日期只补数不删历史。本次写入为 0 或待删超过写入量 2 倍时拒绝清理，除非 `--replace-collection --confirm-delete`。失败时保留旧数据 |
+| 历史状态刷新 | 日常增量后额外读取 `2026-01-01` 至本次结束日期的 SG/KK 数据，更新已有订单 `data.ZSTAT` 及对应明细状态。先完整读取和校验，再只写状态及独立核对元数据；缺失订单或状态保留原值并报告失败，不推进本次水位。支持 `--status-start-date` 和 `--skip-status-refresh`；全量同步已覆盖所选范围，不重复查询 |
+
+立即单独刷新已有订单状态：先运行 `.venv/bin/python scripts/maintenance/refresh_sales_order_status.py` 预览，再加 `--apply` 写入。该脚本不新增或删除订单，不修改数量字段和增量水位，与日常同步共用集合锁；详细行为及统计见 [`scripts/sync/README.md`](scripts/sync/README.md)。
 
 订单文档字段：
 

@@ -18,8 +18,9 @@ def row(status="STARTED", *, line="10"):
 
 def document(source="SG", rows=None):
     rows = deepcopy(rows if rows is not None else [row()])
+    aufnr = rows[0]["AUFNR"]
     return {
-        "_id": f"{source}:100", "source": source, "aufnr": "100",
+        "_id": f"{source}:{aufnr}", "source": source, "aufnr": aufnr,
         "data": deepcopy(rows[-1]), "records": rows,
         "order_quantity": 10, "storage_quantity": 5,
     }
@@ -32,7 +33,8 @@ def refresh(monkeypatch):
     monkeypatch.setenv("FULL_WINDOW_DAYS", "1")
     monkeypatch.setenv("SYNC_BATCH_SIZE", "1000")
 
-    def run(documents, sg, kk=(), *, apply=True, second_sg=(), error=None):
+    def run(documents, sg, kk=(), *, apply=True, second_sg=(), error=None,
+            start=date(2026, 1, 1)):
         collection = Mock()
         collection.find.return_value = deepcopy(documents)
         recorded = []
@@ -56,7 +58,7 @@ def refresh(monkeypatch):
 
         http.post.side_effect = post
         kwargs = dict(
-            start=date(2026, 1, 1), end=date(2026, 1, 2),
+            start=start, end=date(2026, 1, 2),
             prodh=["00100"], apply=apply, run_id="test-status",
         )
         return SimpleNamespace(
@@ -138,12 +140,43 @@ def test_explicit_empty_status_is_applied(refresh):
     assert writes(run)[0]._doc["$set"]["data.ZSTAT"] == ""
 
 
-def test_missing_order_is_preserved_and_not_claimed_as_checked(refresh):
+def test_unreturned_order_is_reported_without_failing_the_selected_scope(refresh):
     run = refresh([document("SG"), document("KK")], [row()])
     result = run.execute()
-    assert result["success"] is False and result["missing_orders"] == 1
-    assert result["missing_order_samples"] == ["KK:100"]
+    assert result["success"] is True and result["not_returned"] == 1
+    assert result["scope"] == "returned_orders"
+    assert result["not_returned_samples"] == ["KK:100"]
+    assert result["checked"] == 1
     assert [op._filter["_id"] for op in writes(run)] == ["SG:100"]
+
+
+@pytest.mark.parametrize("outside_fields", [
+    {"GSTRS": "2025-12-01", "PRODH": "00100"},
+    {"GSTRS": "2026-01-02", "PRODH": "00200"},
+])
+def test_source_membership_defines_scope_without_guessing_planned_dates(refresh, outside_fields):
+    included = row("STARTED")
+    included["GSTRS"] = "2025-01-01"
+    outside = row("STARTED")
+    outside.update(outside_fields, AUFNR="200")
+    run = refresh(
+        [document(rows=[included]), document(rows=[outside])],
+        [{**included, "ZSTAT": "REL"}], start=date(2026, 1, 2),
+    )
+    result = run.execute()
+    assert result["success"] is True
+    assert result["existing"] == 2 and result["matched"] == 1
+    assert result["not_returned"] == 1 and result["checked"] == 1
+    assert len(writes(run)) == 1
+    assert writes(run)[0]._doc["$set"]["data.ZSTAT"] == "REL"
+
+
+def test_empty_valid_scope_reports_uncovered_orders_without_writes(refresh):
+    run = refresh([document("SG"), document("KK")], [])
+    result = run.execute()
+    assert result["success"] is True
+    assert result["not_returned"] == 2 and result["matched"] == result["checked"] == 0
+    run.collection.bulk_write.assert_not_called()
 
 
 def test_source_failure_does_not_write_first_source(refresh):
@@ -180,9 +213,66 @@ def test_unmatched_detail_is_not_overwritten(refresh):
     run = refresh([document()], [row("REL", line="20")])
     result = run.execute()
     assert result["success"] is False and result["unmatched_details"] == 1
-    update = writes(run)[0]._doc["$set"]
-    assert update["data.ZSTAT"] == "REL"
-    assert "records.0.ZSTAT" not in update
+    assert result["would_update"] == result["updated"] == result["checked"] == 0
+    assert result["transitions"] == {}
+    run.collection.bulk_write.assert_not_called()
+
+
+@pytest.mark.parametrize("apply", [True, False])
+def test_one_unmatched_detail_blocks_the_entire_order_update(refresh, apply):
+    run = refresh(
+        [document(rows=[row(line="10"), row(line="20")])],
+        [row("REL", line="20")], apply=apply,
+    )
+    result = run.execute()
+    assert result["success"] is False and result["unmatched_details"] == 1
+    assert result["would_update"] == result["updated"] == result["checked"] == 0
+    assert result["transitions"] == {}
+    run.collection.bulk_write.assert_not_called()
+
+
+def test_unmatched_representative_is_not_replaced_by_the_only_source_row(refresh):
+    stored = document()
+    stored["data"] = row(line="20")
+    run = refresh([stored], [row("REL")])
+    result = run.execute()
+    assert result["success"] is False and result["missing_status"] == 1
+    assert result["would_update"] == result["checked"] == 0
+    run.collection.bulk_write.assert_not_called()
+
+
+def test_missing_detail_status_blocks_preview_changes_and_transitions(refresh):
+    run = refresh(
+        [document(rows=[row(line="10"), row(line="20")])],
+        [row(None, line="10"), row("REL", line="20")], apply=False,
+    )
+    result = run.execute()
+    assert result["success"] is False and result["missing_status"] == 1
+    assert result["would_update"] == 0 and result["transitions"] == {}
+    run.collection.bulk_write.assert_not_called()
+
+
+def test_incomplete_order_does_not_block_other_valid_orders(refresh, monkeypatch):
+    monkeypatch.setenv("SYNC_BATCH_SIZE", "1")
+    run = refresh(
+        [document(rows=[row(line="10"), row(line="20")]), document("KK")],
+        [row("REL", line="20")], [row("REL")],
+    )
+    result = run.execute()
+    assert result["success"] is False and result["unmatched_details"] == 1
+    assert result["would_update"] == result["updated"] == result["checked"] == 1
+    assert result["transitions"] == {"STARTED -> REL": 1}
+    assert [op._filter["_id"] for op in writes(run)] == ["KK:100"]
+
+
+def test_status_refresh_uses_indexed_snapshot_reads(refresh, monkeypatch):
+    class IndexedOnlySnapshot(sales.Snapshot):
+        def __iter__(self):
+            raise AssertionError("Status refresh must not load the entire snapshot")
+
+    monkeypatch.setattr(sales, "Snapshot", IndexedOnlySnapshot)
+    run = refresh([document()], [row("REL")])
+    assert run.execute()["updated"] == 1
 
 
 def test_temporary_script_defaults_to_preview():

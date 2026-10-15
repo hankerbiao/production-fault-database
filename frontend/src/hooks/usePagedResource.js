@@ -3,13 +3,12 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 export const PAGE_SIZE = 20;
 export const PAGE_SIZE_OPTIONS = [10, 20, 50, 100];
 
-export function usePagedResource({ loadPage, loadStats, initialFilters = {}, initialStats = {}, pageSize = PAGE_SIZE, refreshToken = 0, autoLoad = true, onConnectionChange, onRefreshing }) {
+export function usePagedResource({ loadPage, loadStats, initialFilters = {}, initialStats = {}, pageSize = PAGE_SIZE, refreshToken = 0, onConnectionChange, onRefreshing }) {
   const [filters, setFilters] = useState(initialFilters);
   const [appliedFilters, setAppliedFilters] = useState(initialFilters);
   const [items, setItems] = useState([]); const [stats, setStats] = useState(initialStats); const [total, setTotal] = useState(0); const [hasMore, setHasMore] = useState(false); const [preview, setPreview] = useState(false); const [page, setPage] = useState(1); const [currentPageSize, setCurrentPageSize] = useState(pageSize); const [loading, setLoading] = useState(false); const [error, setError] = useState('');
-  const requestId = useRef(0); const skipNextPageLoad = useRef(false); const firstPageEffect = useRef(true); const hasLoaded = useRef(autoLoad);
+  const requestId = useRef(0); const skipNextPageLoad = useRef(false); const firstPageEffect = useRef(true);
   const load = useCallback(async (nextPage = page, nextFilters = appliedFilters, includeStats = true) => {
-    hasLoaded.current = true;
     const currentRequest = ++requestId.current;
     setLoading(true); onRefreshing?.(true);
     try { const [data, summary] = await Promise.all([loadPage(nextFilters, nextPage, currentPageSize), includeStats ? loadStats(nextFilters) : Promise.resolve(null)]); if (currentRequest !== requestId.current) return; setItems(data?.items || []); setTotal(Number(data?.total) || 0); setHasMore(Boolean(data?.hasMore)); setPreview(Boolean(data?.preview)); if (includeStats) setStats(summary || initialStats); setError(''); onConnectionChange?.(true); }
@@ -19,10 +18,9 @@ export function usePagedResource({ loadPage, loadStats, initialFilters = {}, ini
   const loadCurrent = useCallback((nextPage, nextFilters, includeStats = true) => {
     setPage(nextPage); setFilters(nextFilters); setAppliedFilters(nextFilters); return load(nextPage, nextFilters, includeStats);
   }, [load]);
-  useEffect(() => { if (hasLoaded.current) load(page, appliedFilters, true); }, [refreshToken]);
+  useEffect(() => { load(page, appliedFilters, true); }, [refreshToken]);
   useEffect(() => {
     if (firstPageEffect.current) { firstPageEffect.current = false; return; }
-    if (!hasLoaded.current) return;
     if (skipNextPageLoad.current) { skipNextPageLoad.current = false; return; }
     load(page, appliedFilters, false);
   }, [page, currentPageSize]);

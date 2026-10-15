@@ -41,7 +41,7 @@ function AdvancedFilterField({ field, value, options, onChange }) {
 export function ViewDashboardPage({ config, modelOptions = [], setConnected, setRefreshing, refreshToken = 0 }) {
   const defaultFilters = { ...initialFilters, ...config.defaultFilters };
   const isStationPreview = filters => config.id === 'Z_V_ZMES_T_001' && !hasActiveFilters(filters);
-  const resource = usePagedResource({ loadPage: useCallback((filters, page, size) => listView(config.id, filters, page, size, isStationPreview(filters)), [config.id]), loadStats: useCallback(filters => isStationPreview(filters) ? Promise.resolve(emptyStats) : viewStats(config.id, filters), [config.id]), initialFilters: defaultFilters, initialStats: emptyStats, refreshToken, autoLoad: config.autoLoad !== false, onConnectionChange: setConnected, onRefreshing: setRefreshing });
+  const resource = usePagedResource({ loadPage: useCallback((filters, page, size) => listView(config.id, filters, page, size, isStationPreview(filters)), [config.id]), loadStats: useCallback(filters => isStationPreview(filters) ? Promise.resolve(emptyStats) : viewStats(config.id, filters), [config.id]), initialFilters: defaultFilters, initialStats: emptyStats, refreshToken, onConnectionChange: setConnected, onRefreshing: setRefreshing });
   const detail = useDetail(id => viewDetail(config.id, id), '无法读取该记录的详细字段');
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [exporting, setExporting] = useState(false);

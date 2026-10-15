@@ -162,6 +162,23 @@ def test_snapshot_accepts_identical_rows_and_rejects_conflicts():
             snapshot.add("key", {"value": 2})
 
 
+def test_snapshot_supports_indexed_group_membership_and_key_lookup():
+    with runtime.Snapshot() as snapshot:
+        snapshot.add("SG:100:10", {"status": "REL"}, group_key="SG:100")
+        snapshot.add("SG:100:20", {"status": ""}, group_key="SG:100")
+        snapshot.add("KK:100:10", {"status": None}, group_key="KK:100")
+        snapshot.add("ungrouped", {"value": 1})
+        assert snapshot.contains_group("SG:100")
+        assert snapshot.contains_group("KK:100")
+        assert not snapshot.contains_group("SG:200")
+        assert snapshot.get("SG:100:10") == {"status": "REL"}
+        assert snapshot.get("SG:100:20") == {"status": ""}
+        assert snapshot.get("KK:100:10") == {"status": None}
+        assert snapshot.get("unknown") is None
+        assert snapshot.get("ungrouped") == {"value": 1}
+        assert len(list(snapshot)) == 4
+
+
 def test_hana_interrupted_read_never_writes_target(monkeypatch):
     db = Mock()
     target = Mock()

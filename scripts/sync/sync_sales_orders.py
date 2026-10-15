@@ -19,6 +19,7 @@ import tempfile
 from collections import OrderedDict
 from contextlib import contextmanager
 from datetime import date, datetime, timedelta, timezone
+from itertools import chain
 from pathlib import Path
 from typing import Any, Iterator, Mapping
 
@@ -447,6 +448,30 @@ def status_line_key(row: Mapping[str, Any]) -> tuple[str, ...]:
     return tuple(str(row.get(field) or "").strip() for field in STATUS_LINE_FIELDS)
 
 
+def order_status_changes(
+    snapshot: Snapshot, source: str, document: Mapping[str, Any],
+) -> tuple[dict[str, str], bool, int]:
+    changes: dict[str, str] = {}
+    missing_status = False
+    unmatched_details = 0
+    rows = chain(
+        (("data", document.get("data") or {}),),
+        ((f"records.{index}", row) for index, row in enumerate(document.get("records") or [])),
+    )
+    for path, row in rows:
+        stored = snapshot.get(json.dumps([source, *status_line_key(row)]))
+        if stored is None:
+            if path == "data":
+                missing_status = True
+            else:
+                unmatched_details += 1
+        elif stored["status"] is None:
+            missing_status = True
+        elif row.get("ZSTAT") != stored["status"]:
+            changes[f"{path}.ZSTAT"] = stored["status"]
+    return changes, missing_status, unmatched_details
+
+
 def refresh_order_statuses(
     db: Any,
     http: Any,
@@ -457,7 +482,7 @@ def refresh_order_statuses(
     apply: bool,
     run_id: str,
 ) -> dict[str, Any]:
-    """Read both SAP sources completely, then patch statuses on existing orders."""
+    """Patch fully matched existing orders within the returned SAP snapshot."""
     window_days = int(env("FULL_WINDOW_DAYS", "7"))
     batch_size = int(env("SYNC_BATCH_SIZE", "1000"))
     if start > end or window_days < 1 or batch_size < 1:
@@ -465,11 +490,12 @@ def refresh_order_statuses(
     collection = db[env("TARGET_COLLECTION", "sales_orders_sap")]
     result: dict[str, Any] = {
         "success": True, "dry_run": not apply, "run_id": run_id,
+        "scope": "returned_orders",
         "range": {"start": start.isoformat(), "end": end.isoformat()},
-        "existing": 0, "matched": 0, "missing_orders": 0,
+        "existing": 0, "matched": 0, "not_returned": 0,
         "missing_status": 0, "unmatched_details": 0,
         "unchanged": 0, "would_update": 0, "updated": 0, "checked": 0,
-        "sources": {}, "transitions": {}, "missing_order_samples": [],
+        "sources": {}, "transitions": {}, "not_returned_samples": [],
     }
     windows = date_windows(start, end, window_days)
     # Validate the entire read before any target writes, including the second source.
@@ -492,9 +518,10 @@ def refresh_order_statuses(
                     status = row.get("ZSTAT")
                     if status is not None and not isinstance(status, str):
                         raise RuntimeError(f"{source}: ZSTAT 必须为字符串或空值")
-                    snapshot.add(json.dumps([source, *key]), {
-                        "source": source, "line": list(key), "status": status,
-                    })
+                    snapshot.add(
+                        json.dumps([source, *key]), {"status": status},
+                        group_key=json.dumps([source, key[1]]),
+                    )
                 stats["fetched"] += len(rows)
                 if index == 1 or index % 10 == 0 or index == len(windows):
                     print(json.dumps({
@@ -502,11 +529,6 @@ def refresh_order_statuses(
                         "window": index, "windows": len(windows),
                         "fetched": stats["fetched"],
                     }), file=sys.stderr, flush=True)
-
-        orders: dict[tuple[str, str], dict[tuple[str, ...], str | None]] = {}
-        for _key, row in snapshot:
-            line = tuple(row["line"])
-            orders.setdefault((row["source"], line[1]), {})[line] = row["status"]
 
         checked_at = datetime.now(timezone.utc)
         operations: list[Any] = []
@@ -532,43 +554,25 @@ def refresh_order_statuses(
                 result["existing"] += 1
                 source = document["source"]
                 aufnr = str(document.get("aufnr") or "").strip()
-                lines = orders.get((source, aufnr))
-                if not lines:
-                    result["missing_orders"] += 1
-                    if len(result["missing_order_samples"]) < 20:
-                        result["missing_order_samples"].append(str(document["_id"]))
+                if not snapshot.contains_group(json.dumps([source, aufnr])):
+                    result["not_returned"] += 1
+                    if len(result["not_returned_samples"]) < 20:
+                        result["not_returned_samples"].append(str(document["_id"]))
                     continue
                 result["matched"] += 1
-                data = document.get("data") or {}
-                current_lines = list(lines.items())
-                # Match the stored representative row; a single source row is
-                # unambiguous even if another order field was corrected upstream.
-                latest = lines.get(status_line_key(data))
-                if latest is None and len(current_lines) == 1:
-                    latest = current_lines[0][1]
-                changes: dict[str, Any] = {}
-                missing_status = latest is None
-                if latest is not None and data.get("ZSTAT") != latest:
-                    changes["data.ZSTAT"] = latest
-                    transition = f"{data.get('ZSTAT')!s} -> {latest}"
+                changes, missing_status, unmatched_details = order_status_changes(snapshot, source, document)
+                result["missing_status"] += int(missing_status)
+                result["unmatched_details"] += unmatched_details
+                if missing_status or unmatched_details:
+                    continue
+                if "data.ZSTAT" in changes:
+                    transition = f"{(document.get('data') or {}).get('ZSTAT')!s} -> {changes['data.ZSTAT']}"
                     result["transitions"][transition] = result["transitions"].get(transition, 0) + 1
-                for index, record in enumerate(document.get("records") or []):
-                    key = status_line_key(record)
-                    if key not in lines:
-                        result["unmatched_details"] += 1
-                        continue
-                    status = lines[key]
-                    if status is None:
-                        missing_status = True
-                    elif record.get("ZSTAT") != status:
-                        changes[f"records.{index}.ZSTAT"] = status
-                if missing_status:
-                    result["missing_status"] += 1
                 if changes:
                     result["would_update"] += 1
                 else:
                     result["unchanged"] += 1
-                if apply and not missing_status:
+                if apply:
                     update = {**changes, "_status_checked_at": checked_at, "_status_run_id": run_id}
                     if changes:
                         update["_status_changed_at"] = checked_at
@@ -581,11 +585,7 @@ def refresh_order_statuses(
         finally:
             if hasattr(cursor, "close"):
                 cursor.close()
-        # An empty or shrunken snapshot never deletes local orders. Report
-        # incomplete coverage explicitly so a daily sync cannot silently succeed.
-        result["success"] = not (
-            result["missing_orders"] or result["missing_status"] or result["unmatched_details"]
-        )
+        result["success"] = not (result["missing_status"] or result["unmatched_details"])
         if apply:
             flush()
     return result

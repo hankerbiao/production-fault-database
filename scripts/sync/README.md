@@ -45,7 +45,13 @@ DOA 判定从详情中的合同/订单号提取 `sales_order`，详情无有效�
 
 销售订单全量默认只在 `start-date` 不晚于 `2026-01-01` 且结束日期覆盖当天时清理范围外旧单。从更晚日期重建只会 upsert，不会删除历史月份。强制整表替换需直接调用脚本并同时传入 `--replace-collection --confirm-delete`。
 
-销售订单日常增量完成后，默认额外按 7 天窗口读取 `2026-01-01` 至本次结束日期的 SG/KK 历史数据，刷新已有订单的 `data.ZSTAT` 及对应 `records` 明细状态。明细按 `MANDT/AUFNR/VBELN/POSNR/ETENR/MATNR` 匹配，来源和生产订单号共同限定订单。完整读取两来源并校验状态快照后才写入；只修改状态及独立的 `_status_checked_at`、`_status_changed_at`、`_status_run_id` 元数据，不导入或删除历史订单，不覆盖数量等其他字段。空字符串是明确的源状态，允许写入；状态字段缺失或 null 时保留原值。源中未返回的本地订单、状态缺失或明细未匹配均报告数量并使任务失败，不推进本次销售订单水位。写入阶段并非事务，失败后可重跑；已成功核对的订单可能已更新。
+销售订单日常增量完成后，默认额外按 7 天窗口读取 `2026-01-01` 至本次结束日期的 SG/KK 历史数据，仅刷新源返回的已有订单的 `data.ZSTAT` 及对应 `records` 明细状态。来源和生产订单号共同限定本次订单范围，代表行和明细均按 `MANDT/AUFNR/VBELN/POSNR/ETENR/MATNR` 严格匹配，不使用单行兜底。完整读取两来源并校验状态快照后才写入；只修改状态及独立的 `_status_checked_at`、`_status_changed_at`、`_status_run_id` 元数据，不导入或删除历史订单，不覆盖数量等其他字段。
+
+同一订单的代表行或任一已有明细未匹配、状态字段缺失或为 null 时，整单保留原值，不写核对元数据，也不计入预计变更或状态迁移；该阶段报告失败，不推进本次销售订单水位。空字符串是明确的源状态，允许写入。写入阶段并非事务，失败后可重跑；其他完整匹配订单可能已更新。
+
+源中未返回的本地订单不参与本次核对，以 `not_returned` 和最多 20 条 `not_returned_samples` 单独报告，替代旧的 `missing_orders` / `missing_order_samples` 字段，不使任务失败。摘要包含 `scope: returned_orders`；合法空响应表示本次没有可核对订单，`checked=0`。SAP 查询日期 `CHDAT` 与本地计划日期 `GSTRS` 没有已验证的等价关系，不能据此断言未返回订单丢失，也不能把任务成功解释为全部本地历史订单已完成核对。
+
+状态快照保存于临时 SQLite，通过订单分组索引及行主键查询；处理时只保留当前订单和一个写入批次，不再构建全量历史状态字典。单个 SAP 日期窗口的 HTTP 响应仍由接口一次性返回；`FULL_WINDOW_DAYS` 控制请求窗口，`SYNC_BATCH_SIZE` 控制写入批次。
 
 `--status-start-date` 可调整历史状态范围；`--skip-status-refresh` 可显式跳过该核对。全量同步直接覆盖所选范围内的源字段，不重复执行状态读取。`--dry-run` 也预览历史状态差异，但不写入元数据或水位。
 
@@ -56,7 +62,7 @@ DOA 判定从详情中的合同/订单号提取 `sales_order`，详情无有效�
 .venv/bin/python scripts/maintenance/refresh_sales_order_status.py --apply
 ```
 
-维护脚本默认只读预览，支持 `--start-date`、`--end-date`、`--prodh-list` 和 `--all-prodh`；正式写入与日常销售订单同步共用集合锁。输出已有数量、匹配数量、未返回数量、预计及实际变更数和状态迁移统计，正式运行摘要写入 `sync_runs`。
+维护脚本默认只读预览，支持 `--start-date`、`--end-date`、`--prodh-list` 和 `--all-prodh`；正式写入与日常销售订单同步共用集合锁。输出核对范围、已有数量、匹配数量、未覆盖数量、状态/明细缺失数量、预计及实际变更数和状态迁移统计，正式运行摘要写入 `sync_runs`。
 
 ## 运行与恢复
 

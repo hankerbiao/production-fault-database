@@ -195,24 +195,42 @@ class Snapshot:
     def __init__(self) -> None:
         self.directory = tempfile.TemporaryDirectory(prefix="sync-snapshot-")
         self.connection = sqlite3.connect(self.directory.name + "/rows.sqlite")
-        self.connection.execute("CREATE TABLE rows (key TEXT PRIMARY KEY, hash TEXT, payload BLOB)")
+        self.connection.execute(
+            "CREATE TABLE rows (key TEXT PRIMARY KEY, hash TEXT, payload BLOB, group_key TEXT)"
+        )
+        self.connection.execute(
+            "CREATE INDEX rows_group ON rows (group_key) WHERE group_key IS NOT NULL"
+        )
         self.duplicates = 0
         self.count = 0
 
-    def add(self, key: str, document: dict[str, Any]) -> None:
+    def add(self, key: str, document: dict[str, Any], *, group_key: str | None = None) -> None:
         payload = BSON.encode(document)
         digest = hashlib.sha256(payload).hexdigest()
-        existing = self.connection.execute("SELECT hash FROM rows WHERE key = ?", (key,)).fetchone()
+        existing = self.connection.execute(
+            "SELECT hash, group_key FROM rows WHERE key = ?", (key,),
+        ).fetchone()
         if existing:
             self.duplicates += 1
-            if existing[0] != digest:
+            if existing[0] != digest or existing[1] != group_key:
                 raise RuntimeError(f"Conflicting source key: {key}")
             return
-        self.connection.execute("INSERT INTO rows VALUES (?, ?, ?)", (key, digest, payload))
+        self.connection.execute(
+            "INSERT INTO rows VALUES (?, ?, ?, ?)", (key, digest, payload, group_key),
+        )
         self.count += 1
 
     def contains(self, key: str) -> bool:
         return self.connection.execute("SELECT 1 FROM rows WHERE key = ?", (key,)).fetchone() is not None
+
+    def contains_group(self, group_key: str) -> bool:
+        return self.connection.execute(
+            "SELECT 1 FROM rows WHERE group_key = ? LIMIT 1", (group_key,),
+        ).fetchone() is not None
+
+    def get(self, key: str) -> dict[str, Any] | None:
+        row = self.connection.execute("SELECT payload FROM rows WHERE key = ?", (key,)).fetchone()
+        return BSON(row[0]).decode() if row is not None else None
 
     def __iter__(self) -> Iterator[tuple[str, dict[str, Any]]]:
         self.connection.commit()

@@ -75,11 +75,13 @@ func ensureCoreIndexes(ctx context.Context, db *mongo.Database, repairCollection
 		}
 	}
 	create(repairCollection, "repairs", []mongo.IndexModel{
+		{Keys: bson.D{{Key: "_synced_at", Value: -1}}},
 		{Keys: bson.D{{Key: "AUFNR", Value: 1}, {Key: "ZDATE_WX", Value: 1}}},
 		{Keys: bson.D{{Key: "PCODE", Value: 1}}},
 		{Keys: bson.D{{Key: "VBELN", Value: 1}}},
 	})
 	create(orderCollection, "orders", []mongo.IndexModel{
+		{Keys: bson.D{{Key: "last_synced_at", Value: -1}}},
 		{Keys: bson.D{{Key: "gstrs_date", Value: 1}, {Key: "data.IF_L6", Value: 1}}},
 		{Keys: bson.D{{Key: "data.VBELN", Value: 1}}},
 		{Keys: bson.D{{Key: "aufnr", Value: 1}}},
@@ -92,6 +94,10 @@ func ensureCoreIndexes(ctx context.Context, db *mongo.Database, repairCollection
 	create("station_records_sap", "station", []mongo.IndexModel{
 		{Keys: bson.D{{Key: "MAKTX_TH", Value: 1}, {Key: "GSTRS", Value: 1}}, Options: options.Index().SetName("station_model_gstrs")},
 		{Keys: bson.D{{Key: "GSTRS", Value: 1}}, Options: options.Index().SetName("station_gstrs")},
+	})
+	create("serial_bindings_sap", "bindings", []mongo.IndexModel{
+		{Keys: bson.D{{Key: "AUFNR_HEAD", Value: 1}}},
+		{Keys: bson.D{{Key: "_synced_at", Value: -1}}},
 	})
 	create("scs_change_records", "scs_change", []mongo.IndexModel{
 		{Keys: bson.D{{Key: "is_5000_company", Value: 1}, {Key: "create_time", Value: -1}}, Options: options.Index().SetName("scs_change_company_time")},

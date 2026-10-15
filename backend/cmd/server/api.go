@@ -12,6 +12,8 @@ import (
 // here makes unsupported endpoints compile-time errors instead of runtime
 // type assertions in individual handlers.
 type storeAPI interface {
+	ExportRows(context.Context, string, []string) ([]bson.M, error)
+	ExportVersion(context.Context) (map[string]string, error)
 	Ping(context.Context) error
 	DataStatus(context.Context) (store.DataStatus, error)
 	SyncRun(context.Context, string) (store.SyncRun, error)

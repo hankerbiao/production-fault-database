@@ -9,6 +9,8 @@ func registerRoutes(h *server) *http.ServeMux {
 	mux.HandleFunc("GET /api/agent-guide.md", h.apiDocument)
 	mux.HandleFunc("GET /api/health", h.health)
 	mux.HandleFunc("GET /api/config", h.serviceConfig)
+	mux.HandleFunc("POST /api/exports/rows", h.exportRows)
+	mux.HandleFunc("GET /api/exports/version", h.exportVersion)
 	mux.HandleFunc("GET /api/faults", h.faults)
 	mux.HandleFunc("POST /api/faults/lookup", h.faultLookup)
 	mux.HandleFunc("POST /api/faults/by-sns", h.faultRowsBySNS)

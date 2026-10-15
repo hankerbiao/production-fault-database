@@ -18,6 +18,28 @@
     { "name": "sync", "description": "同步任务和数据状态" }
   ],
   "paths": {
+    "/api/exports/rows": {
+      "post": {
+        "tags": ["orders", "faults", "views"],
+        "operationId": "exportSourceRows",
+        "description": "服务端导出批量读取。orders 按含源标识的完整 _id 查询，返回完整 data；faults 按生产订单 AUFNR 查询，返回 34 个原始导出字段及记录 ID；bindings 按机头订单查询绑定字段。SAP 订单兼容去零和 12 位补零形式，不按维修时间筛选。成功只返回完整结果，每批超过 10,000 行返回 413，不返回部分数据，调用方应拆分 keys 重试。",
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["resource", "keys"], "additionalProperties": false, "properties": { "resource": { "type": "string", "enum": ["orders", "faults", "bindings"] }, "keys": { "type": "array", "maxItems": 1000, "items": { "type": "string", "minLength": 1, "maxLength": 256 } } } } } } },
+        "responses": {
+          "200": { "description": "完整原始行，包含 items、total 和 complete=true", "content": { "application/json": { "schema": { "type": "object", "required": ["items", "total", "complete"], "properties": { "items": { "type": "array", "items": { "type": "object" } }, "total": { "type": "integer" }, "complete": { "const": true } } } } } },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "413": { "$ref": "#/components/responses/PayloadTooLarge" },
+          "500": { "$ref": "#/components/responses/ServerError" }
+        }
+      }
+    },
+    "/api/exports/version": {
+      "get": {
+        "tags": ["health"],
+        "operationId": "getExportSourceVersion",
+        "description": "导出缓存失效标识。返回 orders、faults、bindings 三个字符串，分别含集合估计数量和最新同步时间；估计数量仅作缓存版本，不作业务统计。",
+        "responses": { "200": { "description": "原始数据同步版本", "content": { "application/json": { "schema": { "type": "object", "additionalProperties": { "type": "string" } } } } }, "500": { "$ref": "#/components/responses/ServerError" } }
+      }
+    },
     "/api/health": {
       "get": {
         "tags": ["health"],

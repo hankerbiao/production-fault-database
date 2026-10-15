@@ -36,6 +36,61 @@ type fakeStore struct {
 	gotPreview           bool
 	gotViewID            string
 	gotViewFilters       store.ViewFilters
+	exportResource       string
+	exportKeys           []string
+	exportItems          []bson.M
+}
+
+func (f *fakeStore) ExportRows(_ context.Context, resource string, keys []string) ([]bson.M, error) {
+	f.exportResource, f.exportKeys = resource, keys
+	return f.exportItems, f.err
+}
+
+func (f *fakeStore) ExportVersion(context.Context) (map[string]string, error) {
+	return map[string]string{"orders": "v1", "faults": "v2", "bindings": "v3"}, f.err
+}
+
+func TestExportRows(t *testing.T) {
+	f := &fakeStore{exportItems: []bson.M{{"_id": "SG:1", "data": bson.M{"POSNR": "000010", "IF_L6": ""}}}}
+	router := registerRoutes(newTestServer(f))
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, httptest.NewRequest("POST", "/api/exports/rows", strings.NewReader(`{"resource":"orders","keys":["SG:1"]}`)))
+	var result struct {
+		Items    []bson.M `json:"items"`
+		Complete bool     `json:"complete"`
+		Total    int      `json:"total"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	if response.Code != 200 || !result.Complete || result.Total != 1 || f.exportResource != "orders" || len(f.exportKeys) != 1 || len(result.Items) != 1 {
+		t.Fatalf("status=%d body=%s resource=%s keys=%v", response.Code, response.Body.String(), f.exportResource, f.exportKeys)
+	}
+	for _, body := range []string{`{`, `{"resource":"other","keys":["1"]}`, `{"resource":"faults","keys":[""]}`, `{"resource":"faults","keys":[1]}`} {
+		response = httptest.NewRecorder()
+		router.ServeHTTP(response, httptest.NewRequest("POST", "/api/exports/rows", strings.NewReader(body)))
+		if response.Code != 400 {
+			t.Fatalf("body=%s status=%d", body, response.Code)
+		}
+	}
+	body, _ := json.Marshal(map[string]any{"resource": "faults", "keys": make([]string, 1001)})
+	response = httptest.NewRecorder()
+	router.ServeHTTP(response, httptest.NewRequest("POST", "/api/exports/rows", strings.NewReader(string(body))))
+	if response.Code != 400 {
+		t.Fatalf("oversized request status=%d", response.Code)
+	}
+	f.err = store.ErrExportBatchTooLarge
+	response = httptest.NewRecorder()
+	router.ServeHTTP(response, httptest.NewRequest("POST", "/api/exports/rows", strings.NewReader(`{"resource":"faults","keys":["1"]}`)))
+	if response.Code != 413 || strings.Contains(response.Body.String(), `"items"`) {
+		t.Fatalf("truncated rows leaked: status=%d body=%s", response.Code, response.Body.String())
+	}
+	f.err = nil
+	response = httptest.NewRecorder()
+	router.ServeHTTP(response, httptest.NewRequest("GET", "/api/exports/version", nil))
+	if response.Code != 200 || !strings.Contains(response.Body.String(), `"bindings":"v3"`) {
+		t.Fatalf("version status=%d body=%s", response.Code, response.Body.String())
+	}
 }
 
 func (f *fakeStore) Ping(context.Context) error { return f.pingErr }
@@ -185,6 +240,7 @@ func TestOpenAPICoversRegisteredAPIRoutes(t *testing.T) {
 		t.Fatal(err)
 	}
 	expected := map[string][]string{
+		"/api/exports/rows": {"post"}, "/api/exports/version": {"get"},
 		"/api/health": {"get"}, "/api/config": {"get"}, "/api/faults": {"get"}, "/api/faults/lookup": {"post"}, "/api/faults/by-sns": {"get", "post"},
 		"/api/faults/by-orders": {"get"}, "/api/faults/detail": {"get"}, "/api/faults/stats": {"get"}, "/api/orders": {"get"},
 		"/api/orders/all": {"get"}, "/api/orders/detail": {"get"}, "/api/orders/stats": {"get"}, "/api/orders/models": {"get"}, "/api/orders/customer-ids": {"get"},

@@ -235,6 +235,48 @@ describe('operations workbench', () => {
     await waitFor(() => expect(fetchMock.mock.calls.some(([url]) => String(url).includes('source=SG') && String(url).includes('customer=CUST-001'))).toBe(true));
   });
 
+  it('applies and clears the overseas filter for order rows and statistics', async () => {
+    const fetchMock = mockFetch();
+    vi.stubGlobal('fetch', fetchMock);
+    render(<App />);
+    fireEvent.click(screen.getAllByRole('button', { name: /销售订单看板/ })[0]);
+    await screen.findByRole('heading', { name: '销售订单看板' });
+    const checkbox = screen.getByRole('checkbox', { name: '海外', exact: true });
+    expect(checkbox).not.toBeChecked();
+    expect(checkbox.closest('.filter-form-body')).not.toBeNull();
+    const expectRequests = async (overseas, source = 'SG') => waitFor(() => {
+      for (const endpoint of ['/api/orders?', '/api/orders/stats']) {
+        const requests = fetchMock.mock.calls.filter(([url]) => String(url).startsWith(endpoint));
+        const params = new URL(String(requests.at(-1)?.[0]), 'http://localhost').searchParams;
+        expect(params.get('overseas')).toBe(overseas);
+        expect(params.get('source')).toBe(source);
+      }
+    });
+
+    fireEvent.change(screen.getByRole('combobox', { name: '订单来源' }), { target: { value: 'SG' } });
+    fireEvent.click(checkbox);
+    fireEvent.click(screen.getByRole('button', { name: /筛选/ }));
+    await expectRequests('true');
+    fireEvent.click(within(screen.getByLabelText('已应用筛选条件')).getByRole('button', { name: /海外\s*是/ }));
+    await expectRequests(null);
+    expect(checkbox).not.toBeChecked();
+
+    fireEvent.click(checkbox);
+    fireEvent.click(screen.getByRole('button', { name: /筛选/ }));
+    await expectRequests('true');
+    fireEvent.click(checkbox);
+    fireEvent.click(screen.getByRole('button', { name: /筛选/ }));
+    await expectRequests(null);
+
+    fireEvent.click(checkbox);
+    fireEvent.click(screen.getByRole('button', { name: /筛选/ }));
+    await expectRequests('true');
+    fireEvent.click(screen.getByRole('button', { name: '重置', exact: true }));
+    await expectRequests(null, null);
+    expect(checkbox).not.toBeChecked();
+    expect(screen.queryByLabelText('已应用筛选条件')).not.toBeInTheDocument();
+  });
+
   it('exports all filtered order rows as a CSV download', async () => {
     const fetchMock = mockFetch();
     vi.stubGlobal('fetch', fetchMock);
@@ -245,8 +287,9 @@ describe('operations workbench', () => {
     fireEvent.click(screen.getAllByRole('button', { name: /销售订单看板/ })[0]);
     await screen.findByRole('heading', { name: '销售订单看板' });
     fireEvent.change(screen.getByRole('combobox', { name: '订单来源' }), { target: { value: 'SG' } });
+    fireEvent.click(screen.getByRole('checkbox', { name: '海外', exact: true }));
     fireEvent.click(screen.getByRole('button', { name: /导出数据/ }));
-    await waitFor(() => expect(fetchMock.mock.calls.some(([url]) => String(url).includes('source=SG') && String(url).includes('pageSize=100'))).toBe(true));
+    await waitFor(() => expect(fetchMock.mock.calls.some(([url]) => String(url).includes('source=SG') && String(url).includes('overseas=true') && String(url).includes('pageSize=100'))).toBe(true));
     expect(createObjectURL).toHaveBeenCalled();
     expect(click).toHaveBeenCalled();
     expect(revokeObjectURL).toHaveBeenCalledWith('blob:orders');

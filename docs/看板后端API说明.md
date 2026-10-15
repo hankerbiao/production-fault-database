@@ -38,6 +38,7 @@
 | `salesOrder` / `productionOrder` | 销售订单/生产订单精确或逗号批量过滤，生产订单兼容前导零 |
 | `serialNumber` | 按已同步订单源记录中的 SN 字段反查；如果源订单没有 SN，结果为空，不跨集合猜测关联 |
 | `productModel` | 精确匹配 `MAKTX_TH`、`CPXH` 或 `MAKTX` |
+| `overseas` | 为 `true` 时，在全部销售订单的物料描述 `data.MAKTX` 中不区分大小写地模糊匹配 `WW`；省略或为 `false` 时不限制海外范围 |
 | `customer` | 精确匹配 `KID` 或 `NAME1_ZU` |
 | `base` | 精确匹配 `LGORT` 或 `WERKS` |
 | `dateFrom` / `dateTo` | `GSTRS` 日期范围，`YYYY-MM-DD` 或 SAP 无分隔日期均可 |
@@ -45,6 +46,8 @@
 | `company5000` | 订单级 5000 公司标识；支持 `true`、`false`、`yes`、`no` 等值 |
 | `shipmentOnly` | 为 `true` 时只返回具备实际发货日期和实际发货数量的订单 |
 | `orderScope` | 来源范围（当前为 `SG` 或 `KK`），与旧参数 `source` 兼容 |
+
+“海外”筛选在分页之前执行，可与其他条件叠加；`/api/orders/all`、`/api/orders?all=true`、`/api/orders/stats` 及看板 CSV 导出使用相同条件。例如：`GET /api/orders?overseas=true&source=SG&page=1&pageSize=20`。
 
 `items[].raw` 中保留源字段和同步字段；订单响应在源数据具备实际发货契约时提供 `shipmentDate`、`shipmentQuantity`、`is5000Company`。缺少源字段时不使用 `GSTRS` 或 `WMENG` 代替，字段保持缺失。`raw.data` 至少可取 `AUFNR`、`VBELN`、`KID`、`NAME1_ZU`、`MAKTX`、`MAKTX_TH`、`LGORT`、`GSTRS`、`WMENG`、`GAMNG`、`ZSTAT`、`AUART`、`IF_L6`，顶层可取 `source`。该接口不聚合或计算任何质量指标。
 

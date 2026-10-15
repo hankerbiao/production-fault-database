@@ -44,7 +44,7 @@ type OrderFilters struct {
 	Keyword, Source, GSTRSFrom, GSTRSTo                                                                   string
 	SalesOrder, ProductionOrder, SerialNumber, ProductModel, Customer, Base, DateFrom, DateTo, OrderScope string
 	ShipmentDateFrom, ShipmentDateTo, Company5000                                                         string
-	ShipmentOnly                                                                                          bool
+	ShipmentOnly, Overseas                                                                                bool
 }
 
 type Fault struct {

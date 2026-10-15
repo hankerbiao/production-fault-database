@@ -39,14 +39,14 @@ func TestMongoQueriesWithTemporaryDatabase(t *testing.T) {
 	now := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
 	_, err = db.Collection(repairName).InsertMany(ctx, []any{
 		bson.M{"_id": "r1", "_source_key": "r1", "_legacy_ids": bson.A{"old-source-key", "merged-document-id"}, "PCODE": "PC-1", "VBELN": "SO-1", "AUFNR": "PO-1", "ERROR_CODE": "E1", "ZDATE_WX": "20260102", "ZTIME": "030405", "_synced_at": now},
-		bson.M{"_id": "r2", "_source_key": "r2", "PCODE": "PC-2", "VBELN": "SO-1", "AUFNR": "PO-2", "ZDATE_WX": "20260101", "GSTRS": "2026-01-01", "MATNR": "B5000051", "RECORD01REPAIRM": "57000766", "ZTIME": "020000", "_synced_at": now},
+		bson.M{"_id": "r2", "_source_key": "r2", "PCODE": "PC-2", "VBELN": "SO-1", "AUFNR": "PO-UNLISTED", "ZDATE_WX": "20260101", "GSTRS": "2026-01-01", "MATNR": "B5000051", "RECORD01REPAIRM": "57000766", "ZTIME": "020000", "_synced_at": now},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	_, err = db.Collection(orderName).InsertMany(ctx, []any{
-		bson.M{"_id": "SG:PO-1", "source": "SG", "aufnr": "PO-1", "data": bson.M{"VBELN": "SO-1", "GSTRS": "2026-01-02", "GAMNG": "3", "WMENG": "2"}, "order_quantity": 3.0, "storage_quantity": 2.0, "record_count": 1, "last_synced_at": now},
-		bson.M{"_id": "KK:PO-2", "source": "KK", "aufnr": "PO-2", "data": bson.M{"VBELN": "SO-1", "GSTRS": "2026-01-03", "GAMNG": "4", "WMENG": "1"}, "order_quantity": 4.0, "storage_quantity": 1.0, "record_count": 1, "last_synced_at": now},
+		bson.M{"_id": "SG:PO-1", "source": "SG", "aufnr": "PO-1", "data": bson.M{"VBELN": "SO-1", "MAKTX": "Model-ww-Overseas", "GSTRS": "2026-01-02", "GAMNG": "3", "WMENG": "2"}, "order_quantity": 3.0, "storage_quantity": 2.0, "record_count": 1, "last_synced_at": now},
+		bson.M{"_id": "KK:PO-2", "source": "KK", "aufnr": "PO-2", "data": bson.M{"VBELN": "SO-1", "MAKTX": "Domestic", "MAKTX_TH": "Model-WW", "GSTRS": "2026-01-03", "GAMNG": "4", "WMENG": "1"}, "order_quantity": 4.0, "storage_quantity": 1.0, "record_count": 1, "last_synced_at": now},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -90,5 +90,25 @@ func TestMongoQueriesWithTemporaryDatabase(t *testing.T) {
 	orderStats, err := s.OrderStats(ctx, OrderFilters{Source: "SG"})
 	if err != nil || orderStats.Total != 1 || orderStats.SalesOrders != 1 || orderStats.SG != 1 || orderStats.OrderQuantity != 3 {
 		t.Fatalf("orderStats=%+v err=%v", orderStats, err)
+	}
+	unfiltered, err := s.Orders(ctx, OrderFilters{}, 1, 1)
+	if err != nil || unfiltered.Total != 2 || len(unfiltered.Items) != 1 || unfiltered.Items[0].ID != "KK:PO-2" {
+		t.Fatalf("unfiltered first page=%+v err=%v", unfiltered, err)
+	}
+	overseas, err := s.Orders(ctx, OrderFilters{Overseas: true}, 1, 1)
+	if err != nil || overseas.Total != 1 || len(overseas.Items) != 1 || overseas.Items[0].ID != "SG:PO-1" {
+		t.Fatalf("overseas search must match descriptions outside the unfiltered first page: %+v err=%v", overseas, err)
+	}
+	overseasStats, err := s.OrderStats(ctx, OrderFilters{Overseas: true})
+	if err != nil || overseasStats.Total != 1 || overseasStats.OrderQuantity != 3 || overseasStats.StorageQuantity != 2 {
+		t.Fatalf("overseas stats=%+v err=%v", overseasStats, err)
+	}
+	allOverseas, err := s.OrdersAll(ctx, OrderFilters{Overseas: true})
+	if err != nil || allOverseas.Total != 1 || len(allOverseas.Items) != 1 || allOverseas.Items[0].ID != "SG:PO-1" {
+		t.Fatalf("all overseas=%+v err=%v", allOverseas, err)
+	}
+	combined, err := s.Orders(ctx, OrderFilters{Overseas: true, Source: "KK"}, 1, 20)
+	if err != nil || combined.Total != 0 || len(combined.Items) != 0 {
+		t.Fatalf("overseas filter must intersect with other conditions: %+v err=%v", combined, err)
 	}
 }

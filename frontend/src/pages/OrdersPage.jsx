@@ -16,9 +16,9 @@ import { Stat, Stats } from '../components/Stats';
 import { downloadCsv } from '../utils/export';
 import { formatBusinessDate, formatDate, formatDateRange, formatNumber } from '../utils/formatters';
 
-const initialFilters = { keyword: '', source: '', productionOrder: '', salesOrder: '', customer: '', productModel: '', dateFrom: '', dateTo: '' };
+const initialFilters = { keyword: '', source: '', productionOrder: '', salesOrder: '', customer: '', productModel: '', dateFrom: '', dateTo: '', overseas: '' };
 const initialStats = { total: 0, salesOrders: 0, dataStartDate: '', dataEndDate: '', latestSyncedAt: '', sg: 0, kk: 0, orderQuantity: 0, machineQuantity: 0, storageQuantity: 0 };
-const filterLabels = { source: '来源', productionOrder: '生产订单', salesOrder: '销售订单', customer: '客户', productModel: '机型', dateFrom: '开始日期', dateTo: '结束日期', keyword: '关键字' };
+const filterLabels = { source: '来源', productionOrder: '生产订单', salesOrder: '销售订单', customer: '客户', productModel: '机型', dateFrom: '开始日期', dateTo: '结束日期', keyword: '关键字', overseas: '海外' };
 
 export function OrdersPage({ modelOptions = [], customerIDOptions = [], setConnected, setRefreshing, refreshToken = 0 }) {
   const resource = usePagedResource({ loadPage: useCallback((filters, page, size) => listOrders(filters, page, size), []), loadStats: useCallback(filters => orderStats(filters), []), initialFilters, initialStats, refreshToken, onConnectionChange: setConnected, onRefreshing: setRefreshing });
@@ -50,6 +50,7 @@ export function OrdersPage({ modelOptions = [], customerIDOptions = [], setConne
           <div className="filter-field"><span>客户</span><CustomerMultiSelect options={customerIDOptions} value={resource.filters.customer ? resource.filters.customer.split(',').filter(Boolean) : []} onChange={values => update('customer', values.join(','))} /></div>
           <div className="filter-field"><span>机型</span><ModelSelect options={modelOptions} value={resource.filters.productModel} onChange={value => update('productModel', value)} placeholder="机型 / Product model" /></div>
           <div className="filter-field filter-field-date"><span>订单时间周期</span><DateRangePicker from={resource.filters.dateFrom} to={resource.filters.dateTo} onChange={(dateFrom, dateTo) => resource.setFilters(previous => ({ ...previous, dateFrom, dateTo }))} label="订单时间周期" /></div>
+          <div className="filter-field"><span>订单范围</span><label className="filter-checkbox"><input type="checkbox" aria-label="海外" checked={resource.filters.overseas === 'true'} onChange={event => update('overseas', event.target.checked ? 'true' : '')} /><span>海外</span></label></div>
         </div>
         <div className="filter-actions"><button className="filter-btn" type="submit" aria-label="搜索 / 筛选" disabled={resource.loading}><Search size={16} />{resource.loading ? '搜索中' : '搜索'}</button><button className="advanced-btn" type="button" onClick={() => setAdvancedOpen(value => !value)} aria-expanded={advancedOpen}><SlidersHorizontal size={16} />高级条件{advancedOpen ? '收起' : '展开'}</button><button className="reset-btn" type="button" onClick={reset} disabled={resource.loading}>重置</button><ExportButton exporting={exporting} onClick={exportData} /></div>
         {advancedOpen && <div className="advanced-filters"><div className="advanced-filters-head"><strong>更多筛选</strong><span>订单号、客户或机型关键字</span></div><div className="advanced-filters-grid"><input className="filter-text" aria-label="关键字" placeholder="关键字：订单号、客户或机型" value={resource.filters.keyword} onChange={event => update('keyword', event.target.value)} /></div></div>}

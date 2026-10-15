@@ -58,6 +58,40 @@ test('switches to orders and filters by source', async ({ page }) => {
   else await expect(page.getByText('PO-1').first()).toBeVisible();
 });
 
+test('filters overseas orders and restores the full list on reset', async ({ page }, testInfo) => {
+  await page.route('**/api/orders?*', async route => {
+    const overseas = new URL(route.request().url()).searchParams.get('overseas') === 'true';
+    const item = overseas
+      ? { id: 'SG:PO-WW', source: 'SG', aufnr: 'PO-WW', materialDescription: 'Model-ww-Overseas' }
+      : { id: 'SG:PO-DOMESTIC', source: 'SG', aufnr: 'PO-DOMESTIC', materialDescription: 'Domestic' };
+    await route.fulfill({ json: { items: [item], total: 1, page: 1, pageSize: 20 } });
+  });
+  await page.goto('/');
+  await navigate(page, /销售订单看板/);
+  const checkbox = page.getByRole('checkbox', { name: '海外', exact: true });
+  await expect(checkbox).toBeVisible();
+  await expect(checkbox).not.toBeChecked();
+  await checkbox.check();
+  const listRequest = page.waitForRequest(request => {
+    const url = new URL(request.url());
+    return url.pathname === '/api/orders' && url.searchParams.get('overseas') === 'true';
+  });
+  const statsRequest = page.waitForRequest(request => {
+    const url = new URL(request.url());
+    return url.pathname === '/api/orders/stats' && url.searchParams.get('overseas') === 'true';
+  });
+  await page.getByRole('button', { name: /筛选/ }).click();
+  await Promise.all([listRequest, statsRequest]);
+  const records = isMobile(page) ? page.locator('.mobile-record-list') : page.locator('.table-scroll');
+  await expect(records.getByText('PO-WW', { exact: true })).toBeVisible();
+  await expect(records.getByText('PO-DOMESTIC', { exact: true })).toHaveCount(0);
+  await page.screenshot({ path: testInfo.outputPath('overseas-filter.png'), fullPage: true });
+  await page.getByRole('button', { name: '重置', exact: true }).click();
+  await expect(checkbox).not.toBeChecked();
+  await expect(records.getByText('PO-DOMESTIC', { exact: true })).toBeVisible();
+  await expect(page.getByLabel('已应用筛选条件')).toHaveCount(0);
+});
+
 test('keeps remaining data views available after delivery retirement', async ({ page }) => {
   await page.goto('/');
   await navigate(page, /工位记录/);

@@ -335,6 +335,30 @@ func TestOrderFiltersSupportActualShipmentQuery(t *testing.T) {
 	}
 }
 
+func TestOrderOverseasFilterAcrossEndpoints(t *testing.T) {
+	for _, endpoint := range []string{"/api/orders", "/api/orders/all", "/api/orders?all=true", "/api/orders/stats"} {
+		for _, value := range []string{"true", " TRUE ", "1", "false", ""} {
+			t.Run(endpoint+"/"+value, func(t *testing.T) {
+				f := &fakeStore{}
+				target, err := url.Parse(endpoint)
+				if err != nil {
+					t.Fatal(err)
+				}
+				params := target.Query()
+				params.Set("overseas", value)
+				params.Set("source", "SG")
+				target.RawQuery = params.Encode()
+				response := httptest.NewRecorder()
+				registerRoutes(newTestServer(f)).ServeHTTP(response, httptest.NewRequest(http.MethodGet, target.String(), nil))
+				want := value == "true" || value == " TRUE " || value == "1"
+				if response.Code != http.StatusOK || f.gotOrderFilters.Overseas != want || f.gotOrderFilters.Source != "SG" {
+					t.Fatalf("status=%d filters=%+v, want Overseas=%v", response.Code, f.gotOrderFilters, want)
+				}
+			})
+		}
+	}
+}
+
 func TestOrderModels(t *testing.T) {
 	f := &fakeStore{models: store.OrderModelsResult{Items: []string{"M-1", "M-2"}}}
 	r := httptest.NewRecorder()

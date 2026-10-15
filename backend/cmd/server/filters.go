@@ -50,6 +50,7 @@ func orderFilters(q url.Values) store.OrderFilters {
 		Customer: query(q, "customer"), Base: query(q, "base"), DateFrom: query(q, "dateFrom"), DateTo: query(q, "dateTo"), OrderScope: query(q, "orderScope"),
 		ShipmentDateFrom: query(q, "shipmentDateFrom"), ShipmentDateTo: query(q, "shipmentDateTo"),
 		Company5000: company5000Filter(query(q, "company5000")), ShipmentOnly: parseBool(q.Get("shipmentOnly")),
+		Overseas: parseBool(q.Get("overseas")),
 	}
 }
 

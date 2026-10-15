@@ -159,6 +159,9 @@ func orderFilter(f OrderFilters) bson.M {
 	if f.OrderScope != "" {
 		conditions = append(conditions, bson.M{"source": f.OrderScope})
 	}
+	if f.Overseas {
+		conditions = append(conditions, bson.M{"data.MAKTX": bson.M{"$regex": "WW", "$options": "i"}})
+	}
 	if f.SalesOrder != "" {
 		conditions = append(conditions, exactBatch("data.VBELN", f.SalesOrder, true))
 	}

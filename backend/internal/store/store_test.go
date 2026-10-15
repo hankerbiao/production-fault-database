@@ -104,6 +104,21 @@ func TestOrderFilterSupportsMultipleCustomerIDs(t *testing.T) {
 	}
 }
 
+func TestOrderFilterOverseasMatchesMaterialDescription(t *testing.T) {
+	filter := orderFilter(OrderFilters{Overseas: true, Source: "SG", ProductModel: "Model-A"})
+	conditions := filter["$and"].(primitive.A)
+	if len(conditions) != 3 || conditions[0].(bson.M)["source"] != "SG" {
+		t.Fatalf("overseas filter lost other conditions: %v", filter)
+	}
+	description := conditions[1].(bson.M)["data.MAKTX"].(bson.M)
+	if description["$regex"] != "WW" || description["$options"] != "i" {
+		t.Fatalf("expected case-insensitive WW substring search on material description: %v", description)
+	}
+	if filter := orderFilter(OrderFilters{}); len(filter) != 0 {
+		t.Fatalf("unchecked overseas filter must include all orders: %v", filter)
+	}
+}
+
 func TestOrderDateRangeFilterSupportsISOAndSAPDates(t *testing.T) {
 	filter := orderFilter(OrderFilters{DateFrom: "2026-08-04", DateTo: "20260902"})
 	conditions := filter["$and"].(primitive.A)

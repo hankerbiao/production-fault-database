@@ -66,7 +66,8 @@ func (s *Store) Orders(ctx context.Context, f OrderFilters, page, pageSize int) 
 	if err != nil {
 		return OrderListResult{}, err
 	}
-	cur, err := s.orders.Find(ctx, filter, options.Find().SetProjection(orderListProjection).SetSort(bson.D{{Key: "data.GSTRS", Value: -1}, {Key: "last_synced_at", Value: -1}}).SetSkip(int64((page-1)*pageSize)).SetLimit(int64(pageSize)).SetBatchSize(10000))
+	// Synced orders often share both timestamps; _id keeps page boundaries stable.
+	cur, err := s.orders.Find(ctx, filter, options.Find().SetProjection(orderListProjection).SetSort(bson.D{{Key: "data.GSTRS", Value: -1}, {Key: "last_synced_at", Value: -1}, {Key: "_id", Value: -1}}).SetSkip(int64((page-1)*pageSize)).SetLimit(int64(pageSize)).SetBatchSize(10000))
 	if err != nil {
 		return OrderListResult{}, err
 	}

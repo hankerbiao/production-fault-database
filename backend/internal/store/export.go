@@ -14,6 +14,11 @@ import (
 const MaxExportKeys = 1000
 
 var ErrExportBatchTooLarge = errors.New("export batch exceeds 10000 rows; split the keys and retry")
+var ErrBOMExportBatchTooLarge = errors.New("BOM export batch exceeds 250000 rows; split the keys and retry")
+
+const MaxBOMExportRows = 250000
+
+var bomExportFields = []string{"AUFNR_1", "MATNR", "MENGE_A", "VBELN_EX", "MAKTX"}
 
 var exportFaultFields = []string{
 	"FACTORY", "VBELN", "AUFNR", "ZJXMC", "PCODE", "ZNGGZ", "U_FIND", "T_FIND",
@@ -45,6 +50,10 @@ func exportOrderKeys(keys []string) []string {
 	return result
 }
 
+func bomExportFilter(keys []string) bson.M {
+	return bson.M{"AUFNR_1": bson.M{"$in": exportOrderKeys(keys)}}
+}
+
 // ExportRows reads source fields in a single bounded cursor, without counting
 // and sorting the same result again for each 100-row browser page.
 func (s *Store) ExportRows(ctx context.Context, resource string, keys []string) ([]bson.M, error) {
@@ -56,6 +65,7 @@ func (s *Store) ExportRows(ctx context.Context, resource string, keys []string) 
 	}
 	var collection *mongo.Collection
 	var filter, projection bson.M
+	rowLimit := MaxBulkQueryRows
 	switch resource {
 	case "orders":
 		collection = s.orders
@@ -69,11 +79,16 @@ func (s *Store) ExportRows(ctx context.Context, resource string, keys []string) 
 		collection = s.views["ZSGV_ZPP_SERNOLIST"]
 		filter = bson.M{"AUFNR_HEAD": bson.M{"$in": exportOrderKeys(keys)}}
 		projection = exportProjection([]string{"AUFNR_HEAD", "AUFNR_ITEM", "ZCODE_HEAD", "ZCODE_ITEM"})
+	case "bom":
+		collection = s.views["ZSGV_ZSD124"]
+		filter = bomExportFilter(keys)
+		projection = exportProjection(bomExportFields)
+		rowLimit = MaxBOMExportRows
 	default:
 		return nil, fmt.Errorf("unknown export resource")
 	}
 	cursor, err := collection.Find(ctx, filter, options.Find().
-		SetProjection(projection).SetLimit(MaxBulkQueryRows+1).SetBatchSize(1000))
+		SetProjection(projection).SetLimit(int64(rowLimit+1)).SetBatchSize(1000))
 	if err != nil {
 		return nil, err
 	}
@@ -82,7 +97,10 @@ func (s *Store) ExportRows(ctx context.Context, resource string, keys []string) 
 	if err := cursor.All(ctx, &rows); err != nil {
 		return nil, err
 	}
-	if len(rows) > MaxBulkQueryRows {
+	if len(rows) > rowLimit {
+		if resource == "bom" {
+			return nil, ErrBOMExportBatchTooLarge
+		}
 		return nil, ErrExportBatchTooLarge
 	}
 	return rows, nil

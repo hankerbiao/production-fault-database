@@ -22,8 +22,8 @@
       "post": {
         "tags": ["orders", "faults", "views"],
         "operationId": "exportSourceRows",
-        "description": "服务端导出批量读取。orders 按含源标识的完整 _id 查询，返回完整 data；faults 按生产订单 AUFNR 查询，返回 34 个原始导出字段及记录 ID；bindings 按机头订单查询绑定字段。SAP 订单兼容去零和 12 位补零形式，不按维修时间筛选。成功只返回完整结果，每批超过 10,000 行返回 413，不返回部分数据，调用方应拆分 keys 重试。",
-        "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["resource", "keys"], "additionalProperties": false, "properties": { "resource": { "type": "string", "enum": ["orders", "faults", "bindings"] }, "keys": { "type": "array", "maxItems": 1000, "items": { "type": "string", "minLength": 1, "maxLength": 256 } } } } } } },
+        "description": "服务端导出批量读取。orders 按含源标识的完整 _id 查询，返回完整 data；faults 按生产订单 AUFNR 查询，返回 34 个原始导出字段及记录 ID；bindings 按机头订单查询绑定字段；bom 按生产订单 AUFNR_1 精确查询并只返回发料聚合所需字段。SAP 订单兼容去零和 12 位补零形式，不按维修时间筛选。成功只返回完整结果；orders、faults、bindings 每批超过 10,000 行，或 bom 超过 250,000 行，返回 413 且不返回部分数据，调用方应拆分 keys 重试。",
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["resource", "keys"], "additionalProperties": false, "properties": { "resource": { "type": "string", "enum": ["orders", "faults", "bindings", "bom"] }, "keys": { "type": "array", "maxItems": 1000, "items": { "type": "string", "minLength": 1, "maxLength": 256 } } } } } } },
         "responses": {
           "200": { "description": "完整原始行，包含 items、total 和 complete=true", "content": { "application/json": { "schema": { "type": "object", "required": ["items", "total", "complete"], "properties": { "items": { "type": "array", "items": { "type": "object" } }, "total": { "type": "integer" }, "complete": { "const": true } } } } } },
           "400": { "$ref": "#/components/responses/BadRequest" },

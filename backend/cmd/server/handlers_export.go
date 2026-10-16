@@ -20,7 +20,7 @@ func (s *server) exportRows(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 400, map[string]string{"error": "invalid export request"})
 		return
 	}
-	if body.Resource != "orders" && body.Resource != "faults" && body.Resource != "bindings" {
+	if body.Resource != "orders" && body.Resource != "faults" && body.Resource != "bindings" && body.Resource != "bom" {
 		writeJSON(w, 400, map[string]string{"error": "unknown export resource"})
 		return
 	}
@@ -35,7 +35,7 @@ func (s *server) exportRows(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	rows, err := s.store.ExportRows(r.Context(), body.Resource, body.Keys)
-	if errors.Is(err, store.ErrExportBatchTooLarge) {
+	if errors.Is(err, store.ErrExportBatchTooLarge) || errors.Is(err, store.ErrBOMExportBatchTooLarge) {
 		writeJSON(w, http.StatusRequestEntityTooLarge, map[string]string{"error": err.Error()})
 		return
 	}

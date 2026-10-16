@@ -12,10 +12,10 @@
 4. 列表结果用于筛选和定位，详情结果用于读取完整字段。不要假定 `raw` 源文档字段固定。
 
 服务端 Excel 导出可调用 `POST /api/exports/rows`，请求 `{resource, keys}`。
-resource 为 orders（完整源订单 ID，如 SG:订单号）、faults（生产订单号）或 bindings（机头生产订单号）。
+resource 为 orders（完整源订单 ID，如 SG:订单号）、faults（生产订单号）、bindings（机头生产订单号）或 bom（BOM 发料生产订单号）。
 每批最多 1,000 个 key，返回完整原始导出字段；缺失字段保持缺失。
-成功响应包含 items、total、complete=true；超过 10,000 行返回 413，不返回部分结果，
-应拆分 keys 后重试。单一 key 仍超过上限时，使用已有分页接口检查总数并完整读取。
+成功响应包含 items、total、complete=true；orders、faults、bindings 超过 10,000 行，或 bom 超过 250,000 行时返回 413，不返回部分结果，应拆分 keys 后重试。
+SAP 生产订单键按精确值匹配，并兼容去零和 12 位补零形式；BOM 导出使用 `AUFNR_1` 索引，不做分页计数或排序。
 `GET /api/exports/version` 返回三个数据源的同步版本，用于使服务器导出缓存失效。
 此通道不包含看板业务筛选，也不使用维修时间筛选或排序。
 5. 默认只处理业务键已经确定的记录。跨域关联优先使用生产订单、销售订单、主机/部件序列号等稳定键，不能仅用描述性文本做唯一匹配。

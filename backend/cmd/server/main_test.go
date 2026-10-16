@@ -66,6 +66,11 @@ func TestExportRows(t *testing.T) {
 	if response.Code != 200 || !result.Complete || result.Total != 1 || f.exportResource != "orders" || len(f.exportKeys) != 1 || len(result.Items) != 1 {
 		t.Fatalf("status=%d body=%s resource=%s keys=%v", response.Code, response.Body.String(), f.exportResource, f.exportKeys)
 	}
+	response = httptest.NewRecorder()
+	router.ServeHTTP(response, httptest.NewRequest("POST", "/api/exports/rows", strings.NewReader(`{"resource":"bom","keys":["1"]}`)))
+	if response.Code != 200 || f.exportResource != "bom" {
+		t.Fatalf("BOM export status=%d body=%s resource=%s", response.Code, response.Body.String(), f.exportResource)
+	}
 	for _, body := range []string{`{`, `{"resource":"other","keys":["1"]}`, `{"resource":"faults","keys":[""]}`, `{"resource":"faults","keys":[1]}`} {
 		response = httptest.NewRecorder()
 		router.ServeHTTP(response, httptest.NewRequest("POST", "/api/exports/rows", strings.NewReader(body)))
@@ -84,6 +89,12 @@ func TestExportRows(t *testing.T) {
 	router.ServeHTTP(response, httptest.NewRequest("POST", "/api/exports/rows", strings.NewReader(`{"resource":"faults","keys":["1"]}`)))
 	if response.Code != 413 || strings.Contains(response.Body.String(), `"items"`) {
 		t.Fatalf("truncated rows leaked: status=%d body=%s", response.Code, response.Body.String())
+	}
+	f.err = store.ErrBOMExportBatchTooLarge
+	response = httptest.NewRecorder()
+	router.ServeHTTP(response, httptest.NewRequest("POST", "/api/exports/rows", strings.NewReader(`{"resource":"bom","keys":["1"]}`)))
+	if response.Code != 413 || strings.Contains(response.Body.String(), `"items"`) {
+		t.Fatalf("oversized BOM export status=%d body=%s", response.Code, response.Body.String())
 	}
 	f.err = nil
 	response = httptest.NewRecorder()

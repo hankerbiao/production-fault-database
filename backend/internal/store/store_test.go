@@ -155,6 +155,31 @@ func TestBatchAndLeadingZeroFilters(t *testing.T) {
 	}
 }
 
+func TestBOMExportUsesExactPaddedOrderKeysAndNarrowProjection(t *testing.T) {
+	filter := bomExportFilter([]string{"1", "000000000002"})
+	keys := filter["AUFNR_1"].(bson.M)["$in"].([]string)
+	for _, key := range []string{"1", "000000000001", "2", "000000000002"} {
+		if !containsString(keys, key) {
+			t.Errorf("BOM filter keys=%v, missing %q", keys, key)
+		}
+	}
+	if len(filter) != 1 || len(filter["AUFNR_1"].(bson.M)) != 1 {
+		t.Fatalf("BOM filter should use exact indexed order keys: %v", filter)
+	}
+	projection := exportProjection(bomExportFields)
+	for _, field := range []string{"_id", "_source_key", "AUFNR_1", "MATNR", "MENGE_A", "VBELN_EX", "MAKTX"} {
+		if projection[field] != 1 {
+			t.Errorf("BOM export projection missing %q: %v", field, projection)
+		}
+	}
+	if len(projection) != 7 {
+		t.Fatalf("BOM export projection is not narrow: %v", projection)
+	}
+	if MaxBOMExportRows != 250000 {
+		t.Fatalf("BOM export row limit=%d", MaxBOMExportRows)
+	}
+}
+
 func TestNormalizedOrderCandidatesHandleLeadingZeroes(t *testing.T) {
 	values := normalizedOrderCandidates([]any{"000010349862", "10349862", "PO-1", ""})
 	want := map[string]bool{"000010349862": true, "10349862": true, "PO-1": true}

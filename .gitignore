@@ -33,6 +33,7 @@ backend/bin/
 backend/server
 
 # Local runtime state
+logs/
 *.log
 *.db
 *.sqlite

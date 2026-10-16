@@ -93,7 +93,7 @@ class SyncError(RuntimeError):
         return {"code": self.code, "message": str(self), "retryable": self.retryable}
 
 
-def resolve_tasks(requested: Iterable[str] | None) -> list[Task]:
+def resolve_tasks(requested: Iterable[str] | None, *, skip_scs: bool = False) -> list[Task]:
     """Return the stable, dependency-complete task plan for a request."""
     requested_ids = list(requested or TASK_BY_ID)
     unknown = sorted(set(requested_ids) - TASK_BY_ID.keys())
@@ -111,7 +111,12 @@ def resolve_tasks(requested: Iterable[str] | None) -> list[Task]:
 
     for task_id in requested_ids:
         visit(task_id)
-    return sorted((TASK_BY_ID[task_id] for task_id in resolved), key=lambda item: item.priority)
+    tasks = sorted((TASK_BY_ID[task_id] for task_id in resolved), key=lambda item: item.priority)
+    if skip_scs:
+        tasks = [task for task in tasks if not task.id.startswith("scs_")]
+        if not tasks:
+            raise SyncError("跳过 SCS 后没有可执行的同步任务", code="invalid_request")
+    return tasks
 
 
 def parse_iso_date(value: str | None, name: str) -> str | None:
@@ -123,7 +128,7 @@ def parse_iso_date(value: str | None, name: str) -> str | None:
         raise SyncError(f"{name} 必须为 YYYY-MM-DD", code="invalid_request") from exc
 
 
-def validate_request(mode: str, requested: Iterable[str] | None, start_date: str | None, end_date: str | None) -> tuple[list[Task], str | None, str | None]:
+def validate_request(mode: str, requested: Iterable[str] | None, start_date: str | None, end_date: str | None, *, skip_scs: bool = False) -> tuple[list[Task], str | None, str | None]:
     if mode not in {"incremental", "full"}:
         raise SyncError("mode 必须为 incremental 或 full", code="invalid_request")
     start = parse_iso_date(start_date, "startDate")
@@ -134,7 +139,7 @@ def validate_request(mode: str, requested: Iterable[str] | None, start_date: str
         raise SyncError("增量同步不接受 startDate", code="invalid_request")
     if start and end and start > end:
         raise SyncError("startDate 不能晚于 endDate", code="invalid_request")
-    tasks = resolve_tasks(requested)
+    tasks = resolve_tasks(requested, skip_scs=skip_scs)
     unsupported = [task.id for task in tasks if mode == "full" and not task.full_supported]
     if unsupported:
         raise SyncError("任务不支持全量同步: " + ", ".join(unsupported), code="unsupported_mode")
@@ -267,15 +272,15 @@ class Orchestrator:
         self.python = python or os.getenv("SYNC_PYTHON", sys.executable)
         self.attempts = max(1, attempts)
 
-    def execute(self, *, mode: str, requested: list[str] | None = None, start_date: str | None = None, end_date: str | None = None, source: str = "cli", run_id: str | None = None) -> dict[str, Any]:
-        tasks, start, end = validate_request(mode, requested, start_date, end_date)
+    def execute(self, *, mode: str, requested: list[str] | None = None, start_date: str | None = None, end_date: str | None = None, source: str = "cli", run_id: str | None = None, skip_scs: bool = False) -> dict[str, Any]:
+        tasks, start, end = validate_request(mode, requested, start_date, end_date, skip_scs=skip_scs)
         run_id = run_id or uuid4().hex
         lease = Lease(self.db, run_id, int(os.getenv("SYNC_ORCHESTRATOR_LEASE_SECONDS", "120")))
         lease.acquire()
         current_task: Task | None = None
         try:
             self.store.abandon_stale(datetime.fromtimestamp(time.time() - int(os.getenv("SYNC_ORCHESTRATOR_STALE_SECONDS", "300")), timezone.utc))
-            self.store.create(run_id, mode=mode, requested=list(requested or [task.id for task in TASKS]), tasks=tasks, start_date=start, end_date=end, source=source)
+            self.store.create(run_id, mode=mode, requested=list(requested or [task.id for task in tasks]), tasks=tasks, start_date=start, end_date=end, source=source)
             for task in tasks:
                 current_task = task
                 if lease.lost:
@@ -361,6 +366,7 @@ def main() -> int:
     run_parser = subparsers.add_parser("run")
     run_parser.add_argument("--mode", choices=("incremental", "full"), default="incremental")
     run_parser.add_argument("--tasks", nargs="*", help="任务 ID；省略则执行全部任务")
+    run_parser.add_argument("--skip-scs", action="store_true", help="跳过 SCS DOA 和换上换下采集，保留其他任务及其依赖")
     run_parser.add_argument("--start-date")
     run_parser.add_argument("--end-date")
     run_parser.add_argument("--source", default="cli")
@@ -375,7 +381,7 @@ def main() -> int:
         install_graceful_shutdown()
         client = MongoClient(mongo_uri(), **mongo_client_options())
         try:
-            result = Orchestrator(client[env("MONGODB_DATABASE")]).execute(mode=args.mode, requested=args.tasks, start_date=args.start_date, end_date=args.end_date, source=args.source, run_id=args.run_id)
+            result = Orchestrator(client[env("MONGODB_DATABASE")]).execute(mode=args.mode, requested=args.tasks, start_date=args.start_date, end_date=args.end_date, source=args.source, run_id=args.run_id, skip_scs=args.skip_scs)
         finally:
             client.close()
         print(json.dumps(serialize(result), ensure_ascii=False, default=str))

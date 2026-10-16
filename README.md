@@ -310,6 +310,15 @@ RECORD01REPAIRM SLOT AUFNR VBELN POSNR U_FIND U_RMA_NAME RMA_RESULT RMA_TYPE2
 .venv/bin/python scripts/sync/syncctl.py run --mode incremental --source cron
 ```
 
+临时跳过 SCS DOA 和换上换下采集时，加上 `--skip-scs`，其余任务及依赖顺序保持不变：
+
+```bash
+.venv/bin/python scripts/sync/syncctl.py run --mode incremental --source cron --skip-scs
+```
+
+该参数也支持全量模式及 `--tasks` 指定的任务；过滤后没有可执行任务会报错。
+恢复 SCS 采集时移除该参数即可。
+
 编排器会记录 MongoDB 运行历史、阶段摘要、心跳和失败原因；全量同步需显式指定任务及起始日期：
 
 ```bash

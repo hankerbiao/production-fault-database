@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"net/http"
 	"strings"
 
@@ -39,7 +40,9 @@ func (s *server) viewStream(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		streamTSV(w, strings.ToLower(viewID)+".tsv")
-		_ = s.store.ViewSCSStream(r.Context(), viewID, viewFilters(r.URL.Query()), w)
+		if err := s.store.ViewSCSStream(r.Context(), viewID, viewFilters(r.URL.Query()), w); err != nil {
+			writeStreamError(w, err)
+		}
 		return
 	}
 	filters := viewFilters(r.URL.Query())
@@ -53,7 +56,18 @@ func (s *server) viewStream(w http.ResponseWriter, r *http.Request) {
 
 func (s *server) viewStationStream(w http.ResponseWriter, r *http.Request) {
 	streamTSV(w, "station.tsv")
-	_ = s.store.ViewStationStream(r.Context(), viewFilters(r.URL.Query()), w)
+	if err := s.store.ViewStationStream(r.Context(), viewFilters(r.URL.Query()), w); err != nil {
+		writeStreamError(w, err)
+	}
+}
+
+func writeStreamError(w http.ResponseWriter, err error) {
+	status := http.StatusBadRequest
+	if errors.Is(err, store.ErrStreamQueryTooLarge) {
+		status = http.StatusRequestEntityTooLarge
+	}
+	w.Header().Del("Content-Disposition")
+	writeJSON(w, status, map[string]string{"error": err.Error()})
 }
 
 func streamTSV(w http.ResponseWriter, filename string) {

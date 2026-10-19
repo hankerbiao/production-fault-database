@@ -68,3 +68,12 @@ func (s *server) orderCustomerIDs(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, result)
 }
+
+func (s *server) orderOptions(w http.ResponseWriter, r *http.Request) {
+	result, err := s.store.OrderOptions(r.Context(), strings.TrimSpace(r.URL.Query().Get("base")))
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}

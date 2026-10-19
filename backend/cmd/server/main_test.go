@@ -27,6 +27,7 @@ type fakeStore struct {
 	ostats               store.OrderStatsResult
 	models               store.OrderModelsResult
 	customerIDs          store.OrderCustomerIDsResult
+	orderOptions         store.OrderOptionsResult
 	err                  error
 	gotPage, gotPageSize int
 	gotFilters           store.Filters
@@ -166,6 +167,12 @@ func (f *fakeStore) OrderCustomerIDs(context.Context) (store.OrderCustomerIDsRes
 	}
 	return f.customerIDs, nil
 }
+func (f *fakeStore) OrderOptions(context.Context, string) (store.OrderOptionsResult, error) {
+	if f.err != nil {
+		return store.OrderOptionsResult{}, f.err
+	}
+	return f.orderOptions, nil
+}
 func (f *fakeStore) DataStatus(context.Context) (store.DataStatus, error) {
 	return store.DataStatus{}, f.err
 }
@@ -254,7 +261,7 @@ func TestOpenAPICoversRegisteredAPIRoutes(t *testing.T) {
 		"/api/exports/rows": {"post"}, "/api/exports/version": {"get"},
 		"/api/health": {"get"}, "/api/config": {"get"}, "/api/faults": {"get"}, "/api/faults/lookup": {"post"}, "/api/faults/by-sns": {"get", "post"},
 		"/api/faults/by-orders": {"get"}, "/api/faults/detail": {"get"}, "/api/faults/stats": {"get"}, "/api/orders": {"get"},
-		"/api/orders/all": {"get"}, "/api/orders/detail": {"get"}, "/api/orders/stats": {"get"}, "/api/orders/models": {"get"}, "/api/orders/customer-ids": {"get"},
+		"/api/orders/all": {"get"}, "/api/orders/detail": {"get"}, "/api/orders/stats": {"get"}, "/api/orders/models": {"get"}, "/api/orders/customer-ids": {"get"}, "/api/orders/options": {"get"},
 		"/api/views/{viewID}": {"get"}, "/api/views/{viewID}/all": {"get"}, "/api/views/{viewID}/stream": {"get"}, "/api/views/{viewID}/detail": {"get"}, "/api/views/{viewID}/stats": {"get"},
 		"/api/sync/incremental": {"post"}, "/api/sync/status": {"get"}, "/api/sync/tasks": {"get"}, "/api/sync/runs": {"get", "post"}, "/api/sync/runs/{id}": {"get"}, "/api/sync/runs/{id}/retry": {"post"}, "/api/data-status": {"get"},
 	}

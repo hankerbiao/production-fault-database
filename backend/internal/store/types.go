@@ -23,6 +23,12 @@ type Store struct {
 	companyOrderCacheMu sync.Mutex
 	companyOrderCacheAt time.Time
 	companyOrderCache   []string
+	orderOptionsCacheMu sync.Mutex
+	orderOptionsCacheAt time.Time
+	orderOptionsCache   map[string]OrderOptionsResult
+	dataStatusCacheMu   sync.Mutex
+	dataStatusCacheAt   time.Time
+	dataStatusCache     DataStatus
 }
 
 // SyncRun is intentionally flexible because the Python orchestration runtime
@@ -143,6 +149,9 @@ type OrderListResult struct {
 const MaxBulkQueryRows = 10000
 const MaxOrderQueryRows = MaxBulkQueryRows
 const MaxViewQueryRows = MaxBulkQueryRows
+const MaxSCSStreamRows = 250000
+const MaxStationStreamRows = 500000
+const MaxOrderOptionValues = 20000
 
 var bomStreamFields = []string{"id", "AUFNR_1", "AUART", "VBELN_EX", "GSTRS", "GSTRS_DATE", "MENGE_A", "MATNR", "LGORT", "BUDAT_MKPF", "MAKTX"}
 var stationStreamFields = []string{"id", "PCODE", "AUFNR", "KDAUF", "GSTRS", "SPEC", "SPEC_DESC", "OPERATION", "ACTUAL_START_TIME", "ACTUAL_END_TIME", "MAKTX_TH", "LGORT", "LINE_CODE"}
@@ -166,6 +175,15 @@ type OrderModelsResult struct {
 
 type OrderCustomerIDsResult struct {
 	Items []string `json:"items"`
+}
+
+type OrderOptionsResult struct {
+	ProductionOrders []string `json:"productionOrders"`
+	SalesOrders      []string `json:"salesOrders"`
+	MaterialNumbers  []string `json:"materialNumbers"`
+	ProductModels    []string `json:"productModels"`
+	Bases            []string `json:"bases"`
+	CustomerIDs      []string `json:"customerIds"`
 }
 
 type ViewFilters struct {
@@ -250,7 +268,9 @@ const bomStreamCacheTTL = 60 * time.Second
 const bomStreamCacheMaxBytes = 64 << 20
 const stationStreamCacheTTL = 60 * time.Second
 const stationStreamCacheMaxBytes = 96 << 20
-const companyOrderCacheTTL = 60 * time.Second
+const companyOrderCacheTTL = 10 * time.Minute
+const orderOptionsCacheTTL = 10 * time.Minute
+const dataStatusCacheTTL = 30 * time.Second
 
 // Bulk and board queries use these narrow projections; detail endpoints read
 // the complete source document separately.

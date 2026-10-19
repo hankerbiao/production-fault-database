@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"strconv"
@@ -14,6 +15,9 @@ import (
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
+
+var ErrStreamQueryTooLarge = errors.New("stream query exceeds the configured row limit")
+var ErrSCSStreamScopeRequired = errors.New("SCS stream query requires at least one filter")
 
 func (s *Store) ViewBOMStream(ctx context.Context, f ViewFilters, out io.Writer) error {
 	if err := ValidateBOMFilter(f); err != nil {
@@ -101,7 +105,11 @@ func (s *Store) viewBOMStream(ctx context.Context, f ViewFilters, out io.Writer)
 // It avoids JSON map reflection while preserving every matching station row;
 // callers are responsible for applying selective model/base/SN filters.
 func (s *Store) ViewStationStream(ctx context.Context, f ViewFilters, out io.Writer) error {
-	if f == defaultStationStreamFilters() && s.stationWarmDone != nil {
+	useDefaultFilters := f == (ViewFilters{})
+	if useDefaultFilters {
+		f = defaultStationStreamFilters()
+	}
+	if useDefaultFilters && s.stationWarmDone != nil {
 		select {
 		case <-s.stationWarmDone:
 		case <-ctx.Done():
@@ -119,12 +127,18 @@ func (s *Store) ViewSCSStream(ctx context.Context, viewID string, f ViewFilters,
 		return fmt.Errorf("unknown view: %s", viewID)
 	}
 	filter := viewFilter(viewID, f, config.searchFields, config.dateField)
+	if len(filter) == 0 {
+		return ErrSCSStreamScopeRequired
+	}
+	if err := ensureStreamRowLimit(ctx, s.views[viewID], filter, MaxSCSStreamRows); err != nil {
+		return err
+	}
 	fields := scsStreamFields(viewID)
 	projection := bson.M{"_id": 1}
 	for _, field := range fields[1:] {
 		projection[field] = 1
 	}
-	cur, err := s.views[viewID].Find(ctx, filter, options.Find().SetProjection(projection).SetSort(bson.D{{Key: config.orderFields[0], Value: -1}}).SetBatchSize(10000))
+	cur, err := s.views[viewID].Find(ctx, filter, options.Find().SetProjection(projection).SetSort(bson.D{{Key: config.orderFields[0], Value: -1}}).SetLimit(MaxSCSStreamRows).SetBatchSize(10000))
 	if err != nil {
 		return err
 	}
@@ -195,11 +209,14 @@ func (s *Store) viewStationStream(ctx context.Context, f ViewFilters, out io.Wri
 		delete(s.stationCache, cacheKey)
 		s.stationCacheMu.Unlock()
 	}
+	if err := ensureStreamRowLimit(ctx, s.views["Z_V_ZMES_T_001"], filter, MaxStationStreamRows); err != nil {
+		return err
+	}
 	projection := bson.M{"_id": 0, "_source_key": 1}
 	for _, field := range stationStreamFields[1:] {
 		projection[field] = 1
 	}
-	cur, err := s.views["Z_V_ZMES_T_001"].Find(ctx, filter, options.Find().SetProjection(projection).SetBatchSize(10000))
+	cur, err := s.views["Z_V_ZMES_T_001"].Find(ctx, filter, options.Find().SetProjection(projection).SetLimit(MaxStationStreamRows).SetBatchSize(10000))
 	if err != nil {
 		return err
 	}
@@ -236,6 +253,19 @@ func (s *Store) viewStationStream(ctx context.Context, f ViewFilters, out io.Wri
 		s.stationCacheMu.Lock()
 		s.stationCache[cacheKey] = bomStreamCacheEntry{data: snapshot.Bytes(), expiresAt: time.Now().Add(stationStreamCacheTTL)}
 		s.stationCacheMu.Unlock()
+	}
+	return nil
+}
+
+func ensureStreamRowLimit(ctx context.Context, collection interface {
+	CountDocuments(context.Context, interface{}, ...*options.CountOptions) (int64, error)
+}, filter bson.M, limit int) error {
+	count, err := collection.CountDocuments(ctx, filter, options.Count().SetLimit(int64(limit+1)))
+	if err != nil {
+		return err
+	}
+	if count > int64(limit) {
+		return fmt.Errorf("%w: 查询结果约 %d 条，超过单次上限 %d 条，请缩小筛选范围", ErrStreamQueryTooLarge, count, limit)
 	}
 	return nil
 }

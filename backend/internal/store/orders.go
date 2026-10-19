@@ -6,6 +6,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo/options"
@@ -58,6 +59,89 @@ func (s *Store) OrderCustomerIDs(ctx context.Context) (OrderCustomerIDsResult, e
 	}
 	sort.Strings(items)
 	return OrderCustomerIDsResult{Items: items}, nil
+}
+
+func (s *Store) OrderOptions(ctx context.Context, base string) (OrderOptionsResult, error) {
+	base = strings.TrimSpace(base)
+	s.orderOptionsCacheMu.Lock()
+	if s.orderOptionsCache != nil {
+		if cached, ok := s.orderOptionsCache[base]; ok && time.Since(s.orderOptionsCacheAt) < orderOptionsCacheTTL {
+			s.orderOptionsCacheMu.Unlock()
+			return cloneOrderOptions(cached), nil
+		}
+	}
+	s.orderOptionsCacheMu.Unlock()
+
+	fields := map[string]string{
+		"productionOrders": "aufnr",
+		"salesOrders":      "data.VBELN",
+		"materialNumbers":  "data.MATNR",
+		"productModels":    "data.MAKTX_TH",
+		"bases":            "data.LGORT",
+		"customerIds":      "data.KID",
+	}
+	values := make(map[string][]string, len(fields))
+	for name, field := range fields {
+		items, err := s.orders.Distinct(ctx, field, orderOptionFilter(base, field))
+		if err != nil {
+			return OrderOptionsResult{}, err
+		}
+		normalized := make([]string, 0, len(items))
+		seen := make(map[string]struct{}, len(items))
+		for _, item := range items {
+			value := strings.TrimSpace(fmt.Sprint(item))
+			if value == "" || value == "<nil>" {
+				continue
+			}
+			if _, ok := seen[value]; ok {
+				continue
+			}
+			seen[value] = struct{}{}
+			normalized = append(normalized, value)
+		}
+		if len(normalized) > MaxOrderOptionValues {
+			return OrderOptionsResult{}, fmt.Errorf("订单选项 %s 超过 %d 条，请增加基地筛选", name, MaxOrderOptionValues)
+		}
+		sort.Strings(normalized)
+		values[name] = normalized
+	}
+	result := OrderOptionsResult{
+		ProductionOrders: values["productionOrders"],
+		SalesOrders:      values["salesOrders"],
+		MaterialNumbers:  values["materialNumbers"],
+		ProductModels:    values["productModels"],
+		Bases:            values["bases"],
+		CustomerIDs:      values["customerIds"],
+	}
+	s.orderOptionsCacheMu.Lock()
+	if s.orderOptionsCache == nil {
+		s.orderOptionsCache = make(map[string]OrderOptionsResult)
+	}
+	s.orderOptionsCache[base] = cloneOrderOptions(result)
+	s.orderOptionsCacheAt = time.Now()
+	s.orderOptionsCacheMu.Unlock()
+	return result, nil
+}
+
+func orderOptionFilter(base, field string) bson.M {
+	filter := bson.M{
+		field: bson.M{"$exists": true, "$nin": bson.A{"", nil}},
+	}
+	if base != "" {
+		filter["data.LGORT"] = base
+	}
+	return filter
+}
+
+func cloneOrderOptions(value OrderOptionsResult) OrderOptionsResult {
+	return OrderOptionsResult{
+		ProductionOrders: append([]string(nil), value.ProductionOrders...),
+		SalesOrders:      append([]string(nil), value.SalesOrders...),
+		MaterialNumbers:  append([]string(nil), value.MaterialNumbers...),
+		ProductModels:    append([]string(nil), value.ProductModels...),
+		Bases:            append([]string(nil), value.Bases...),
+		CustomerIDs:      append([]string(nil), value.CustomerIDs...),
+	}
 }
 
 func (s *Store) Orders(ctx context.Context, f OrderFilters, page, pageSize int) (OrderListResult, error) {

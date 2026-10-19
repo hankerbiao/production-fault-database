@@ -104,6 +104,17 @@ func TestOrderFilterSupportsMultipleCustomerIDs(t *testing.T) {
 	}
 }
 
+func TestOrderOptionFilterScopesToNonEmptyFieldAndBase(t *testing.T) {
+	filter := orderOptionFilter("1000", "data.MAKTX_TH")
+	model := filter["data.MAKTX_TH"].(bson.M)
+	if model["$exists"] != true {
+		t.Fatalf("missing existence guard: %v", filter)
+	}
+	if filter["data.LGORT"] != "1000" {
+		t.Fatalf("base scope=%v", filter)
+	}
+}
+
 func TestOrderFilterOverseasMatchesMaterialDescription(t *testing.T) {
 	filter := orderFilter(OrderFilters{Overseas: true, Source: "SG", ProductModel: "Model-A"})
 	conditions := filter["$and"].(primitive.A)

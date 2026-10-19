@@ -84,6 +84,10 @@ func ensureCoreIndexes(ctx context.Context, db *mongo.Database, repairCollection
 		{Keys: bson.D{{Key: "last_synced_at", Value: -1}}},
 		{Keys: bson.D{{Key: "gstrs_date", Value: 1}, {Key: "data.IF_L6", Value: 1}}},
 		{Keys: bson.D{{Key: "data.VBELN", Value: 1}}},
+		{Keys: bson.D{{Key: "data.MATNR", Value: 1}}},
+		{Keys: bson.D{{Key: "data.MAKTX_TH", Value: 1}}},
+		{Keys: bson.D{{Key: "data.LGORT", Value: 1}}},
+		{Keys: bson.D{{Key: "data.KID", Value: 1}}},
 		{Keys: bson.D{{Key: "aufnr", Value: 1}}},
 	})
 	create("order_bom_postings_sap", "bom", []mongo.IndexModel{
@@ -94,6 +98,7 @@ func ensureCoreIndexes(ctx context.Context, db *mongo.Database, repairCollection
 	create("station_records_sap", "station", []mongo.IndexModel{
 		{Keys: bson.D{{Key: "MAKTX_TH", Value: 1}, {Key: "GSTRS", Value: 1}}, Options: options.Index().SetName("station_model_gstrs")},
 		{Keys: bson.D{{Key: "GSTRS", Value: 1}}, Options: options.Index().SetName("station_gstrs")},
+		{Keys: bson.D{{Key: "_synced_at", Value: -1}}},
 	})
 	create("serial_bindings_sap", "bindings", []mongo.IndexModel{
 		{Keys: bson.D{{Key: "AUFNR_HEAD", Value: 1}}},
@@ -101,6 +106,15 @@ func ensureCoreIndexes(ctx context.Context, db *mongo.Database, repairCollection
 	})
 	create("scs_change_records", "scs_change", []mongo.IndexModel{
 		{Keys: bson.D{{Key: "is_5000_company", Value: 1}, {Key: "create_time", Value: -1}}, Options: options.Index().SetName("scs_change_company_time")},
+		{Keys: bson.D{{Key: "_synced_at", Value: -1}}},
+	})
+	create("scs_doa_records", "scs_doa", []mongo.IndexModel{
+		{Keys: bson.D{{Key: "declare_time", Value: -1}}},
+		{Keys: bson.D{{Key: "acceptance_time", Value: -1}}},
+		{Keys: bson.D{{Key: "_synced_at", Value: -1}}},
+	})
+	create("order_bom_postings_sap", "bom_sync", []mongo.IndexModel{
+		{Keys: bson.D{{Key: "_synced_at", Value: -1}}},
 	})
 	return errors.Join(errs...)
 }
@@ -147,6 +161,11 @@ func (s *Store) Close(ctx context.Context) error { return s.client.Disconnect(ct
 func (s *Store) Ping(ctx context.Context) error  { return s.client.Ping(ctx, nil) }
 
 func (s *Store) DataStatus(ctx context.Context) (DataStatus, error) {
+	s.dataStatusCacheMu.Lock()
+	defer s.dataStatusCacheMu.Unlock()
+	if !s.dataStatusCacheAt.IsZero() && time.Since(s.dataStatusCacheAt) < dataStatusCacheTTL {
+		return s.dataStatusCache, nil
+	}
 	type source struct {
 		collection *mongo.Collection
 		field      string
@@ -175,14 +194,17 @@ func (s *Store) DataStatus(ctx context.Context) (DataStatus, error) {
 				return
 			}
 			values[index] = timeText(doc[item.field])
-			counts[index], _ = item.collection.CountDocuments(ctx, bson.M{})
+			counts[index], _ = item.collection.EstimatedDocumentCount(ctx)
 		}(index, item)
 	}
 	wg.Wait()
 	if resultErr != nil {
 		return DataStatus{}, resultErr
 	}
-	return DataStatus{SalesOrdersLastSyncedAt: values[0], FaultsLastSyncedAt: values[1], StationRecordsLastSyncedAt: values[2], SerialBindingsLastSyncedAt: values[3], BOMPostingsLastSyncedAt: values[4], SCSDoaLastSyncedAt: values[5], SCSChangeLastSyncedAt: values[6], SCSDoaRecordCount: counts[5], SCSChangeRecordCount: counts[6]}, nil
+	result := DataStatus{SalesOrdersLastSyncedAt: values[0], FaultsLastSyncedAt: values[1], StationRecordsLastSyncedAt: values[2], SerialBindingsLastSyncedAt: values[3], BOMPostingsLastSyncedAt: values[4], SCSDoaLastSyncedAt: values[5], SCSChangeLastSyncedAt: values[6], SCSDoaRecordCount: counts[5], SCSChangeRecordCount: counts[6]}
+	s.dataStatusCache = result
+	s.dataStatusCacheAt = time.Now()
+	return result, nil
 }
 
 func (s *Store) Stats(ctx context.Context, f Filters) (StatsResult, error) {

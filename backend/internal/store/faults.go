@@ -61,7 +61,9 @@ func (s *Store) companyOrderCandidates(ctx context.Context) ([]string, error) {
 	if len(s.companyOrderCache) > 0 && time.Since(s.companyOrderCacheAt) < companyOrderCacheTTL {
 		return s.companyOrderCache, nil
 	}
-	items, err := s.orders.Distinct(ctx, "aufnr", bson.M{})
+	items, err := s.orders.Distinct(ctx, "aufnr", bson.M{
+		"aufnr": bson.M{"$exists": true, "$nin": bson.A{"", nil}},
+	})
 	if err != nil {
 		return nil, err
 	}

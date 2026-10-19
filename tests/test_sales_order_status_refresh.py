@@ -12,7 +12,7 @@ from scripts.maintenance import refresh_sales_order_status as maintenance
 def row(status="STARTED", *, line="10"):
     return {
         "MANDT": "800", "AUFNR": "100", "VBELN": "SO1",
-        "POSNR": line, "ETENR": "1", "MATNR": "M1", "ZSTAT": status,
+        "POSNR": line, "ETENR": "1", "MATNR": "M1", "ZSTAT": status, "AUART": "ZP01",
     }
 
 
@@ -91,6 +91,44 @@ def test_patches_status_only_and_keeps_sources_separate(refresh):
         }
     assert documents[0]["data"]["ZSTAT"] == "STARTED"
     assert all(call.args == ("orders",) for call in run.db.__getitem__.call_args_list)
+
+
+def test_patches_order_type_alongside_status(refresh):
+    source = row("REL")
+    source["AUART"] = "ZP02"
+    run = refresh([document("SG"), document("KK")], [source], [source])
+    result = run.execute()
+    assert result["success"] is True
+    assert result["would_update"] == result["updated"] == 2
+    operations = {op._filter["_id"]: op for op in writes(run)}
+    for identifier in ("SG:100", "KK:100"):
+        update = operations[identifier]._doc["$set"]
+        assert update["data.ZSTAT"] == "REL"
+        assert update["data.AUART"] == "ZP02"
+        assert update["records.0.ZSTAT"] == "REL"
+        assert update["records.0.AUART"] == "ZP02"
+    assert result["order_type_transitions"] == {"ZP01 -> ZP02": 2}
+
+
+def test_order_type_change_without_status_change_is_updated(refresh):
+    source = row()
+    source["AUART"] = "ZP02"
+    run = refresh([document()], [source])
+    result = run.execute()
+    assert result["success"] is True
+    assert result["would_update"] == result["updated"] == 1
+    update = writes(run)[0]._doc["$set"]
+    assert update["data.AUART"] == "ZP02"
+    assert "data.ZSTAT" not in update
+
+
+def test_missing_order_type_preserves_order_and_reports_failure(refresh):
+    source_row = row("REL")
+    source_row.pop("AUART")
+    run = refresh([document()], [source_row])
+    result = run.execute()
+    assert result["success"] is False and result["missing_order_type"] == 1
+    run.collection.bulk_write.assert_not_called()
 
 
 def test_matches_detail_identity_when_source_order_changes(refresh):

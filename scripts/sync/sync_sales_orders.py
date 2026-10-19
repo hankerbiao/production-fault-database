@@ -450,9 +450,10 @@ def status_line_key(row: Mapping[str, Any]) -> tuple[str, ...]:
 
 def order_status_changes(
     snapshot: Snapshot, source: str, document: Mapping[str, Any],
-) -> tuple[dict[str, str], bool, int]:
+) -> tuple[dict[str, str], bool, bool, int]:
     changes: dict[str, str] = {}
     missing_status = False
+    missing_order_type = False
     unmatched_details = 0
     rows = chain(
         (("data", document.get("data") or {}),),
@@ -465,11 +466,16 @@ def order_status_changes(
                 missing_status = True
             else:
                 unmatched_details += 1
-        elif stored["status"] is None:
-            missing_status = True
-        elif row.get("ZSTAT") != stored["status"]:
-            changes[f"{path}.ZSTAT"] = stored["status"]
-    return changes, missing_status, unmatched_details
+        else:
+            if stored["status"] is None:
+                missing_status = True
+            elif row.get("ZSTAT") != stored["status"]:
+                changes[f"{path}.ZSTAT"] = stored["status"]
+            if stored["order_type"] is None:
+                missing_order_type = True
+            elif row.get("AUART") != stored["order_type"]:
+                changes[f"{path}.AUART"] = stored["order_type"]
+    return changes, missing_status, missing_order_type, unmatched_details
 
 
 def refresh_order_statuses(
@@ -493,9 +499,10 @@ def refresh_order_statuses(
         "scope": "returned_orders",
         "range": {"start": start.isoformat(), "end": end.isoformat()},
         "existing": 0, "matched": 0, "not_returned": 0,
-        "missing_status": 0, "unmatched_details": 0,
+        "missing_status": 0, "missing_order_type": 0, "unmatched_details": 0,
         "unchanged": 0, "would_update": 0, "updated": 0, "checked": 0,
-        "sources": {}, "transitions": {}, "not_returned_samples": [],
+        "sources": {}, "transitions": {}, "order_type_transitions": {},
+        "not_returned_samples": [],
     }
     windows = date_windows(start, end, window_days)
     # Validate the entire read before any target writes, including the second source.
@@ -518,8 +525,12 @@ def refresh_order_statuses(
                     status = row.get("ZSTAT")
                     if status is not None and not isinstance(status, str):
                         raise RuntimeError(f"{source}: ZSTAT 必须为字符串或空值")
+                    order_type = row.get("AUART")
+                    if order_type is not None and not isinstance(order_type, str):
+                        raise RuntimeError(f"{source}: AUART 必须为字符串或空值")
                     snapshot.add(
-                        json.dumps([source, *key]), {"status": status},
+                        json.dumps([source, *key]),
+                        {"status": status, "order_type": order_type},
                         group_key=json.dumps([source, key[1]]),
                     )
                 stats["fetched"] += len(rows)
@@ -560,14 +571,20 @@ def refresh_order_statuses(
                         result["not_returned_samples"].append(str(document["_id"]))
                     continue
                 result["matched"] += 1
-                changes, missing_status, unmatched_details = order_status_changes(snapshot, source, document)
+                changes, missing_status, missing_order_type, unmatched_details = order_status_changes(
+                    snapshot, source, document,
+                )
                 result["missing_status"] += int(missing_status)
+                result["missing_order_type"] += int(missing_order_type)
                 result["unmatched_details"] += unmatched_details
-                if missing_status or unmatched_details:
+                if missing_status or missing_order_type or unmatched_details:
                     continue
                 if "data.ZSTAT" in changes:
                     transition = f"{(document.get('data') or {}).get('ZSTAT')!s} -> {changes['data.ZSTAT']}"
                     result["transitions"][transition] = result["transitions"].get(transition, 0) + 1
+                if "data.AUART" in changes:
+                    transition = f"{(document.get('data') or {}).get('AUART')!s} -> {changes['data.AUART']}"
+                    result["order_type_transitions"][transition] = result["order_type_transitions"].get(transition, 0) + 1
                 if changes:
                     result["would_update"] += 1
                 else:
@@ -585,7 +602,9 @@ def refresh_order_statuses(
         finally:
             if hasattr(cursor, "close"):
                 cursor.close()
-        result["success"] = not (result["missing_status"] or result["unmatched_details"])
+        result["success"] = not (
+            result["missing_status"] or result["missing_order_type"] or result["unmatched_details"]
+        )
         if apply:
             flush()
     return result

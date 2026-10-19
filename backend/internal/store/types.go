@@ -17,7 +17,6 @@ type Store struct {
 	views               map[string]*mongo.Collection
 	bomCacheMu          sync.RWMutex
 	bomCache            map[string]bomStreamCacheEntry
-	bomWarmDone         chan struct{}
 	stationCacheMu      sync.RWMutex
 	stationCache        map[string]bomStreamCacheEntry
 	stationWarmDone     chan struct{}

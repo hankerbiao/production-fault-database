@@ -15,6 +15,11 @@ func (s *Store) ViewList(ctx context.Context, viewID string, f ViewFilters, page
 	if !ok {
 		return ViewListResult{}, fmt.Errorf("unknown view: %s", viewID)
 	}
+	if viewID == "ZSGV_ZSD124" {
+		if err := ValidateBOMFilter(f); err != nil {
+			return ViewListResult{}, err
+		}
+	}
 	dateField := viewDateField(viewID, f, config.dateField)
 	filter := viewFilter(viewID, f, config.searchFields, dateField)
 	sortFields := bson.D{}
@@ -86,6 +91,11 @@ func (s *Store) ViewListAll(ctx context.Context, viewID string, f ViewFilters) (
 	config, ok := documentedViews[viewID]
 	if !ok {
 		return ViewListResult{}, fmt.Errorf("unknown view: %s", viewID)
+	}
+	if viewID == "ZSGV_ZSD124" {
+		if err := ValidateBOMFilter(f); err != nil {
+			return ViewListResult{}, err
+		}
 	}
 	dateField := viewDateField(viewID, f, config.dateField)
 	filter := viewFilter(viewID, f, config.searchFields, dateField)

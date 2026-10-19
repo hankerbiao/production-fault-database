@@ -57,12 +57,12 @@ func New(ctx context.Context, uri, database, repairCollection, orderCollection s
 	}
 	result := &Store{
 		client: client, db: db, repairs: db.Collection(repairCollection), orders: db.Collection(orderCollection), views: views,
-		bomCache: make(map[string]bomStreamCacheEntry), bomWarmDone: make(chan struct{}),
+		bomCache:     make(map[string]bomStreamCacheEntry),
 		stationCache: make(map[string]bomStreamCacheEntry), stationWarmDone: make(chan struct{}),
 	}
-	// Warm the broad LRR raw snapshot after startup so the first dashboard read
-	// does not pay the full Mongo scan latency.
-	go result.prewarmBOMStream()
+	// Station prewarming is limited to the recent 30-day window. BOM data is
+	// never prewarmed because an unbounded snapshot would scan the source
+	// collection and compete with production traffic.
 	go result.prewarmStationStream()
 	return result, nil
 }

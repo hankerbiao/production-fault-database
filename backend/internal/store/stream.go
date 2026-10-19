@@ -16,21 +16,17 @@ import (
 )
 
 func (s *Store) ViewBOMStream(ctx context.Context, f ViewFilters, out io.Writer) error {
-	if isEmptyBOMFilter(f) && s.bomWarmDone != nil {
-		select {
-		case <-s.bomWarmDone:
-		case <-ctx.Done():
-			return ctx.Err()
-		}
+	if err := ValidateBOMFilter(f); err != nil {
+		return err
 	}
 	return s.viewBOMStream(ctx, f, out)
 }
 
-func (s *Store) prewarmBOMStream() {
-	defer close(s.bomWarmDone)
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
-	defer cancel()
-	_ = s.viewBOMStream(ctx, ViewFilters{}, io.Discard)
+func ValidateBOMFilter(f ViewFilters) error {
+	if hasBOMFilter(f) {
+		return nil
+	}
+	return fmt.Errorf("BOM 查询必须包含日期、物料号或订单筛选条件，未限定范围的查询已禁用")
 }
 
 func (s *Store) viewBOMStream(ctx context.Context, f ViewFilters, out io.Writer) error {
@@ -252,8 +248,24 @@ func stationStreamCacheKey(f ViewFilters) string {
 	return strings.Join([]string{f.Keyword, f.From, f.To, f.DateFrom, f.DateTo, f.TimeField, f.StationCode, f.SN, f.ProductionOrder, f.SalesOrder, f.Base, f.ProductModel}, "\x00")
 }
 
-func isEmptyBOMFilter(f ViewFilters) bool {
-	return f == (ViewFilters{})
+func hasBOMFilter(f ViewFilters) bool {
+	return strings.TrimSpace(f.Keyword) != "" ||
+		strings.TrimSpace(f.From) != "" ||
+		strings.TrimSpace(f.To) != "" ||
+		strings.TrimSpace(f.DateFrom) != "" ||
+		strings.TrimSpace(f.DateTo) != "" ||
+		strings.TrimSpace(f.StationCode) != "" ||
+		strings.TrimSpace(f.SN) != "" ||
+		strings.TrimSpace(f.ProductionOrder) != "" ||
+		strings.TrimSpace(f.SalesOrder) != "" ||
+		strings.TrimSpace(f.Base) != "" ||
+		strings.TrimSpace(f.ProductModel) != "" ||
+		strings.TrimSpace(f.HeadOrder) != "" ||
+		strings.TrimSpace(f.ItemOrder) != "" ||
+		strings.TrimSpace(f.HeadSN) != "" ||
+		strings.TrimSpace(f.ItemSN) != "" ||
+		strings.TrimSpace(f.MaterialCode) != "" ||
+		f.MissingSalesOrder
 }
 
 func csvValue(value any) string {

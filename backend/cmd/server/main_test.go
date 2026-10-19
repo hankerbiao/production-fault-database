@@ -527,6 +527,21 @@ func TestSCSStreamRouteParsesSCSFilters(t *testing.T) {
 	}
 }
 
+func TestBOMStreamRouteRejectsUnboundedQuery(t *testing.T) {
+	f := &fakeStore{}
+	r := httptest.NewRecorder()
+	registerRoutes(newTestServer(f)).ServeHTTP(
+		r,
+		httptest.NewRequest(http.MethodGet, "/api/views/ZSGV_ZSD124/stream", nil),
+	)
+	if r.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d, want %d", r.Code, http.StatusBadRequest)
+	}
+	if !strings.Contains(r.Body.String(), "未限定范围的查询已禁用") {
+		t.Fatalf("body=%q", r.Body.String())
+	}
+}
+
 func TestDefaultServerPortMatchesDevelopmentProxy(t *testing.T) {
 	t.Setenv("PORT", "")
 	if port := getenv("PORT", "18080"); port != "18080" {

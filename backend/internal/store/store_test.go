@@ -428,6 +428,18 @@ func TestBOMStreamIncludesPlannedStart(t *testing.T) {
 	}
 }
 
+func TestBOMQueryRejectsUnboundedFilters(t *testing.T) {
+	if err := ValidateBOMFilter(ViewFilters{}); err == nil {
+		t.Fatal("unbounded BOM query must be rejected")
+	}
+	if err := ValidateBOMFilter(ViewFilters{DateFrom: "2026-01-01"}); err != nil {
+		t.Fatalf("bounded BOM query rejected: %v", err)
+	}
+	if err := ValidateBOMFilter(ViewFilters{MaterialCode: "MAT-1"}); err != nil {
+		t.Fatalf("material BOM query rejected: %v", err)
+	}
+}
+
 func TestStationStreamIncludesPlannedStart(t *testing.T) {
 	joined := strings.Join(stationStreamFields, ",")
 	if !strings.Contains(joined, "GSTRS") {

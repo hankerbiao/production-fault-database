@@ -3,6 +3,8 @@ package main
 import (
 	"net/http"
 	"strings"
+
+	"production-fault-gateway/internal/store"
 )
 
 func (s *server) viewList(w http.ResponseWriter, r *http.Request) {
@@ -40,8 +42,13 @@ func (s *server) viewStream(w http.ResponseWriter, r *http.Request) {
 		_ = s.store.ViewSCSStream(r.Context(), viewID, viewFilters(r.URL.Query()), w)
 		return
 	}
+	filters := viewFilters(r.URL.Query())
+	if err := store.ValidateBOMFilter(filters); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
 	streamTSV(w, "bom.tsv")
-	_ = s.store.ViewBOMStream(r.Context(), viewFilters(r.URL.Query()), w)
+	_ = s.store.ViewBOMStream(r.Context(), filters, w)
 }
 
 func (s *server) viewStationStream(w http.ResponseWriter, r *http.Request) {

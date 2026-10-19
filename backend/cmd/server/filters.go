@@ -75,3 +75,7 @@ func parseBool(value string) bool {
 		return false
 	}
 }
+
+func includeTotal(r *http.Request) bool {
+	return strings.ToLower(strings.TrimSpace(r.URL.Query().Get("includeTotal"))) != "false"
+}

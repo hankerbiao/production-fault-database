@@ -11,7 +11,7 @@ func (s *server) orders(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	page, pageSize := pagination(r)
-	result, err := s.store.Orders(r.Context(), orderFilters(r.URL.Query()), page, pageSize)
+	result, err := s.store.Orders(r.Context(), orderFilters(r.URL.Query()), page, pageSize, includeTotal(r))
 	if err != nil {
 		writeStoreError(w, err)
 		return

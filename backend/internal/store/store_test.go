@@ -260,7 +260,7 @@ func TestRetiredDeliveryViewRejectsAllQueries(t *testing.T) {
 	s := &Store{}
 	ctx := context.Background()
 	const viewID = "ZSGV_ZSD46N_SO_KK"
-	_, listErr := s.ViewList(ctx, viewID, ViewFilters{}, 1, 20, false)
+	_, listErr := s.ViewList(ctx, viewID, ViewFilters{}, 1, 20, false, true)
 	_, allErr := s.ViewListAll(ctx, viewID, ViewFilters{})
 	_, detailErr := s.ViewDetail(ctx, viewID, "removed")
 	_, statsErr := s.ViewStats(ctx, viewID, ViewFilters{})

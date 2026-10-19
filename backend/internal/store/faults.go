@@ -9,14 +9,17 @@ import (
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
-func (s *Store) List(ctx context.Context, f Filters, page, pageSize int) (ListResult, error) {
+func (s *Store) List(ctx context.Context, f Filters, page, pageSize int, includeTotal bool) (ListResult, error) {
 	filter, err := s.repairFilterWithCompany(ctx, f)
 	if err != nil {
 		return ListResult{}, err
 	}
-	total, err := s.repairs.CountDocuments(ctx, filter)
-	if err != nil {
-		return ListResult{}, err
+	var total int64
+	if includeTotal {
+		total, err = s.repairs.CountDocuments(ctx, filter)
+		if err != nil {
+			return ListResult{}, err
+		}
 	}
 	sortFields := bson.D{{Key: "ZDATE_WX", Value: -1}, {Key: "ZTIME", Value: -1}}
 	if repairTimeField(f) == "planned" {

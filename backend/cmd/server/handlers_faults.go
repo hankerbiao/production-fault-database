@@ -11,7 +11,7 @@ import (
 
 func (s *server) faults(w http.ResponseWriter, r *http.Request) {
 	page, pageSize := pagination(r)
-	result, err := s.store.List(r.Context(), repairFilters(r.URL.Query()), page, pageSize)
+	result, err := s.store.List(r.Context(), repairFilters(r.URL.Query()), page, pageSize, includeTotal(r))
 	if err != nil {
 		writeStoreError(w, err)
 		return

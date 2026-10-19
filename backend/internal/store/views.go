@@ -10,7 +10,7 @@ import (
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
-func (s *Store) ViewList(ctx context.Context, viewID string, f ViewFilters, page, pageSize int, preview bool) (ViewListResult, error) {
+func (s *Store) ViewList(ctx context.Context, viewID string, f ViewFilters, page, pageSize int, preview, includeTotal bool) (ViewListResult, error) {
 	config, ok := documentedViews[viewID]
 	if !ok {
 		return ViewListResult{}, fmt.Errorf("unknown view: %s", viewID)
@@ -55,11 +55,14 @@ func (s *Store) ViewList(ctx context.Context, viewID string, f ViewFilters, page
 	docs := make([]bson.M, 0)
 	var countErr, findErr error
 	var wg sync.WaitGroup
-	wg.Add(2)
-	go func() {
-		defer wg.Done()
-		total, countErr = s.views[viewID].CountDocuments(ctx, filter)
-	}()
+	wg.Add(1)
+	if includeTotal {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			total, countErr = s.views[viewID].CountDocuments(ctx, filter)
+		}()
+	}
 	go func() {
 		defer wg.Done()
 		findOptions := options.Find().SetSort(sortFields).SetSkip(int64((page - 1) * pageSize)).SetLimit(int64(pageSize))

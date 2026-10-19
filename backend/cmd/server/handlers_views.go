@@ -11,7 +11,7 @@ import (
 func (s *server) viewList(w http.ResponseWriter, r *http.Request) {
 	page, pageSize := pagination(r)
 	preview := r.PathValue("viewID") == "Z_V_ZMES_T_001" && parseBool(r.URL.Query().Get("preview"))
-	result, err := s.store.ViewList(r.Context(), r.PathValue("viewID"), viewFilters(r.URL.Query()), page, pageSize, preview)
+	result, err := s.store.ViewList(r.Context(), r.PathValue("viewID"), viewFilters(r.URL.Query()), page, pageSize, preview, includeTotal(r))
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return

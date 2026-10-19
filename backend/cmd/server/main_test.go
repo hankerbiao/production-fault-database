@@ -30,6 +30,7 @@ type fakeStore struct {
 	orderOptions         store.OrderOptionsResult
 	err                  error
 	gotPage, gotPageSize int
+	gotIncludeTotal      bool
 	gotFilters           store.Filters
 	gotOrderFilters      store.OrderFilters
 	gotID                string
@@ -106,8 +107,8 @@ func TestExportRows(t *testing.T) {
 }
 
 func (f *fakeStore) Ping(context.Context) error { return f.pingErr }
-func (f *fakeStore) List(_ context.Context, filters store.Filters, page, pageSize int) (store.ListResult, error) {
-	f.gotFilters, f.gotPage, f.gotPageSize = filters, page, pageSize
+func (f *fakeStore) List(_ context.Context, filters store.Filters, page, pageSize int, includeTotal bool) (store.ListResult, error) {
+	f.gotFilters, f.gotPage, f.gotPageSize, f.gotIncludeTotal = filters, page, pageSize, includeTotal
 	if f.err != nil {
 		return store.ListResult{}, f.err
 	}
@@ -127,8 +128,8 @@ func (f *fakeStore) Stats(_ context.Context, filters store.Filters) (store.Stats
 	}
 	return f.stats, nil
 }
-func (f *fakeStore) Orders(_ context.Context, filters store.OrderFilters, page, pageSize int) (store.OrderListResult, error) {
-	f.gotOrderFilters, f.gotPage, f.gotPageSize = filters, page, pageSize
+func (f *fakeStore) Orders(_ context.Context, filters store.OrderFilters, page, pageSize int, includeTotal bool) (store.OrderListResult, error) {
+	f.gotOrderFilters, f.gotPage, f.gotPageSize, f.gotIncludeTotal = filters, page, pageSize, includeTotal
 	if f.err != nil {
 		return store.OrderListResult{}, f.err
 	}
@@ -189,8 +190,8 @@ func (f *fakeStore) FaultSNs(context.Context, store.Filters) ([]store.FaultSN, e
 func (f *fakeStore) FaultRowsBySNS(context.Context, []string, string, string, string, string) ([]bson.M, error) {
 	return nil, f.err
 }
-func (f *fakeStore) ViewList(_ context.Context, viewID string, filters store.ViewFilters, page, pageSize int, preview bool) (store.ViewListResult, error) {
-	f.gotViewID, f.gotViewFilters, f.gotPage, f.gotPageSize, f.gotPreview = viewID, filters, page, pageSize, preview
+func (f *fakeStore) ViewList(_ context.Context, viewID string, filters store.ViewFilters, page, pageSize int, preview, includeTotal bool) (store.ViewListResult, error) {
+	f.gotViewID, f.gotViewFilters, f.gotPage, f.gotPageSize, f.gotPreview, f.gotIncludeTotal = viewID, filters, page, pageSize, preview, includeTotal
 	return store.ViewListResult{}, f.err
 }
 func (f *fakeStore) ViewListAll(context.Context, string, store.ViewFilters) (store.ViewListResult, error) {
@@ -378,12 +379,37 @@ func TestOrdersAndCORS(t *testing.T) {
 	if f.gotOrderFilters.Keyword != "SO-1" || f.gotOrderFilters.Source != "SG" || f.gotOrderFilters.Customer != "客户A" || f.gotOrderFilters.GSTRSFrom != "2026-01-01" || f.gotOrderFilters.GSTRSTo != "2026-01-31" {
 		t.Fatalf("filters=%+v", f.gotOrderFilters)
 	}
+	if !f.gotIncludeTotal {
+		t.Fatal("ordinary order pagination must include total by default")
+	}
 
 	h := cors(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusTeapot) }))
 	preflight := httptest.NewRecorder()
 	h.ServeHTTP(preflight, httptest.NewRequest(http.MethodOptions, "/api", nil))
 	if preflight.Code != http.StatusNoContent || preflight.Header().Get("Access-Control-Allow-Origin") != "*" {
 		t.Fatalf("preflight=%d headers=%v", preflight.Code, preflight.Header())
+	}
+}
+
+func TestListEndpointsCanSkipTotalCount(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		path  string
+		call  func(*server, http.ResponseWriter, *http.Request)
+		check func(*fakeStore) bool
+	}{
+		{"faults", "/api/faults?includeTotal=false", (*server).faults, func(f *fakeStore) bool { return !f.gotIncludeTotal }},
+		{"orders", "/api/orders?includeTotal=false", (*server).orders, func(f *fakeStore) bool { return !f.gotIncludeTotal }},
+		{"views", "/api/views/Z_V_ZMES_T_001?includeTotal=false", (*server).viewList, func(f *fakeStore) bool { return !f.gotIncludeTotal }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := &fakeStore{}
+			r := httptest.NewRecorder()
+			tc.call(newTestServer(f), r, httptest.NewRequest(http.MethodGet, tc.path, nil))
+			if r.Code != http.StatusOK || !tc.check(f) {
+				t.Fatalf("status=%d includeTotal=%v", r.Code, f.gotIncludeTotal)
+			}
+		})
 	}
 }
 

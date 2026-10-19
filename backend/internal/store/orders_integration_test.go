@@ -49,7 +49,7 @@ func TestOrdersPaginationWithEqualDatesAndSyncTimes(t *testing.T) {
 	var quantity float64
 	const pageSize = 37
 	for page := 1; (page-1)*pageSize < count; page++ {
-		result, err := s.Orders(ctx, OrderFilters{}, page, pageSize)
+		result, err := s.Orders(ctx, OrderFilters{}, page, pageSize, true)
 		if err != nil {
 			t.Fatal(err)
 		}

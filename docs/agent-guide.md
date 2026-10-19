@@ -41,6 +41,7 @@ GET /api/sync/status
 ## 3. 查询契约与分页策略
 
 - 所有列表查询返回 JSON，`page` 从 1 开始，`pageSize` 默认 20、最大 100。
+- 批量分页读取时，首页返回精确 `total`；后续页可传 `includeTotal=false` 跳过重复计数，此时响应中的 `total` 为 0，调用方应沿用首页总数。普通分页请求省略该参数即可。
 - 日期优先使用 `YYYY-MM-DD`。SAP 源字段可能显示为 `YYYYMMDD`，但请求参数仍使用连字符日期。
 - 字符串会去除首尾空格；关键字是安全的大小写不敏感匹配，不应把它当作正则表达式。
 - 列表的 `items[].id` 是详情查询唯一可依赖的标识：`/api/faults/detail?id=...`、`/api/orders/detail?id=...`、`/api/views/{viewID}/detail?id=...`。

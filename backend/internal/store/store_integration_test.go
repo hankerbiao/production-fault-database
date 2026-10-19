@@ -67,15 +67,15 @@ func TestMongoQueriesWithTemporaryDatabase(t *testing.T) {
 			t.Fatalf("detail id=%s result=%+v err=%v", id, detail, err)
 		}
 	}
-	list, err := s.List(ctx, Filters{Keyword: "E1"}, 1, 1)
+	list, err := s.List(ctx, Filters{Keyword: "E1"}, 1, 1, true)
 	if err != nil || list.Total != 1 || len(list.Items) != 1 || list.Items[0].ID != "r1" {
 		t.Fatalf("list=%+v err=%v", list, err)
 	}
-	companyList, err := s.List(ctx, Filters{Company5000: "yes"}, 1, 10)
+	companyList, err := s.List(ctx, Filters{Company5000: "yes"}, 1, 10, true)
 	if err != nil || companyList.Total != 1 || len(companyList.Items) != 1 || companyList.Items[0].ID != "r1" {
 		t.Fatalf("5000 list=%+v err=%v", companyList, err)
 	}
-	nonCompanyList, err := s.List(ctx, Filters{Company5000: "no"}, 1, 10)
+	nonCompanyList, err := s.List(ctx, Filters{Company5000: "no"}, 1, 10, true)
 	if err != nil || nonCompanyList.Total != 1 || len(nonCompanyList.Items) != 1 || nonCompanyList.Items[0].ID != "r2" {
 		t.Fatalf("non-5000 list=%+v err=%v", nonCompanyList, err)
 	}
@@ -91,11 +91,11 @@ func TestMongoQueriesWithTemporaryDatabase(t *testing.T) {
 	if err != nil || orderStats.Total != 1 || orderStats.SalesOrders != 1 || orderStats.SG != 1 || orderStats.OrderQuantity != 3 {
 		t.Fatalf("orderStats=%+v err=%v", orderStats, err)
 	}
-	unfiltered, err := s.Orders(ctx, OrderFilters{}, 1, 1)
+	unfiltered, err := s.Orders(ctx, OrderFilters{}, 1, 1, true)
 	if err != nil || unfiltered.Total != 2 || len(unfiltered.Items) != 1 || unfiltered.Items[0].ID != "KK:PO-2" {
 		t.Fatalf("unfiltered first page=%+v err=%v", unfiltered, err)
 	}
-	overseas, err := s.Orders(ctx, OrderFilters{Overseas: true}, 1, 1)
+	overseas, err := s.Orders(ctx, OrderFilters{Overseas: true}, 1, 1, true)
 	if err != nil || overseas.Total != 1 || len(overseas.Items) != 1 || overseas.Items[0].ID != "SG:PO-1" {
 		t.Fatalf("overseas search must match descriptions outside the unfiltered first page: %+v err=%v", overseas, err)
 	}
@@ -107,7 +107,7 @@ func TestMongoQueriesWithTemporaryDatabase(t *testing.T) {
 	if err != nil || allOverseas.Total != 1 || len(allOverseas.Items) != 1 || allOverseas.Items[0].ID != "SG:PO-1" {
 		t.Fatalf("all overseas=%+v err=%v", allOverseas, err)
 	}
-	combined, err := s.Orders(ctx, OrderFilters{Overseas: true, Source: "KK"}, 1, 20)
+	combined, err := s.Orders(ctx, OrderFilters{Overseas: true, Source: "KK"}, 1, 20, true)
 	if err != nil || combined.Total != 0 || len(combined.Items) != 0 {
 		t.Fatalf("overseas filter must intersect with other conditions: %+v err=%v", combined, err)
 	}

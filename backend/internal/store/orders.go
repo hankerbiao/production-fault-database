@@ -144,11 +144,15 @@ func cloneOrderOptions(value OrderOptionsResult) OrderOptionsResult {
 	}
 }
 
-func (s *Store) Orders(ctx context.Context, f OrderFilters, page, pageSize int) (OrderListResult, error) {
+func (s *Store) Orders(ctx context.Context, f OrderFilters, page, pageSize int, includeTotal bool) (OrderListResult, error) {
 	filter := orderFilter(f)
-	total, err := s.orders.CountDocuments(ctx, filter)
-	if err != nil {
-		return OrderListResult{}, err
+	var total int64
+	var err error
+	if includeTotal {
+		total, err = s.orders.CountDocuments(ctx, filter)
+		if err != nil {
+			return OrderListResult{}, err
+		}
 	}
 	// Synced orders often share both timestamps; _id keeps page boundaries stable.
 	cur, err := s.orders.Find(ctx, filter, options.Find().SetProjection(orderListProjection).SetSort(bson.D{{Key: "data.GSTRS", Value: -1}, {Key: "last_synced_at", Value: -1}, {Key: "_id", Value: -1}}).SetSkip(int64((page-1)*pageSize)).SetLimit(int64(pageSize)).SetBatchSize(10000))
@@ -170,7 +174,7 @@ func (s *Store) Orders(ctx context.Context, f OrderFilters, page, pageSize int) 
 // OrdersAll returns every filtered order up to the API's bounded bulk-query limit.
 // It intentionally reuses the same filter and ordering as the paginated board.
 func (s *Store) OrdersAll(ctx context.Context, f OrderFilters) (OrderListResult, error) {
-	return s.Orders(ctx, f, 1, MaxOrderQueryRows)
+	return s.Orders(ctx, f, 1, MaxOrderQueryRows, true)
 }
 
 func (s *Store) OrderDetail(ctx context.Context, id string) (OrderDetail, error) {

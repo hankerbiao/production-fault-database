@@ -70,6 +70,30 @@ func TestRepairPlannedDateRangeFilterSupportsISOAndSAPDates(t *testing.T) {
 	}
 }
 
+func TestRepairSortFieldsUseUniqueTieBreaker(t *testing.T) {
+	tests := []struct {
+		name     string
+		filters  Filters
+		expected []string
+	}{
+		{name: "planned", filters: Filters{TimeField: "planned"}, expected: []string{"GSTRS", "ZDATE_WX", "ZTIME", "_id"}},
+		{name: "repair", filters: Filters{}, expected: []string{"ZDATE_WX", "ZTIME", "_id"}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fields := repairSortFields(test.filters)
+			if len(fields) != len(test.expected) {
+				t.Fatalf("sort fields=%v, want %v", fields, test.expected)
+			}
+			for i, field := range fields {
+				if field.Key != test.expected[i] || field.Value != -1 {
+					t.Fatalf("sort field %d=%v, want %s descending", i, field, test.expected[i])
+				}
+			}
+		})
+	}
+}
+
 func TestFaultLookupFilterUsesPlannedDateWhenRequested(t *testing.T) {
 	filter := faultLookupFilter(Filters{
 		ProductionOrders: "30226290",

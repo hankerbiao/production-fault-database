@@ -21,11 +21,7 @@ func (s *Store) List(ctx context.Context, f Filters, page, pageSize int, include
 			return ListResult{}, err
 		}
 	}
-	sortFields := bson.D{{Key: "ZDATE_WX", Value: -1}, {Key: "ZTIME", Value: -1}}
-	if repairTimeField(f) == "planned" {
-		// Descending string order places populated GSTRS values before empty or missing ones.
-		sortFields = bson.D{{Key: "GSTRS", Value: -1}, {Key: "ZDATE_WX", Value: -1}, {Key: "ZTIME", Value: -1}}
-	}
+	sortFields := repairSortFields(f)
 	cur, err := s.repairs.Find(ctx, filter, options.Find().SetSort(sortFields).SetSkip(int64((page-1)*pageSize)).SetLimit(int64(pageSize)))
 	if err != nil {
 		return ListResult{}, err
@@ -40,6 +36,14 @@ func (s *Store) List(ctx context.Context, f Filters, page, pageSize int, include
 		items = append(items, normalizeFault(doc))
 	}
 	return ListResult{Items: items, Page: page, PageSize: pageSize, Total: total}, nil
+}
+
+func repairSortFields(f Filters) bson.D {
+	if repairTimeField(f) == "planned" {
+		// Descending string order places populated GSTRS values before empty or missing ones.
+		return bson.D{{Key: "GSTRS", Value: -1}, {Key: "ZDATE_WX", Value: -1}, {Key: "ZTIME", Value: -1}, {Key: "_id", Value: -1}}
+	}
+	return bson.D{{Key: "ZDATE_WX", Value: -1}, {Key: "ZTIME", Value: -1}, {Key: "_id", Value: -1}}
 }
 
 func (s *Store) repairFilterWithCompany(ctx context.Context, f Filters) (bson.M, error) {

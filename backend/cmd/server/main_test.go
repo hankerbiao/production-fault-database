@@ -38,6 +38,8 @@ type fakeStore struct {
 	gotPreview           bool
 	gotViewID            string
 	gotViewFilters       store.ViewFilters
+	packagingCounts      []store.PackagingCount
+	packagingOrders      string
 	exportResource       string
 	exportKeys           []string
 	exportItems          []bson.M
@@ -200,6 +202,10 @@ func (f *fakeStore) ViewListAll(context.Context, string, store.ViewFilters) (sto
 func (f *fakeStore) ViewBOMStream(context.Context, store.ViewFilters, io.Writer) error { return f.err }
 func (f *fakeStore) ViewStationStream(context.Context, store.ViewFilters, io.Writer) error {
 	return f.err
+}
+func (f *fakeStore) PackagingCounts(_ context.Context, orders string) ([]store.PackagingCount, error) {
+	f.packagingOrders = orders
+	return f.packagingCounts, f.err
 }
 func (f *fakeStore) ViewSCSStream(_ context.Context, viewID string, filters store.ViewFilters, out io.Writer) error {
 	f.gotViewID, f.gotViewFilters = viewID, filters
@@ -572,6 +578,21 @@ func TestBOMStreamRouteRejectsUnboundedQuery(t *testing.T) {
 	}
 	if !strings.Contains(r.Body.String(), "未限定范围的查询已禁用") {
 		t.Fatalf("body=%q", r.Body.String())
+	}
+}
+
+func TestPackagingCountsRouteValidatesAndReturnsCounts(t *testing.T) {
+	f := &fakeStore{packagingCounts: []store.PackagingCount{{ProductionOrder: "1", Quantity: 4}}}
+	router := registerRoutes(newTestServer(f))
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/views/Z_V_ZMES_T_001/packaging-counts?productionOrders=1,000000000001", nil))
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"quantity":4`) || f.packagingOrders != "1,000000000001" {
+		t.Fatalf("status=%d body=%s orders=%q", response.Code, response.Body.String(), f.packagingOrders)
+	}
+	response = httptest.NewRecorder()
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/views/Z_V_ZMES_T_001/packaging-counts", nil))
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("missing orders status=%d", response.Code)
 	}
 }
 

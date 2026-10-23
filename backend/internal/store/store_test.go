@@ -314,6 +314,33 @@ func TestStationViewDateFilterUsesPlannedStartByDefault(t *testing.T) {
 	}
 }
 
+func TestPackagingCountPipelineFiltersExactStationsAndDeduplicatesHostBarcodes(t *testing.T) {
+	input := strings.Join([]string{"000000000001", "2"}, ",")
+	items := make([]any, 0)
+	for _, value := range strings.Split(input, ",") {
+		items = append(items, value)
+	}
+	values := normalizedOrderCandidates(items)
+	if !containsString(values, "1") || !containsString(values, "000000000001") {
+		t.Fatalf("leading-zero variants were not generated: %v", values)
+	}
+	pipeline := packagingCountPipeline(values)
+	encoded, err := bson.MarshalExtJSON(bson.M{"pipeline": pipeline}, false, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, code := range []string{"OP300", "OP310", "$PCODE", "$AUFNR", "$LINE_CODE", "$SPEC", "$OPERATION", "missingBarcode"} {
+		if !strings.Contains(string(encoded), code) {
+			t.Fatalf("aggregation misses %q: %s", code, encoded)
+		}
+	}
+	for _, code := range []string{"OP30\"", "OP320"} {
+		if strings.Contains(string(encoded), code) {
+			t.Fatalf("aggregation unexpectedly includes %q: %s", code, encoded)
+		}
+	}
+}
+
 func TestStationViewFilterUsesPlannedStartWhenRequested(t *testing.T) {
 	filters := ViewFilters{DateFrom: "2026-05-01", DateTo: "2026-05-31", TimeField: "planned", ProductModel: "6210 C21"}
 	dateField := viewDateField("Z_V_ZMES_T_001", filters, "ACTUAL_START_TIME")

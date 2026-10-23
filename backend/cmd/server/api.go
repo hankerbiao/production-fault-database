@@ -35,6 +35,7 @@ type storeAPI interface {
 	ViewListAll(context.Context, string, store.ViewFilters) (store.ViewListResult, error)
 	ViewBOMStream(context.Context, store.ViewFilters, io.Writer) error
 	ViewStationStream(context.Context, store.ViewFilters, io.Writer) error
+	PackagingCounts(context.Context, string) ([]store.PackagingCount, error)
 	ViewSCSStream(context.Context, string, store.ViewFilters, io.Writer) error
 	ViewDetail(context.Context, string, string) (store.ViewDetailResult, error)
 	ViewStats(context.Context, string, store.ViewFilters) (store.ViewStatsResult, error)

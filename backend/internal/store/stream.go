@@ -13,6 +13,7 @@ import (
 
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
+	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
@@ -117,6 +118,70 @@ func (s *Store) ViewStationStream(ctx context.Context, f ViewFilters, out io.Wri
 		}
 	}
 	return s.viewStationStream(ctx, f, out)
+}
+
+// PackagingCounts returns only the distinct host-barcode counts needed by
+// exports, instead of streaming every historical station row across HTTP.
+func (s *Store) PackagingCounts(ctx context.Context, input string) ([]PackagingCount, error) {
+	items := make([]any, 0)
+	for _, value := range strings.Split(input, ",") {
+		items = append(items, value)
+	}
+	values := normalizedOrderCandidates(items)
+	if len(values) == 0 {
+		return nil, fmt.Errorf("production orders are required")
+	}
+	pipeline := packagingCountPipeline(values)
+	cur, err := s.views["Z_V_ZMES_T_001"].Aggregate(ctx, pipeline, options.Aggregate().SetAllowDiskUse(true).SetMaxTime(30*time.Second))
+	if err != nil {
+		return nil, err
+	}
+	defer cur.Close(ctx)
+	result := make([]PackagingCount, 0, len(values))
+	if err := cur.All(ctx, &result); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+func packagingCountPipeline(values []string) mongo.Pipeline {
+	filter := bson.M{"AUFNR": bson.M{"$in": values}}
+	barcode := bson.M{"$trim": bson.M{"input": bson.M{"$convert": bson.M{
+		"input": "$PCODE", "to": "string", "onError": "", "onNull": "",
+	}}}}
+	stationValue := func(field string) bson.M {
+		return bson.M{"$trim": bson.M{"input": bson.M{"$convert": bson.M{
+			"input": "$" + field, "to": "string", "onError": "", "onNull": "",
+		}}}}
+	}
+	lineCode, spec, operation := stationValue("LINE_CODE"), stationValue("SPEC"), stationValue("OPERATION")
+	stationSource := bson.M{"$cond": bson.A{
+		bson.M{"$ne": bson.A{lineCode, ""}}, lineCode,
+		bson.M{"$cond": bson.A{bson.M{"$ne": bson.A{spec, ""}}, spec, operation}},
+	}}
+	stationTrimmed := bson.M{"$trim": bson.M{"input": stationSource}}
+	stationColonNormalized := bson.M{"$replaceAll": bson.M{"input": stationTrimmed, "find": "：", "replacement": ":"}}
+	stationBeforeColon := bson.M{"$arrayElemAt": bson.A{bson.M{"$split": bson.A{stationColonNormalized, ":"}}, 0}}
+	stationCode := bson.M{"$trim": bson.M{"input": bson.M{"$arrayElemAt": bson.A{bson.M{"$split": bson.A{stationBeforeColon, "-"}}, -1}}}}
+	return mongo.Pipeline{
+		{{Key: "$match", Value: filter}},
+		{{Key: "$set", Value: bson.M{
+			"_packagingStation": bson.M{"$in": bson.A{stationCode, "OP300", "OP310"}},
+			"_packagingBarcode": barcode,
+			"_packagingOrder":   normalizedOrderExpression("AUFNR"),
+		}}},
+		{{Key: "$match", Value: bson.M{"_packagingStation": true}}},
+		{{Key: "$group", Value: bson.M{
+			"_id":            bson.M{"order": "$_packagingOrder", "barcode": "$_packagingBarcode"},
+			"missingBarcode": bson.M{"$max": bson.M{"$cond": bson.A{bson.M{"$eq": bson.A{"$_packagingBarcode", ""}}, 1, 0}}},
+		}}},
+		{{Key: "$group", Value: bson.M{
+			"_id":            "$_id.order",
+			"quantity":       bson.M{"$sum": bson.M{"$cond": bson.A{bson.M{"$eq": bson.A{"$_id.barcode", ""}}, 0, 1}}},
+			"missingBarcode": bson.M{"$max": "$missingBarcode"},
+		}}},
+		{{Key: "$project", Value: bson.M{"_id": 0, "productionOrder": "$_id", "quantity": 1, "missingBarcode": bson.M{"$gt": bson.A{"$missingBarcode", 0}}}}},
+	}
 }
 
 // ViewSCSStream exposes the normalized SCS source fields for server-side

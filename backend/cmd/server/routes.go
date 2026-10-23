@@ -28,6 +28,7 @@ func registerRoutes(h *server) *http.ServeMux {
 	mux.HandleFunc("GET /api/views/{viewID}", h.viewList)
 	mux.HandleFunc("GET /api/views/{viewID}/all", h.viewListAll)
 	mux.HandleFunc("GET /api/views/{viewID}/stream", h.viewStream)
+	mux.HandleFunc("GET /api/views/Z_V_ZMES_T_001/packaging-counts", h.packagingCounts)
 	mux.HandleFunc("GET /api/views/{viewID}/detail", h.viewDetail)
 	mux.HandleFunc("GET /api/views/{viewID}/stats", h.viewStats)
 	mux.HandleFunc("POST /api/sync/incremental", h.startIncrementalSync)

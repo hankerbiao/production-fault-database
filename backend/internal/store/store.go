@@ -96,6 +96,7 @@ func ensureCoreIndexes(ctx context.Context, db *mongo.Database, repairCollection
 		{Keys: bson.D{{Key: "VBELN_EX", Value: 1}, {Key: "GSTRS_DATE", Value: 1}}},
 	})
 	create("station_records_sap", "station", []mongo.IndexModel{
+		{Keys: bson.D{{Key: "AUFNR", Value: 1}}, Options: options.Index().SetName("station_production_order")},
 		{Keys: bson.D{{Key: "MAKTX_TH", Value: 1}, {Key: "GSTRS", Value: 1}}, Options: options.Index().SetName("station_model_gstrs")},
 		{Keys: bson.D{{Key: "GSTRS", Value: 1}}, Options: options.Index().SetName("station_gstrs")},
 		{Keys: bson.D{{Key: "_synced_at", Value: -1}}},

@@ -222,6 +222,11 @@ type ViewStatsResult struct {
 	LatestCreatedAt                string   `json:"latestCreatedAt,omitempty"`
 	Is5000Count                    int64    `json:"is5000Count,omitempty"`
 }
+type PackagingCount struct {
+	ProductionOrder string `json:"productionOrder"`
+	Quantity        int64  `json:"quantity"`
+	MissingBarcode  bool   `json:"missingBarcode"`
+}
 type ViewDetailResult struct {
 	Item   bson.M  `json:"item"`
 	Fields []Field `json:"fields"`

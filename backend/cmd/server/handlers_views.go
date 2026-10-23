@@ -61,6 +61,24 @@ func (s *server) viewStationStream(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func (s *server) packagingCounts(w http.ResponseWriter, r *http.Request) {
+	orders := strings.TrimSpace(r.URL.Query().Get("productionOrders"))
+	if orders == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "productionOrders is required"})
+		return
+	}
+	if len(strings.Split(orders, ",")) > 50 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "at most 50 production orders are allowed"})
+		return
+	}
+	items, err := s.store.PackagingCounts(r.Context(), orders)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
 func writeStreamError(w http.ResponseWriter, err error) {
 	status := http.StatusBadRequest
 	if errors.Is(err, store.ErrStreamQueryTooLarge) {

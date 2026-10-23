@@ -166,7 +166,7 @@ func packagingCountPipeline(values []string) mongo.Pipeline {
 	return mongo.Pipeline{
 		{{Key: "$match", Value: filter}},
 		{{Key: "$set", Value: bson.M{
-			"_packagingStation": bson.M{"$in": bson.A{stationCode, "OP300", "OP310"}},
+			"_packagingStation": bson.M{"$in": bson.A{stationCode, bson.A{"OP300", "OP310"}}},
 			"_packagingBarcode": barcode,
 			"_packagingOrder":   normalizedOrderExpression("AUFNR"),
 		}}},

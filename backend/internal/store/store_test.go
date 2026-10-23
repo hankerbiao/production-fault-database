@@ -329,7 +329,7 @@ func TestPackagingCountPipelineFiltersExactStationsAndDeduplicatesHostBarcodes(t
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, code := range []string{"OP300", "OP310", "$PCODE", "$AUFNR", "$LINE_CODE", "$SPEC", "$OPERATION", "missingBarcode"} {
+	for _, code := range []string{"OP300", "OP310", `["OP300","OP310"]`, "$PCODE", "$AUFNR", "$LINE_CODE", "$SPEC", "$OPERATION", "missingBarcode"} {
 		if !strings.Contains(string(encoded), code) {
 			t.Fatalf("aggregation misses %q: %s", code, encoded)
 		}

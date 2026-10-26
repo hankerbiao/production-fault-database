@@ -18,7 +18,7 @@ var ErrBOMExportBatchTooLarge = errors.New("BOM export batch exceeds 250000 rows
 
 const MaxBOMExportRows = 250000
 
-var bomExportFields = []string{"AUFNR_1", "MATNR", "MENGE_A", "VBELN_EX", "MAKTX"}
+var bomExportFields = []string{"AUFNR_1", "MATNR", "MENGE_A", "BWART", "VBELN_EX", "MAKTX"}
 
 var exportFaultFields = []string{
 	"FACTORY", "VBELN", "AUFNR", "ZJXMC", "PCODE", "ZNGGZ", "U_FIND", "T_FIND",

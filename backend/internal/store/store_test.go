@@ -202,12 +202,12 @@ func TestBOMExportUsesExactPaddedOrderKeysAndNarrowProjection(t *testing.T) {
 		t.Fatalf("BOM filter should use exact indexed order keys: %v", filter)
 	}
 	projection := exportProjection(bomExportFields)
-	for _, field := range []string{"_id", "_source_key", "AUFNR_1", "MATNR", "MENGE_A", "VBELN_EX", "MAKTX"} {
+	for _, field := range []string{"_id", "_source_key", "AUFNR_1", "MATNR", "MENGE_A", "BWART", "VBELN_EX", "MAKTX"} {
 		if projection[field] != 1 {
 			t.Errorf("BOM export projection missing %q: %v", field, projection)
 		}
 	}
-	if len(projection) != 7 {
+	if len(projection) != 8 {
 		t.Fatalf("BOM export projection is not narrow: %v", projection)
 	}
 	if MaxBOMExportRows != 250000 {

@@ -34,7 +34,7 @@ export function SAPQueryPage() {
     setLoading(false);
   }
   return <main>
-    <section className="hero"><div><p className="eyebrow">OPERATIONS / SAP LIVE QUERY</p><h1>SAP 数据查询</h1><p className="intro">实时查询生产订单及其销售订单明细，分别查看两个 SAP 来源的返回结果。</p></div><div className="hero-meta"><div><span>查询范围</span><strong>产品线 00100</strong></div><div><span>接口</span><strong>ZSIMS_CL_INBOUND_MO_PSINFO</strong></div></div></section>
+    <section className="hero"><div><p className="eyebrow">OPERATIONS / SAP LIVE QUERY</p><h1>SAP 数据查询（新增）</h1><p className="intro">实时查询生产订单及其销售订单明细，分别查看两个 SAP 来源的返回结果。</p></div><div className="hero-meta"><div><span>查询范围</span><strong>产品线 00100</strong></div><div><span>接口</span><strong>ZSIMS_CL_INBOUND_MO_PSINFO</strong></div></div></section>
     <section className="workspace"><div className="section-head"><div><p className="eyebrow">QUERY PARAMETERS</p><h2>查询条件</h2></div></div>
       <form className="filter-form" onSubmit={submit}>
         <div className="filter-form-body">

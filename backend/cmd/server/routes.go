@@ -8,6 +8,7 @@ func registerRoutes(h *server) *http.ServeMux {
 	mux.HandleFunc("GET /api/openapi.json", h.apiDocument)
 	mux.HandleFunc("GET /api/agent-guide.md", h.apiDocument)
 	mux.HandleFunc("GET /api/health", h.health)
+	mux.HandleFunc("POST /api/sap/query", h.querySAP)
 	mux.HandleFunc("GET /api/config", h.serviceConfig)
 	mux.HandleFunc("POST /api/exports/rows", h.exportRows)
 	mux.HandleFunc("GET /api/exports/version", h.exportVersion)

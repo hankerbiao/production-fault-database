@@ -4,7 +4,7 @@ import { ServiceConfigPanel } from './ServiceConfigPanel';
 const links = [
   ['repairs', '维修故障记录', ClipboardList], ['orders', '销售订单看板', PackageSearch], ['zsd124', '订单过账', Boxes],
   ['sernolist', '序列号绑定 / Serial Number Binding', Boxes], ['station', '工位记录', Boxes], ['scsDoa', 'SCS DOA 申报', ClipboardList],
-  ['scsChange', 'SCS 换上换下', Boxes], ['sync-management', '同步管理', ListChecks], ['api-docs', 'API 文档', BookOpen],
+  ['scsChange', 'SCS 换上换下', Boxes], ['sap-query', 'SAP 数据查询', Database], ['sync-management', '同步管理', ListChecks], ['api-docs', 'API 文档', BookOpen],
 ];
 
 export function Header({ view, setView, connected, syncStatus, onSync }) {

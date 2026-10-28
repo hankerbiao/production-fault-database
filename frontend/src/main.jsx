@@ -11,6 +11,7 @@ import { orderCustomerIDs, orderModels } from './api/orders';
 import { startSync, syncStatus } from './api/sync';
 import { ApiError } from './api/client';
 import { viewConfigs } from './config/views';
+import { SAPQueryPage } from './pages/SAPQueryPage';
 import './styles.css';
 
 export function App() {
@@ -39,7 +40,7 @@ export function App() {
   }
   const pageProps = { modelOptions, customerIDOptions, setConnected, setRefreshing, refreshToken };
   return <div className="app"><Header view={view} setView={setView} connected={connected} syncStatus={status} onSync={runSync} />
-    {view === 'api-docs' ? <ApiDocs /> : view === 'sync-management' ? <SyncManagementPage onStarted={setStatus} /> : view === 'repairs' ? <RepairsPage {...pageProps} /> : view === 'orders' ? <OrdersPage {...pageProps} /> : <ViewDashboardPage key={view} {...pageProps} config={viewConfigs[view]} />}
+    {view === 'sap-query' ? <SAPQueryPage /> : view === 'api-docs' ? <ApiDocs /> : view === 'sync-management' ? <SyncManagementPage onStarted={setStatus} /> : view === 'repairs' ? <RepairsPage {...pageProps} /> : view === 'orders' ? <OrdersPage {...pageProps} /> : <ViewDashboardPage key={view} {...pageProps} config={viewConfigs[view]} />}
     <footer><span>Production Fault Gateway · v0.1.0</span><span>MongoDB 数据源</span></footer>
   </div>;
 }

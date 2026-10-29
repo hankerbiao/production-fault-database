@@ -7,7 +7,7 @@ import (
 
 func TestSCSDevicesGroupEvidenceAndRejectConflictingDates(t *testing.T) {
 	makeDoc := func(code, barcode, material, order, prod, factory, warranty string) bson.M {
-		return bson.M{"doa_code": code, "service_uid": "SERVICE-1", "sales_order": "PARENT", "is_5000_company": true, "_source": "scs", "details": bson.M{"equipment": bson.A{bson.M{"material_sn": material, "leave_factory_date": factory, "warranty_deadline": warranty, "context_value": "context-" + barcode, "product_fields": bson.M{"产品条码": barcode, "销售订单": order, "生产订单": prod, "出厂日期": factory, "质保到期日": warranty}}}}}
+		return bson.M{"doa_code": code, "doa_judge": "是", "status": "已受理", "service_uid": "SERVICE-1", "sales_order": "PARENT", "is_5000_company": true, "_source": "scs", "details": bson.M{"equipment": bson.A{bson.M{"material_sn": material, "leave_factory_date": factory, "warranty_deadline": warranty, "context_value": "context-" + barcode, "product_fields": bson.M{"产品条码": barcode, "销售订单": order, "生产订单": prod, "出厂日期": factory, "质保到期日": warranty}}}}}
 	}
 	docs := []bson.M{makeDoc("D1", "HOST-1", "PART-1", "SO-1", "PO-1", "2026-01-01", "2029-01-01"), makeDoc("D2", "HOST-1", "PART-2", "SO-1", "PO-1", "2026-01-01", "2030-01-01"), makeDoc("D1", "HOST-2", "PART-3", "SO-2", "PO-2", "2026-02-01", "2029-02-01")}
 	got := groupSCSDevices(docs, SCSDeviceFilters{})
@@ -20,6 +20,9 @@ func TestSCSDevicesGroupEvidenceAndRejectConflictingDates(t *testing.T) {
 	}
 	if one.Evidence[0].DOASalesOrder != "PARENT" || one.Evidence[0].MaterialSN != "PART-1" {
 		t.Fatal("lost association")
+	}
+	if one.Evidence[0].Judgment != "是" || one.Evidence[0].DOAStatus != "已受理" {
+		t.Fatal("lost DOA judgment or status")
 	}
 	if one.Evidence[0].SalesOrderRelation != "different" || one.Evidence[0].SNRelation != "different" {
 		t.Fatal("conflicting source associations must remain visible")

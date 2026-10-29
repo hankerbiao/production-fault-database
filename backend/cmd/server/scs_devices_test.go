@@ -10,7 +10,7 @@ import (
 )
 
 func (f *fakeStore) SCSDevices(_ context.Context, _ store.SCSDeviceFilters, page, size int) (store.SCSDevicePage, error) {
-	return store.SCSDevicePage{Items: []store.SCSDevice{}, Page: page, PageSize: size, Scope: "00100"}, nil
+	return store.SCSDevicePage{Items: []store.SCSDevice{}, Page: page, PageSize: size, Scope: "all"}, nil
 }
 
 func TestSCSDeviceRoutePaginationValidation(t *testing.T) {

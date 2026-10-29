@@ -22,7 +22,7 @@
       "get": {
         "tags": ["scs"],
         "operationId": "listSCSDoaDevices",
-        "description": "仅返回已验证 00100 范围内的 DOA 关联设备。按产品条码聚合并保留各申报证据；日期冲突或缺失时不推断值。完整规则见 docs/SCS设备日期接口.md。",
+        "description": "返回 DOA 关联设备，不按产品线字段过滤。按产品条码聚合并保留各申报证据；下游应通过销售订单数据核实范围，日期冲突或缺失时不推断值。完整规则见 docs/SCS设备日期接口.md。",
         "parameters": [
           { "name": "page", "in": "query", "schema": { "type": "integer", "minimum": 1, "default": 1 } },
           { "name": "pageSize", "in": "query", "schema": { "type": "integer", "minimum": 1, "maximum": 1000, "default": 100 } },
@@ -32,7 +32,7 @@
           { "name": "sn", "in": "query", "schema": { "type": "string" } }
         ],
         "responses": {
-          "200": { "description": "设备及完整申报关联证据的分页结果", "content": { "application/json": { "schema": { "type": "object", "required": ["items", "page", "pageSize", "total", "hasMore", "scope"], "properties": { "items": { "type": "array", "items": { "type": "object" } }, "page": { "type": "integer" }, "pageSize": { "type": "integer" }, "total": { "type": "integer" }, "hasMore": { "type": "boolean" }, "scope": { "const": "00100" } } } } } },
+          "200": { "description": "设备及完整申报关联证据的分页结果", "content": { "application/json": { "schema": { "type": "object", "required": ["items", "page", "pageSize", "total", "hasMore", "scope"], "properties": { "items": { "type": "array", "items": { "type": "object" } }, "page": { "type": "integer" }, "pageSize": { "type": "integer" }, "total": { "type": "integer" }, "hasMore": { "type": "boolean" }, "scope": { "const": "all" } } } } } },
           "400": { "$ref": "#/components/responses/BadRequest" },
           "500": { "$ref": "#/components/responses/ServerError" }
         }

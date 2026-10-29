@@ -237,7 +237,7 @@ func (s *Store) ViewSCSStream(ctx context.Context, viewID string, f ViewFilters,
 
 func scsStreamFields(viewID string) []string {
 	if viewID == "SCS_DOA" {
-		return []string{"id", "doa_code", "doa_type", "service_uid", "status", "doa_judge", "customer_uid", "sugon_sn", "spare_part_sn", "product_name", "problem_batch_number", "declare_time", "acceptance_time", "sales_order", "is_5000_company", "factory_date", "warranty_end_date", "enrichment_status"}
+		return []string{"id", "doa_code", "doa_type", "service_uid", "status", "doa_judge", "customer_uid", "sugon_sn", "spare_part_sn", "product_name", "problem_batch_number", "declare_time", "acceptance_time", "sales_order", "is_5000_company", "factory_date", "warranty_end_date", "enrichment_status", "GSTRS", "gstrs_status", "production_orders"}
 	}
 	return []string{"id", "so_code", "customer_name", "device_sn", "change_type", "part_number", "part_sn", "part_name", "operator", "need_return", "is_revoked", "create_time", "is_5000_company"}
 }

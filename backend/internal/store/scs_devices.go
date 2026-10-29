@@ -26,6 +26,8 @@ type SCSValue struct {
 }
 type SCSDeviceEvidence struct {
 	DOACode             string   `json:"doaCode"`
+	Judgment            string   `json:"judgment"`
+	DOAStatus           string   `json:"doaStatus"`
 	ServiceOrder        string   `json:"serviceOrder"`
 	ServiceOrderAliases []string `json:"serviceOrderAliases"`
 	DOASalesOrder       string   `json:"doaSalesOrder"`
@@ -200,7 +202,7 @@ func groupSCSDevices(docs []bson.M, f SCSDeviceFilters) []SCSDevice {
 			if source == "" {
 				source = "scs"
 			}
-			g.Evidence = append(g.Evidence, SCSDeviceEvidence{DOACode: parentID, ServiceOrder: firstText(doc, "service_uid"), ServiceOrderAliases: aliasList, DOASalesOrder: parentOrder, SalesOrder: deviceOrder, SalesOrderRelation: scsRelation(parentOrder, deviceOrder), ProductionOrder: firstText(p, "生产订单"), ProductBarcode: barcode, MaterialSN: material, SNRelation: scsRelation(barcode, material), ContextID: contextID, Model: model, Product: product, FactoryProduct: firstText(p, "出厂日期"), FactoryEquipment: firstText(e, "leave_factory_date"), WarrantyProduct: firstText(p, "质保到期日"), WarrantyEquipment: firstText(e, "warranty_deadline"), Company5000: cp, Source: source, DetailPending: pending})
+			g.Evidence = append(g.Evidence, SCSDeviceEvidence{DOACode: parentID, Judgment: firstText(doc, "doa_judge"), DOAStatus: firstText(doc, "status"), ServiceOrder: firstText(doc, "service_uid"), ServiceOrderAliases: aliasList, DOASalesOrder: parentOrder, SalesOrder: deviceOrder, SalesOrderRelation: scsRelation(parentOrder, deviceOrder), ProductionOrder: firstText(p, "生产订单"), ProductBarcode: barcode, MaterialSN: material, SNRelation: scsRelation(barcode, material), ContextID: contextID, Model: model, Product: product, FactoryProduct: firstText(p, "出厂日期"), FactoryEquipment: firstText(e, "leave_factory_date"), WarrantyProduct: firstText(p, "质保到期日"), WarrantyEquipment: firstText(e, "warranty_deadline"), Company5000: cp, Source: source, DetailPending: pending})
 		}
 	}
 	out := make([]SCSDevice, 0, len(groups))
@@ -246,7 +248,7 @@ func groupSCSDevices(docs []bson.M, f SCSDeviceFilters) []SCSDevice {
 }
 
 func scsDeviceProjection() bson.M {
-	projection := bson.M{"_id": 1, "_source_key": 1, "doa_code": 1, "service_uid": 1, "sales_order": 1, "is_5000_company": 1, "_source": 1, "_detail_pending": 1, "details.service_fields.服务单号": 1, "details.service_fields.服务订单号": 1, "details.service_fields.服务单": 1}
+	projection := bson.M{"_id": 1, "_source_key": 1, "doa_code": 1, "doa_judge": 1, "status": 1, "service_uid": 1, "sales_order": 1, "is_5000_company": 1, "_source": 1, "_detail_pending": 1, "details.service_fields.服务单号": 1, "details.service_fields.服务订单号": 1, "details.service_fields.服务单": 1}
 	for _, field := range []string{"material_sn", "mtr_sn", "context_value", "_context_value", "host_model", "mtr_name", "leave_factory_date", "warranty_deadline", "product_fields.产品条码", "product_fields.销售订单", "product_fields.生产订单", "product_fields.主机型号", "product_fields.产品名称", "product_fields.出厂日期", "product_fields.质保到期日"} {
 		projection["details.equipment."+field] = 1
 	}
@@ -254,9 +256,9 @@ func scsDeviceProjection() bson.M {
 }
 
 func (s *Store) SCSDevices(ctx context.Context, f SCSDeviceFilters, page, pageSize int) (SCSDevicePage, error) {
-	result := SCSDevicePage{Items: []SCSDevice{}, Page: page, PageSize: pageSize, Scope: "00100"}
+	result := SCSDevicePage{Items: []SCSDevice{}, Page: page, PageSize: pageSize, Scope: "all"}
 	col := s.views["SCS_DOA"]
-	cur, err := col.Find(ctx, bson.M{"_prodh_scope": "00100"}, options.Find().SetProjection(scsDeviceProjection()).SetBatchSize(500))
+	cur, err := col.Find(ctx, bson.M{}, options.Find().SetProjection(scsDeviceProjection()).SetBatchSize(500))
 	if err != nil {
 		return result, err
 	}

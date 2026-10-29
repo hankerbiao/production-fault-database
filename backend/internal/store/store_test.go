@@ -701,7 +701,7 @@ func TestSCSChangeFilterUsesCompanyFlag(t *testing.T) {
 
 func TestSCSStreamFieldsExposeNormalizedGatewayColumns(t *testing.T) {
 	doa := strings.Join(scsStreamFields("SCS_DOA"), ",")
-	for _, field := range []string{"service_uid", "acceptance_time", "sales_order", "is_5000_company"} {
+	for _, field := range []string{"service_uid", "acceptance_time", "sales_order", "is_5000_company", "GSTRS", "gstrs_status", "production_orders"} {
 		if !strings.Contains(doa, field) {
 			t.Fatalf("DOA stream missing %s: %s", field, doa)
 		}

@@ -29,16 +29,15 @@ func TestSCSDevicesReadOnlyDatabase(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	count, err := db.Collection("scs_doa_records").CountDocuments(ctx, bson.M{"_prodh_scope": "00100"})
+	count, err := db.Collection("scs_doa_records").CountDocuments(ctx, bson.M{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if count == 0 && result.Total != 0 {
-		t.Fatal("unscoped documents exposed")
+		t.Fatal("unexpected devices without DOA documents")
 	}
-	t.Logf("scoped DOA documents=%d, accessible devices=%d", count, result.Total)
-	// Read a legacy example only inside the test to validate the real nested
-	// MongoDB projection; this never widens the endpoint's scope.
+	t.Logf("DOA documents=%d, accessible devices=%d", count, result.Total)
+	// Validate the real nested MongoDB projection independently.
 	var sample bson.M
 	err = db.Collection("scs_doa_records").FindOne(ctx, bson.M{"details.equipment.product_fields.产品条码": bson.M{"$exists": true}}, options.FindOne().SetProjection(scsDeviceProjection())).Decode(&sample)
 	if err == mongo.ErrNoDocuments {
@@ -50,5 +49,8 @@ func TestSCSDevicesReadOnlyDatabase(t *testing.T) {
 	devices := groupSCSDevices([]bson.M{sample}, SCSDeviceFilters{})
 	if len(devices) == 0 || devices[0].DeviceKey == "" || len(devices[0].Evidence) == 0 {
 		t.Fatal("nested device projection did not decode")
+	}
+	if result.Scope != "all" || result.Total < len(devices) {
+		t.Fatalf("device endpoint does not cover the full data set: scope=%q total=%d", result.Scope, result.Total)
 	}
 }

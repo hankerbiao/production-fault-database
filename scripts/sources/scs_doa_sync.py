@@ -161,6 +161,9 @@ def parse_list(html_text: str) -> list[dict[str, Any]]:
     validate_list(parser)
     if "doa_code" not in parser.headers:
         raise RuntimeError("SCS DOA 结果表缺少 doa_code 列")
+    for row in parser.rows:
+        if "customer_name" in row:
+            row["customer_uid"] = text(row.get("customer_name")) or text(row.get("customer_uid"))
     return parser.rows
 
 
@@ -458,6 +461,8 @@ def sync(args: argparse.Namespace) -> dict[str, Any]:
                 if declared and (watermark is None or declared > watermark):
                     watermark = declared
                 doc = {field: row.get(field, "") for field in LIST_FIELDS}
+                if not text(doc.get("customer_uid")):
+                    doc["customer_uid"] = text((existing or {}).get("customer_uid")) or text((detail_fields.get("details") or {}).get("fields", {}).get("客户全称"))
                 doc.update(detail_fields)
                 doc.update({"_source_key": key, "_source": "scs", "_context_value": row.get("_context_value", ""),
                     "_detail_href": row.get("_detail_href", ""), "_sync_run_id": run_id,

@@ -31,6 +31,14 @@ def test_parse_list_table():
     assert rows == [{"doa_code": "KX-1", "service_uid": "SH-1", "_context_value": "ctx-1", "_detail_href": "javascript:contextValue=ctx-1"}]
 
 
+@pytest.mark.parametrize(("header", "customer"), [("customer_name", "北京字节跳动网络技术有限公司"), ("customer_uid", "旧客户")])
+def test_parse_list_maps_source_customer_to_customer_uid(header, customer):
+    source = f"""<form id='a8a80e69292b8364e0192bd28d8220c1c'><table>
+      <tr><th name='doa_code'>申报单号</th><th name='{header}'>客户</th></tr>
+      <tr><td>KX-1</td><td>{customer}</td></tr></table></form>"""
+    assert parse_list(source)[0]["customer_uid"] == customer
+
+
 def test_parse_service_equipment_and_product_fields():
     service = """<form id='a8a80e692922312b1019226d5b47200b5'><table>
       <tr><th name='mtr_sn'>物料SN</th><th name='host_model'>主机型号</th><th name='leave_factory_date'>出厂日期</th><th name='warranty_deadline'>保修结束日期</th></tr>
@@ -121,8 +129,8 @@ def test_backfill_5000_company_re_evaluates_existing_documents():
 
 @pytest.mark.parametrize(("existing", "detail_order", "expected"), [
     (None, "XNC260001", True),
-    ({"sales_order": "XNC-old"}, "XHG260001", False),
-    ({"sales_order": "XNC260001"}, None, True),
+    ({"sales_order": "XNC-old", "customer_uid": "原客户"}, "XHG260001", False),
+    ({"sales_order": "XNC260001", "customer_uid": "原客户"}, None, True),
 ])
 def test_sync_classifies_without_reference_tables_and_preserves_order_on_detail_failure(
         monkeypatch, existing, detail_order, expected):
@@ -152,7 +160,7 @@ def test_sync_classifies_without_reference_tables_and_preserves_order_on_detail_
     monkeypatch.setattr(doa, "iter_list", lambda *_args: [[{
         "doa_code": "DOA-1", "declare_time": "2026-10-15 08:00:00",
     }]])
-    detail = Mock(return_value={"fields": {"销售订单": detail_order}})
+    detail = Mock(return_value={"fields": {"销售订单": detail_order, "客户全称": "详情客户"}})
     if detail_order is None:
         detail.side_effect = RuntimeError("detail unavailable")
     monkeypatch.setattr(doa, "fetch_detail", detail)
@@ -165,6 +173,7 @@ def test_sync_classifies_without_reference_tables_and_preserves_order_on_detail_
     document = written[0]._doc["$set"]
     assert document["is_5000_company"] is expected
     assert document["sales_order"] == (detail_order or existing["sales_order"])
+    assert document["customer_uid"] == (existing["customer_uid"] if existing else "详情客户")
     assert document["_detail_pending"] is (detail_order is None)
     client.close.assert_called_once()
 

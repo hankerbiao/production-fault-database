@@ -176,6 +176,9 @@ func (f *fakeStore) OrderOptions(context.Context, string) (store.OrderOptionsRes
 	}
 	return f.orderOptions, nil
 }
+func (f *fakeStore) ViewOptions(context.Context, string, string) (store.ViewOptionsResult, error) {
+	return store.ViewOptionsResult{Items: []string{"5000公司"}}, f.err
+}
 func (f *fakeStore) DataStatus(context.Context) (store.DataStatus, error) {
 	return store.DataStatus{}, f.err
 }
@@ -500,12 +503,15 @@ func TestFilterHelpers(t *testing.T) {
 	if filters.SNS != "SN1,SN2" || filters.ProductionOrders != "00012,13" || filters.DateFrom != "2026-01-01" || filters.Station != "ST-1" || filters.TimeField != "planned" || filters.Company5000 != "yes" || filters.NonCriticalMaterialSerial != "37001343" || filters.MaterialCode != "MAT-1" {
 		t.Fatalf("extended filters=%+v", filters)
 	}
-	parsedViewFilters := viewFilters(url.Values{"missingSalesOrder": {" true "}, "orderType": {" ZP01 "}})
+	parsedViewFilters := viewFilters(url.Values{"missingSalesOrder": {" true "}, "orderType": {" ZP01 "}, "cpx": {" 海光服务器产品事业部 "}})
 	if !parsedViewFilters.MissingSalesOrder {
 		t.Fatal("missingSalesOrder was not parsed")
 	}
 	if parsedViewFilters.OrderType != "ZP01" {
 		t.Fatalf("orderType=%q", parsedViewFilters.OrderType)
+	}
+	if parsedViewFilters.CPX != "海光服务器产品事业部" {
+		t.Fatalf("cpx=%q", parsedViewFilters.CPX)
 	}
 }
 
@@ -520,6 +526,25 @@ func TestViewAndDataStatusRoutes(t *testing.T) {
 	newTestServer(f).dataStatus(r, httptest.NewRequest(http.MethodGet, "/api/data-status", nil))
 	if r.Code != http.StatusOK {
 		t.Fatalf("data status=%d", r.Code)
+	}
+}
+
+func TestViewOptionsRoute(t *testing.T) {
+	f := &fakeStore{}
+	r := httptest.NewRecorder()
+	registerRoutes(newTestServer(f)).ServeHTTP(r, httptest.NewRequest(http.MethodGet, "/api/views/ZSGV_ZSD124/options", nil))
+	var result store.ViewOptionsResult
+	if err := json.NewDecoder(r.Body).Decode(&result); err != nil {
+		t.Fatal(err)
+	}
+	if r.Code != http.StatusOK || len(result.Items) != 1 || result.Items[0] != "5000公司" {
+		t.Fatalf("status=%d result=%+v", r.Code, result)
+	}
+	f.err = errors.New("mongo unavailable")
+	r = httptest.NewRecorder()
+	registerRoutes(newTestServer(f)).ServeHTTP(r, httptest.NewRequest(http.MethodGet, "/api/views/ZSGV_ZSD124/options", nil))
+	if r.Code != http.StatusInternalServerError {
+		t.Fatalf("store error status=%d body=%s", r.Code, r.Body.String())
 	}
 }
 

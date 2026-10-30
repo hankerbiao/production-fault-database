@@ -31,6 +31,7 @@ type storeAPI interface {
 	OrderModels(context.Context, string) (store.OrderModelsResult, error)
 	OrderCustomerIDs(context.Context) (store.OrderCustomerIDsResult, error)
 	OrderOptions(context.Context, string) (store.OrderOptionsResult, error)
+	ViewOptions(context.Context, string, string) (store.ViewOptionsResult, error)
 	ViewList(context.Context, string, store.ViewFilters, int, int, bool, bool) (store.ViewListResult, error)
 	ViewListAll(context.Context, string, store.ViewFilters) (store.ViewListResult, error)
 	ViewBOMStream(context.Context, store.ViewFilters, io.Writer) error

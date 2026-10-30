@@ -74,7 +74,7 @@ GET /api/faults/by-orders?productionOrders=PO001,PO002
 
 ### BOM 过账原始数据 `GET /api/views/ZSGV_ZSD124`
 
-支持 `productionOrder`、`salesOrder`、`productModel`、`materialCode`、`dateFrom`、`dateTo`、`missingSalesOrder` 和分页参数，分别过滤 `AUFNR_1`、`VBELN_EX`、`MATNR`、`GSTRS`。`missingSalesOrder=true` 仅适用于 BOM 过账，匹配空白、`null` 或缺失的 `VBELN_EX`。其中 `productModel` 在该视图按 `MATNR` 匹配。返回原始 BOM 行，包含 `MBLNR`、`MJAHR`、`ZEILE`、`MATNR`、`WERKS`、`BWART`、`MENGE_A`、`AUFNR_1`、`VBELN_EX`、`GSTRS`、`BUDAT_MKPF`；由调用方决定 LRR 或复合机型关联规则。
+支持 `productionOrder`、`salesOrder`、`productModel`、`materialCode`、`cpx`、`dateFrom`、`dateTo`、`missingSalesOrder` 和分页参数，分别过滤 `AUFNR_1`、`VBELN_EX`、`MATNR`、`CPX`、`GSTRS`。`cpx` 按公司字段精确匹配，可通过 `GET /api/views/ZSGV_ZSD124/options` 获取候选值。`missingSalesOrder=true` 仅适用于 BOM 过账，匹配空白、`null` 或缺失的 `VBELN_EX`。其中 `productModel` 在该视图按 `MATNR` 匹配。返回原始 BOM 行，包含 `MBLNR`、`MJAHR`、`ZEILE`、`MATNR`、`WERKS`、`BWART`、`MENGE_A`、`AUFNR_1`、`VBELN_EX`、`GSTRS`、`BUDAT_MKPF`；由调用方决定 LRR 或复合机型关联规则。
 
 ### 详情与数据状态
 

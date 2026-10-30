@@ -22,6 +22,7 @@ function mockFetch({ fail = false } = {}) {
     if (String(url).startsWith('/api/views/Z_V_ZMES_T_001?')) return { ok: true, json: async () => ({ items: [{ id: 'station-1', HISTROYID: 'H-1', PCODE: 'PC-1', OCODE: 'OC-1', AUFNR: 'PO-1', SPEC: 'OP-10', OPERATION: '装配', GSTRS: '20260102', ACTUAL_START_TIME: '2026-01-02 03:04:05', ACTUAL_END_TIME: '2026-01-02 03:05:05' }], total: 1, preview: true, hasMore: false }) };
     if (String(url).startsWith('/api/views/Z_V_ZMES_T_001/stats')) return { ok: true, json: async () => ({ total: 1, missingSalesOrder: 3, missingProductionOrder: 2, dataStartDate: '20260102', dataEndDate: '20260102', latestSyncedAt: '2026-01-02T03:04:05Z' }) };
     if (String(url).startsWith('/api/views/Z_V_ZMES_T_001/detail')) return { ok: true, json: async () => ({ fields: [{ key: 'PCODE', label: '主机序列号', value: 'PC-1' }, { key: 'PRODH', label: '产品层次', value: '00100' }] }) };
+    if (String(url).startsWith('/api/views/ZSGV_ZSD124/options')) return { ok: true, json: async () => ({ items: ['5000公司', '海光服务器产品事业部', '高性能计算产品事业部'] }) };
     if (String(url).startsWith('/api/views/ZSGV_ZSD124?')) return { ok: true, json: async () => ({ items: [{ id: 'bom-1', MATNR: 'MAT-1', AUART: 'ZP01' }], total: 2 }) };
     if (String(url).startsWith('/api/views/ZSGV_ZSD124/stats')) return { ok: true, json: async () => ({ total: 2, salesOrders: 1, productionOrders: 2, missingSalesOrder: 3, missingProductionOrder: 4, missingProductionOrderDistinct: 2, dataStartDate: '20260102', dataEndDate: '20260102', latestSyncedAt: '2026-01-02T03:04:05Z' }) };
     if (String(url).startsWith('/api/views/ZSGV_ZSD124/detail')) return { ok: true, json: async () => ({ fields: [{ key: 'MATNR', label: '物料号', value: 'MAT-1' }] }) };
@@ -464,6 +465,23 @@ describe('operations workbench', () => {
     await waitFor(() => expect(fetchMock.mock.calls.some(([url]) => {
       const query = new URL(String(url), 'http://localhost').searchParams;
       return query.get('orderType') === 'ZP01';
+    })).toBe(true));
+  });
+
+  it('filters BOM postings by searchable CPX company options', async () => {
+    const fetchMock = mockFetch();
+    vi.stubGlobal('fetch', fetchMock);
+    render(<App />);
+    fireEvent.click(screen.getByRole('button', { name: /订单过账/ }));
+    await screen.findByRole('heading', { name: '订单 BOM 过账' });
+    const company = screen.getByRole('textbox', { name: '公司 / CPX' });
+    fireEvent.focus(company);
+    fireEvent.change(company, { target: { value: '海光' } });
+    fireEvent.click(await screen.findByRole('option', { name: '海光服务器产品事业部' }));
+    fireEvent.click(screen.getByRole('button', { name: /搜索 \/ 筛选/ }));
+    await waitFor(() => expect(fetchMock.mock.calls.some(([url]) => {
+      const query = new URL(String(url), 'http://localhost').searchParams;
+      return query.get('cpx') === '海光服务器产品事业部';
     })).toBe(true));
   });
 

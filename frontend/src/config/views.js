@@ -8,6 +8,7 @@ export const viewConfigs = {
     dateLabel: "计划开始时间（GSTRS_DATE）",
     showProductionOrder: true,
     showSalesOrder: true,
+    showCPXCompany: true,
     showProductModel: false,
     bilingual: false,
     allowMissingSalesOrderExport: true,

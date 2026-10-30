@@ -59,6 +59,7 @@ func New(ctx context.Context, uri, database, repairCollection, orderCollection s
 		client: client, db: db, repairs: db.Collection(repairCollection), orders: db.Collection(orderCollection), views: views,
 		bomCache:     make(map[string]bomStreamCacheEntry),
 		stationCache: make(map[string]bomStreamCacheEntry), stationWarmDone: make(chan struct{}),
+		viewOptionsCache: make(map[string]ViewOptionsResult),
 	}
 	// Station prewarming is limited to the recent 30-day window. BOM data is
 	// never prewarmed because an unbounded snapshot would scan the source
@@ -94,6 +95,7 @@ func ensureCoreIndexes(ctx context.Context, db *mongo.Database, repairCollection
 		{Keys: bson.D{{Key: "GSTRS_DATE", Value: 1}}},
 		{Keys: bson.D{{Key: "AUFNR_1", Value: 1}, {Key: "GSTRS_DATE", Value: 1}}},
 		{Keys: bson.D{{Key: "VBELN_EX", Value: 1}, {Key: "GSTRS_DATE", Value: 1}}},
+		{Keys: bson.D{{Key: "CPX", Value: 1}}, Options: options.Index().SetName("bom_cpx")},
 	})
 	create("station_records_sap", "station", []mongo.IndexModel{
 		{Keys: bson.D{{Key: "AUFNR", Value: 1}}, Options: options.Index().SetName("station_production_order")},
@@ -362,6 +364,7 @@ func viewFilter(viewID string, f ViewFilters, searchFields []string, dateField s
 		addExactCompat("AUFNR_1", f.ProductionOrder, true)
 		addExactCompat("VBELN_EX", f.SalesOrder, true)
 		addExactCompat("AUART", f.OrderType, false)
+		addExactCompat("CPX", f.CPX, false)
 		addExactCompat("MATNR", f.ProductModel, false)
 		if f.MissingSalesOrder {
 			conditions = append(conditions, bson.M{"$expr": emptyViewField("VBELN_EX")})

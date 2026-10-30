@@ -1,6 +1,6 @@
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { AlertTriangle, Boxes, ClipboardList, Search, SlidersHorizontal } from 'lucide-react';
-import { listView, viewDetail, viewStats } from '../api/views';
+import { bomCompanyOptions, listView, viewDetail, viewStats } from '../api/views';
 import { usePagedResource } from '../hooks/usePagedResource';
 import { useDetail } from '../hooks/useDetail';
 import { ActiveFilters } from '../components/ActiveFilters';
@@ -16,8 +16,8 @@ import { downloadCsv } from '../utils/export';
 import { formatCell, formatDate, formatDateRange, formatNumber } from '../utils/formatters';
 
 const emptyStats = { total: 0, salesOrders: 0, productionOrders: 0, missingSalesOrder: 0, missingProductionOrder: 0, missingProductionOrderDistinct: 0, is5000Count: 0, dataStartDate: '', dataEndDate: '', latestSyncedAt: '' };
-const initialFilters = { keyword: '', productionOrder: '', salesOrder: '', productModel: '', from: '', to: '', dateFrom: '', dateTo: '', stationCode: '', sn: '', base: '', orderType: '', materialCode: '', headOrder: '', itemOrder: '', doaCode: '', status: '', judgment: '', customer: '', serviceOrder: '', changeType: '', partNumber: '', partSn: '', operator: '', needReturn: '', revoked: '', company5000: '' };
-const filterLabels = { keyword: '关键字', productionOrder: '生产订单', salesOrder: '销售订单', productModel: '机型', from: '开始时间', to: '结束时间', dateFrom: '开始日期', dateTo: '结束日期', stationCode: '工位', sn: '序列号', base: '工厂/库存地点', orderType: '订单类型', materialCode: '物料号', headOrder: '机头订单', itemOrder: '小刀订单', doaCode: 'DOA单号', status: '处理状态', judgment: '判定结果', customer: '客户', serviceOrder: '服务单', changeType: '操作类型', partNumber: '备件PN', partSn: '备件SN', operator: '操作人', needReturn: '需归还', revoked: '已撤销', company5000: '是否为5000公司' };
+const initialFilters = { keyword: '', productionOrder: '', salesOrder: '', productModel: '', from: '', to: '', dateFrom: '', dateTo: '', stationCode: '', sn: '', base: '', orderType: '', materialCode: '', cpx: '', headOrder: '', itemOrder: '', doaCode: '', status: '', judgment: '', customer: '', serviceOrder: '', changeType: '', partNumber: '', partSn: '', operator: '', needReturn: '', revoked: '', company5000: '' };
+const filterLabels = { keyword: '关键字', productionOrder: '生产订单', salesOrder: '销售订单', productModel: '机型', from: '开始时间', to: '结束时间', dateFrom: '开始日期', dateTo: '结束日期', stationCode: '工位', sn: '序列号', base: '工厂/库存地点', orderType: '订单类型', materialCode: '物料号', cpx: '公司（CPX）', headOrder: '机头订单', itemOrder: '小刀订单', doaCode: 'DOA单号', status: '处理状态', judgment: '判定结果', customer: '客户', serviceOrder: '服务单', changeType: '操作类型', partNumber: '备件PN', partSn: '备件SN', operator: '操作人', needReturn: '需归还', revoked: '已撤销', company5000: '是否为5000公司' };
 const hasActiveFilters = filters => Object.values(filters).some(value => value !== '' && value !== false && value !== undefined && value !== null);
 
 function AdvancedFilterField({ field, value, options, onChange }) {
@@ -45,7 +45,21 @@ export function ViewDashboardPage({ config, modelOptions = [], setConnected, set
   const detail = useDetail(id => viewDetail(config.id, id), '无法读取该记录的详细字段');
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [exporting, setExporting] = useState(false);
+  const [fieldOptions, setFieldOptions] = useState({});
   const bilingual = config.bilingual;
+  useEffect(() => {
+    let current = true;
+    if (config.id !== 'ZSGV_ZSD124') {
+      setFieldOptions({});
+      return () => { current = false; };
+    }
+    bomCompanyOptions().then(result => {
+      if (current) setFieldOptions({ cpx: result.items || [] });
+    }).catch(() => {
+      if (current) setFieldOptions({ cpx: [] });
+    });
+    return () => { current = false; };
+  }, [config.id]);
   const update = (key, value) => resource.setFilters(previous => ({ ...previous, [key]: value }));
   const submit = event => { event.preventDefault(); resource.applyFilters({ ...resource.filters }); };
   const reset = () => resource.reset(defaultFilters);
@@ -82,6 +96,7 @@ export function ViewDashboardPage({ config, modelOptions = [], setConnected, set
         <div className="filter-form-body">
           {config.showProductionOrder && <label className="filter-field"><span>{bilingual ? '生产订单 / Production order' : '生产订单'}</span><input className="filter-text" aria-label="生产订单" placeholder="AUFNR" value={resource.filters.productionOrder} onChange={event => update('productionOrder', event.target.value)} /></label>}
           {config.showSalesOrder && <label className="filter-field"><span>{bilingual ? '销售订单 / Sales order' : '销售订单'}</span><input className="filter-text" aria-label="销售订单" placeholder="VBELN" value={resource.filters.salesOrder} onChange={event => update('salesOrder', event.target.value)} /></label>}
+          {config.showCPXCompany && <div className="filter-field"><span>公司（CPX）</span><ModelSelect options={fieldOptions.cpx || []} value={resource.filters.cpx} onChange={value => update('cpx', value)} placeholder="公司 / CPX" toggleLabel="展开公司选项" /></div>}
           {config.showProductModel && <div className="filter-field"><span>{bilingual ? '产品层次 / Product hierarchy' : '机型'}</span><ModelSelect options={modelOptions} value={resource.filters.productModel} onChange={value => update('productModel', value)} placeholder={bilingual ? '产品层次 / Product hierarchy' : '机型 / Product model'} /></div>}
           {config.dateField && <div className="filter-field filter-field-date"><span>{bilingual ? `${config.dateLabel || '时间周期'} / Date period` : (config.dateLabel || '时间周期')}</span><DateRangePicker from={resource.filters.from} to={resource.filters.to} onChange={(from, to) => resource.setFilters(previous => ({ ...previous, from, to }))} label={bilingual ? `${config.dateLabel || '时间周期'} / Date period` : (config.dateLabel || '时间周期')} bilingual={bilingual} /></div>}
           {config.showCompany5000 && <div className="filter-field"><span>公司归属</span><label className="filter-checkbox"><input type="checkbox" checked={resource.filters.company5000 === 'true'} onChange={event => update('company5000', event.target.checked ? 'true' : '')} /><span>是否为5000公司</span></label></div>}
@@ -100,7 +115,7 @@ export function ViewDashboardPage({ config, modelOptions = [], setConnected, set
               key={field.key}
               field={field}
               value={resource.filters[field.key]}
-              options={field.options || []}
+              options={fieldOptions[field.key] || field.options || []}
               onChange={value => update(field.key, value)}
             />)}
           </div>

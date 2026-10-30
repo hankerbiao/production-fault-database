@@ -26,6 +26,9 @@ type Store struct {
 	orderOptionsCacheMu sync.Mutex
 	orderOptionsCacheAt time.Time
 	orderOptionsCache   map[string]OrderOptionsResult
+	viewOptionsCacheMu  sync.Mutex
+	viewOptionsCacheAt  time.Time
+	viewOptionsCache    map[string]ViewOptionsResult
 	dataStatusCacheMu   sync.Mutex
 	dataStatusCacheAt   time.Time
 	dataStatusCache     DataStatus
@@ -177,6 +180,10 @@ type OrderCustomerIDsResult struct {
 	Items []string `json:"items"`
 }
 
+type ViewOptionsResult struct {
+	Items []string `json:"items"`
+}
+
 type OrderOptionsResult struct {
 	ProductionOrders []string `json:"productionOrders"`
 	SalesOrders      []string `json:"salesOrders"`
@@ -190,7 +197,7 @@ type ViewFilters struct {
 	Keyword, From, To                                                                  string
 	DateFrom, DateTo, StationCode, SN, ProductionOrder, SalesOrder, Base, ProductModel string
 	TimeField                                                                          string
-	HeadOrder, ItemOrder, HeadSN, ItemSN, MaterialCode, OrderType                      string
+	HeadOrder, ItemOrder, HeadSN, ItemSN, MaterialCode, OrderType, CPX                 string
 	MissingSalesOrder                                                                  bool
 	DOACode, DOAType, Status, Customer, ServiceOrder                                   string
 	ChangeType, PartNumber, PartSN, Operator, NeedReturn, Revoked                      string
@@ -275,6 +282,7 @@ const stationStreamCacheTTL = 60 * time.Second
 const stationStreamCacheMaxBytes = 96 << 20
 const companyOrderCacheTTL = 10 * time.Minute
 const orderOptionsCacheTTL = 10 * time.Minute
+const viewOptionsCacheTTL = 10 * time.Minute
 const dataStatusCacheTTL = 30 * time.Second
 
 // Bulk and board queries use these narrow projections; detail endpoints read

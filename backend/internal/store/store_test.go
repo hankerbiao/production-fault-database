@@ -401,6 +401,15 @@ func TestBOMViewFilterUsesOrderType(t *testing.T) {
 	}
 }
 
+func TestBOMViewFilterUsesCompany(t *testing.T) {
+	filter := viewFilter("ZSGV_ZSD124", ViewFilters{CPX: "海光服务器产品事业部"}, nil, "GSTRS")
+	conditions := filter["$and"].(primitive.A)
+	condition, ok := conditions[0].(bson.M)["CPX"].(bson.M)
+	if !ok || condition["$regex"] != "^海光服务器产品事业部$" {
+		t.Fatalf("company condition=%v", conditions[0])
+	}
+}
+
 func TestBulkRepairProjectionKeepsBothLRRMaterialFields(t *testing.T) {
 	for _, field := range []string{"MATNR", "RECORD01REPAIRM", "GSTRS", "AUFNR", "VBELN"} {
 		if repairListProjection[field] != 1 {
@@ -499,6 +508,9 @@ func TestBOMQueryRejectsUnboundedFilters(t *testing.T) {
 	}
 	if err := ValidateBOMFilter(ViewFilters{MaterialCode: "MAT-1"}); err != nil {
 		t.Fatalf("material BOM query rejected: %v", err)
+	}
+	if err := ValidateBOMFilter(ViewFilters{CPX: "5000公司"}); err != nil {
+		t.Fatalf("company BOM query rejected: %v", err)
 	}
 }
 

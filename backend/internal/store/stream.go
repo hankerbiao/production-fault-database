@@ -336,7 +336,7 @@ func ensureStreamRowLimit(ctx context.Context, collection interface {
 }
 
 func bomStreamCacheKey(f ViewFilters) string {
-	return strings.Join([]string{f.Keyword, f.From, f.To, f.DateFrom, f.DateTo, f.StationCode, f.SN, f.ProductionOrder, f.SalesOrder, f.Base, f.ProductModel, f.HeadOrder, f.ItemOrder, f.HeadSN, f.ItemSN, f.MaterialCode, strconv.FormatBool(f.MissingSalesOrder)}, "\x00")
+	return strings.Join([]string{f.Keyword, f.From, f.To, f.DateFrom, f.DateTo, f.StationCode, f.SN, f.ProductionOrder, f.SalesOrder, f.Base, f.ProductModel, f.HeadOrder, f.ItemOrder, f.HeadSN, f.ItemSN, f.MaterialCode, f.CPX, strconv.FormatBool(f.MissingSalesOrder)}, "\x00")
 }
 
 func stationStreamCacheKey(f ViewFilters) string {
@@ -360,6 +360,7 @@ func hasBOMFilter(f ViewFilters) bool {
 		strings.TrimSpace(f.HeadSN) != "" ||
 		strings.TrimSpace(f.ItemSN) != "" ||
 		strings.TrimSpace(f.MaterialCode) != "" ||
+		strings.TrimSpace(f.CPX) != "" ||
 		f.MissingSalesOrder
 }
 

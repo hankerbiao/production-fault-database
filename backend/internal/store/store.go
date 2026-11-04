@@ -59,6 +59,7 @@ func New(ctx context.Context, uri, database, repairCollection, orderCollection s
 		client: client, db: db, repairs: db.Collection(repairCollection), orders: db.Collection(orderCollection), views: views,
 		bomCache:     make(map[string]bomStreamCacheEntry),
 		stationCache: make(map[string]bomStreamCacheEntry), stationWarmDone: make(chan struct{}),
+		viewOptionsCache: make(map[string]ViewOptionsResult),
 	}
 	// Station prewarming is limited to the recent 30-day window. BOM data is
 	// never prewarmed because an unbounded snapshot would scan the source
@@ -75,10 +76,10 @@ func ensureCoreIndexes(ctx context.Context, db *mongo.Database, repairCollection
 		}
 	}
 	create(repairCollection, "repairs", []mongo.IndexModel{
-		{Keys: bson.D{{Key: "_synced_at", Value: -1}}},
-		{Keys: bson.D{{Key: "AUFNR", Value: 1}, {Key: "ZDATE_WX", Value: 1}}},
-		{Keys: bson.D{{Key: "PCODE", Value: 1}}},
-		{Keys: bson.D{{Key: "VBELN", Value: 1}}},
+		{Keys: bson.D{{Key: "_prodh_scope", Value: 1}, {Key: "_synced_at", Value: -1}}},
+		{Keys: bson.D{{Key: "_prodh_scope", Value: 1}, {Key: "AUFNR", Value: 1}, {Key: "ZDATE_WX", Value: 1}}},
+		{Keys: bson.D{{Key: "_prodh_scope", Value: 1}, {Key: "PCODE", Value: 1}}},
+		{Keys: bson.D{{Key: "_prodh_scope", Value: 1}, {Key: "VBELN", Value: 1}}},
 	})
 	create(orderCollection, "orders", []mongo.IndexModel{
 		{Keys: bson.D{{Key: "last_synced_at", Value: -1}}},
@@ -91,33 +92,34 @@ func ensureCoreIndexes(ctx context.Context, db *mongo.Database, repairCollection
 		{Keys: bson.D{{Key: "aufnr", Value: 1}}},
 	})
 	create("order_bom_postings_sap", "bom", []mongo.IndexModel{
-		{Keys: bson.D{{Key: "GSTRS_DATE", Value: 1}}},
-		{Keys: bson.D{{Key: "AUFNR_1", Value: 1}, {Key: "GSTRS_DATE", Value: 1}}},
-		{Keys: bson.D{{Key: "VBELN_EX", Value: 1}, {Key: "GSTRS_DATE", Value: 1}}},
+		{Keys: bson.D{{Key: "_prodh_scope", Value: 1}, {Key: "GSTRS_DATE", Value: 1}}},
+		{Keys: bson.D{{Key: "_prodh_scope", Value: 1}, {Key: "AUFNR_1", Value: 1}, {Key: "GSTRS_DATE", Value: 1}}},
+		{Keys: bson.D{{Key: "_prodh_scope", Value: 1}, {Key: "VBELN_EX", Value: 1}, {Key: "GSTRS_DATE", Value: 1}}},
+		{Keys: bson.D{{Key: "_prodh_scope", Value: 1}, {Key: "CPX", Value: 1}}, Options: options.Index().SetName("bom_scope_cpx")},
 	})
 	create("station_records_sap", "station", []mongo.IndexModel{
-		{Keys: bson.D{{Key: "AUFNR", Value: 1}}, Options: options.Index().SetName("station_production_order")},
-		{Keys: bson.D{{Key: "MAKTX_TH", Value: 1}, {Key: "GSTRS", Value: 1}}, Options: options.Index().SetName("station_model_gstrs")},
-		{Keys: bson.D{{Key: "GSTRS", Value: 1}}, Options: options.Index().SetName("station_gstrs")},
-		{Keys: bson.D{{Key: "_synced_at", Value: -1}}},
+		{Keys: bson.D{{Key: "_prodh_scope", Value: 1}, {Key: "AUFNR", Value: 1}}, Options: options.Index().SetName("station_scope_production_order")},
+		{Keys: bson.D{{Key: "_prodh_scope", Value: 1}, {Key: "MAKTX_TH", Value: 1}, {Key: "GSTRS", Value: 1}}, Options: options.Index().SetName("station_scope_model_gstrs")},
+		{Keys: bson.D{{Key: "_prodh_scope", Value: 1}, {Key: "GSTRS", Value: 1}}, Options: options.Index().SetName("station_scope_gstrs")},
+		{Keys: bson.D{{Key: "_prodh_scope", Value: 1}, {Key: "_synced_at", Value: -1}}},
 	})
 	create("serial_bindings_sap", "bindings", []mongo.IndexModel{
 		{Keys: bson.D{{Key: "AUFNR_HEAD", Value: 1}}},
-		{Keys: bson.D{{Key: "_synced_at", Value: -1}}},
+		{Keys: bson.D{{Key: "_prodh_scope", Value: 1}, {Key: "_synced_at", Value: -1}}},
 	})
 	create("scs_change_records", "scs_change", []mongo.IndexModel{
-		{Keys: bson.D{{Key: "is_5000_company", Value: 1}, {Key: "create_time", Value: -1}}, Options: options.Index().SetName("scs_change_company_time")},
-		{Keys: bson.D{{Key: "_synced_at", Value: -1}}},
+		{Keys: bson.D{{Key: "_prodh_scope", Value: 1}, {Key: "is_5000_company", Value: 1}, {Key: "create_time", Value: -1}}, Options: options.Index().SetName("scs_change_scope_company_time")},
+		{Keys: bson.D{{Key: "_prodh_scope", Value: 1}, {Key: "_synced_at", Value: -1}}},
 	})
 	create("scs_doa_records", "scs_doa", []mongo.IndexModel{
-		{Keys: bson.D{{Key: "is_5000_company", Value: 1}, {Key: "declare_time", Value: -1}}, Options: options.Index().SetName("scs_doa_company_declare_time")},
-		{Keys: bson.D{{Key: "is_5000_company", Value: 1}, {Key: "acceptance_time", Value: -1}}, Options: options.Index().SetName("scs_doa_company_acceptance_time")},
-		{Keys: bson.D{{Key: "declare_time", Value: -1}}},
-		{Keys: bson.D{{Key: "acceptance_time", Value: -1}}},
-		{Keys: bson.D{{Key: "_synced_at", Value: -1}}},
+		{Keys: bson.D{{Key: "_prodh_scope", Value: 1}, {Key: "is_5000_company", Value: 1}, {Key: "declare_time", Value: -1}}, Options: options.Index().SetName("scs_doa_scope_company_declare_time")},
+		{Keys: bson.D{{Key: "_prodh_scope", Value: 1}, {Key: "is_5000_company", Value: 1}, {Key: "acceptance_time", Value: -1}}, Options: options.Index().SetName("scs_doa_scope_company_acceptance_time")},
+		{Keys: bson.D{{Key: "_prodh_scope", Value: 1}, {Key: "declare_time", Value: -1}}},
+		{Keys: bson.D{{Key: "_prodh_scope", Value: 1}, {Key: "acceptance_time", Value: -1}}},
+		{Keys: bson.D{{Key: "_prodh_scope", Value: 1}, {Key: "_synced_at", Value: -1}}},
 	})
 	create("order_bom_postings_sap", "bom_sync", []mongo.IndexModel{
-		{Keys: bson.D{{Key: "_synced_at", Value: -1}}},
+		{Keys: bson.D{{Key: "_prodh_scope", Value: 1}, {Key: "_synced_at", Value: -1}}},
 	})
 	return errors.Join(errs...)
 }
@@ -173,6 +175,7 @@ func (s *Store) DataStatus(ctx context.Context) (DataStatus, error) {
 		collection *mongo.Collection
 		field      string
 	}
+	scope := bson.M{"_prodh_scope": "00100"}
 	sources := []source{
 		{s.orders, "last_synced_at"}, {s.repairs, "_synced_at"}, {s.views["Z_V_ZMES_T_001"], "_synced_at"},
 		{s.views["ZSGV_ZPP_SERNOLIST"], "_synced_at"}, {s.views["ZSGV_ZSD124"], "_synced_at"},
@@ -187,8 +190,14 @@ func (s *Store) DataStatus(ctx context.Context) (DataStatus, error) {
 		wg.Add(1)
 		go func(index int, item source) {
 			defer wg.Done()
+			filter := scope
+			if index == 0 {
+				filter = bson.M{}
+			} else if index < 5 {
+				filter = companyScopeFilter(nil)
+			}
 			var doc bson.M
-			err := item.collection.FindOne(ctx, bson.M{}, options.FindOne().SetSort(bson.D{{Key: item.field, Value: -1}}).SetProjection(bson.M{item.field: 1})).Decode(&doc)
+			err := item.collection.FindOne(ctx, filter, options.FindOne().SetSort(bson.D{{Key: item.field, Value: -1}}).SetProjection(bson.M{item.field: 1})).Decode(&doc)
 			if err == mongo.ErrNoDocuments {
 				return
 			}
@@ -197,7 +206,7 @@ func (s *Store) DataStatus(ctx context.Context) (DataStatus, error) {
 				return
 			}
 			values[index] = timeText(doc[item.field])
-			counts[index], _ = item.collection.EstimatedDocumentCount(ctx)
+			counts[index], _ = item.collection.CountDocuments(ctx, filter)
 		}(index, item)
 	}
 	wg.Wait()
@@ -205,6 +214,15 @@ func (s *Store) DataStatus(ctx context.Context) (DataStatus, error) {
 		return DataStatus{}, resultErr
 	}
 	result := DataStatus{SalesOrdersLastSyncedAt: values[0], FaultsLastSyncedAt: values[1], StationRecordsLastSyncedAt: values[2], SerialBindingsLastSyncedAt: values[3], BOMPostingsLastSyncedAt: values[4], SCSDoaLastSyncedAt: values[5], SCSChangeLastSyncedAt: values[6], SCSDoaRecordCount: counts[5], SCSChangeRecordCount: counts[6]}
+	var publication bson.M
+	if err := s.db.Collection("sync_publications").FindOne(ctx, bson.M{"_id": "prodh-00100"}).Decode(&publication); err != nil && err != mongo.ErrNoDocuments {
+		return DataStatus{}, err
+	}
+	result.PublicationState = firstText(publication, "state")
+	result.PublicationRunID = firstText(publication, "active_run_id")
+	result.PublicationPublishedAt = timeText(publication["published_at"])
+	result.PublicationLastError = firstText(publication, "last_error")
+	result.PublicationReady = result.PublicationState == "ready" && result.PublicationRunID != ""
 	s.dataStatusCache = result
 	s.dataStatusCacheAt = time.Now()
 	return result, nil
@@ -362,6 +380,7 @@ func viewFilter(viewID string, f ViewFilters, searchFields []string, dateField s
 		addExactCompat("AUFNR_1", f.ProductionOrder, true)
 		addExactCompat("VBELN_EX", f.SalesOrder, true)
 		addExactCompat("AUART", f.OrderType, false)
+		addExactCompat("CPX", f.CPX, false)
 		addExactCompat("MATNR", f.ProductModel, false)
 		if f.MissingSalesOrder {
 			conditions = append(conditions, bson.M{"$expr": emptyViewField("VBELN_EX")})
@@ -393,10 +412,14 @@ func viewFilter(viewID string, f ViewFilters, searchFields []string, dateField s
 	if f.ItemSN != "" {
 		addExactCompat("ZCODE_ITEM", f.ItemSN, false)
 	}
-	if len(conditions) == 0 {
-		return bson.M{}
+	var filter bson.M
+	if len(conditions) > 0 {
+		filter = bson.M{"$and": conditions}
 	}
-	return bson.M{"$and": conditions}
+	if viewID == "SCS_DOA" || viewID == "SCS_CHANGE" {
+		return scopeFilter(filter)
+	}
+	return companyScopeFilter(filter)
 }
 
 func parseBoolFilter(value string) bool {

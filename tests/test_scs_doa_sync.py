@@ -31,11 +31,19 @@ def test_parse_list_table():
     assert rows == [{"doa_code": "KX-1", "service_uid": "SH-1", "_context_value": "ctx-1", "_detail_href": "javascript:contextValue=ctx-1"}]
 
 
+@pytest.mark.parametrize(("header", "customer"), [("customer_name", "北京字节跳动网络技术有限公司"), ("customer_uid", "旧客户")])
+def test_parse_list_maps_source_customer_to_customer_uid(header, customer):
+    source = f"""<form id='a8a80e69292b8364e0192bd28d8220c1c'><table>
+      <tr><th name='doa_code'>申报单号</th><th name='{header}'>客户</th></tr>
+      <tr><td>KX-1</td><td>{customer}</td></tr></table></form>"""
+    assert parse_list(source)[0]["customer_uid"] == customer
+
+
 def test_parse_service_equipment_and_product_fields():
     service = """<form id='a8a80e692922312b1019226d5b47200b5'><table>
       <tr><th name='mtr_sn'>物料SN</th><th name='host_model'>主机型号</th><th name='leave_factory_date'>出厂日期</th><th name='warranty_deadline'>保修结束日期</th></tr>
-      <tr><td>SN1</td><td>R5250H0</td><td>2026-08-24</td><td>2029-09-23</td></tr>
-    </table></form>contextKey=so_sub_service_order&amp;contextValue=ctx-2"""
+      <tr><td><a href="?contextKey=so_sub_service_order&amp;contextValue=ctx-2">SN1</a></td><td>R5250H0</td><td>2026-08-24</td><td>2029-09-23</td></tr>
+    </table></form>"""
     equipment = extract_equipment(service)
     assert equipment[0]["material_sn"] == "SN1"
     assert equipment[0]["host_model"] == "R5250H0"
@@ -92,81 +100,60 @@ def test_classify_doa_document_prefers_detail_order_and_falls_back_to_stored_ord
 
 
 def test_backfill_5000_company_re_evaluates_existing_documents():
-    class Collection:
-        def __init__(self):
-            self.documents = [
+    from test_sync_sales_orders import FakeDB
+    database = FakeDB()
+    database["doa"].docs = [
                 {"_id": "1", "sales_order": "OLD", "details": {"fields": {"合同/订单号": "XNC1"}}, "is_5000_company": False},
                 {"_id": "2", "sales_order": "XHG1", "is_5000_company": True},
                 {"_id": "3", "sales_order": "XNC2", "is_5000_company": True},
-            ]
-            self.operations = []
-
-        def find(self, *_args, **_kwargs):
-            return self.documents
-
-        def bulk_write(self, operations, ordered=False):
-            self.operations.extend(operations)
-            return type("Result", (), {"modified_count": len(operations)})()
-
-    class Database:
-        def __init__(self): self.collection = Collection()
-        def __getitem__(self, _name): return self.collection
-
-    database = Database()
-    assert backfill_5000_company(database, "scs_doa_records") == 2
-    operations = database.collection.operations
-    assert operations[0]._doc["$set"] == {"sales_order": "XNC1", "is_5000_company": True}
-    assert operations[1]._doc["$set"] == {"sales_order": "XHG1", "is_5000_company": False}
+    ]
+    for document in database["doa"].docs:
+        document.update(_prodh_scope="00100", service_order_keys=[])
+    assert backfill_5000_company(database, "doa") == 2
+    assert database["doa"].docs[0]["sales_order"] == "XNC1"
+    assert database["doa"].docs[0]["is_5000_company"] is True
+    assert database["doa"].docs[1]["is_5000_company"] is False
 
 
 @pytest.mark.parametrize(("existing", "detail_order", "expected"), [
     (None, "XNC260001", True),
-    ({"sales_order": "XNC-old"}, "XHG260001", False),
-    ({"sales_order": "XNC260001"}, None, True),
+    ({"sales_order": "XNC-old", "customer_uid": "原客户"}, "XHG260001", False),
+    ({"sales_order": "XNC260001", "customer_uid": "原客户"}, None, True),
 ])
-def test_sync_classifies_without_reference_tables_and_preserves_order_on_detail_failure(
+def test_sync_classifies_verified_orders_and_preserves_order_on_detail_failure(
         monkeypatch, existing, detail_order, expected):
-    collection, checkpoints, client = Mock(), Mock(), Mock()
-    database = {"doa": collection, "sync_checkpoints": checkpoints}
-    client.__getitem__ = Mock(return_value=database)
-    checkpoints.find_one.return_value = {"watermark": "2026-10-15"}
-    collection.find_one.return_value = existing
-    pending = MagicMock()
-    pending.sort.return_value = pending
-    pending.limit.return_value = pending
-    collection.find.side_effect = [pending, []]
-    written = []
-
-    def bulk_write(operations, **_kwargs):
-        written.extend(operations)
-        return SimpleNamespace(upserted_count=1, modified_count=0)
-
-    collection.bulk_write.side_effect = bulk_write
-    monkeypatch.setenv("SCS_DOA_COLLECTION", "doa")
-    monkeypatch.setenv("MONGODB_DATABASE", "test")
-    monkeypatch.setattr(doa, "load_dotenv", lambda *_args: None)
-    monkeypatch.setattr(doa, "mongo_uri", lambda: "mongodb://test")
-    monkeypatch.setattr(doa, "MongoClient", lambda *_args, **_kwargs: client)
-    monkeypatch.setattr(doa, "resource_lock", lambda *_args: nullcontext())
-    monkeypatch.setattr(doa, "login", lambda *_args: None)
+    from test_sync_admission import setup_scs
+    from test_sync_sales_orders import FakeDB
+    database = FakeDB()
+    args = setup_scs(monkeypatch, doa, database)
+    args.full = False
+    args.end_date = ""
+    sales_order = detail_order or existing["sales_order"]
+    database["orders"].docs = [{"source": "SG", "_prodh_scope": "00100",
+                                "data": {"AUFNR": "1", "VBELN": sales_order}}]
+    if existing:
+        database["doa"].docs = [{
+            "_id": "D1", "_source_key": "DOA-1", "_prodh_scope": "00100", **existing,
+            "details": {"fields": {"销售订单": existing["sales_order"]}},
+        }]
     monkeypatch.setattr(doa, "iter_list", lambda *_args: [[{
-        "doa_code": "DOA-1", "declare_time": "2026-10-15 08:00:00",
+        "doa_code": "DOA-1", "declare_time": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
     }]])
-    detail = Mock(return_value={"fields": {"销售订单": detail_order}})
+    detail = Mock(return_value={"fields": {"销售订单": detail_order, "客户全称": "详情客户"}})
     if detail_order is None:
         detail.side_effect = RuntimeError("detail unavailable")
     monkeypatch.setattr(doa, "fetch_detail", detail)
 
-    result = doa.sync(SimpleNamespace(
-        full=False, dry_run=False, page_size=500, lookback_days=2, end_date="2026-10-15",
-    ))
+    result = doa.sync(args)
     assert result["success"] is True
-    assert len(written) == 1
-    document = written[0]._doc["$set"]
+    assert len(database["doa"].docs) == 1
+    checkpoint = database["checkpoints"].find_one({"_id": "scs_doa:scs"})
+    assert checkpoint is not None and "prodh_list" not in checkpoint
+    document = database["doa"].docs[0]
     assert document["is_5000_company"] is expected
     assert document["sales_order"] == (detail_order or existing["sales_order"])
+    assert document["customer_uid"] == (existing["customer_uid"] if existing else "详情客户")
     assert document["_detail_pending"] is (detail_order is None)
-    client.close.assert_called_once()
 
 
 def test_parse_datetime_accepts_iso_watermark():
@@ -198,6 +185,7 @@ def test_parser_defaults_lookback_to_two_days(monkeypatch):
 def test_should_refresh_details_skips_unchanged_complete_rows():
     row = {"doa_code": "KX-1", "status": "已受理", "declare_time": "2026-09-17 18:44"}
     existing = {"doa_code": "KX-1", "status": "已受理", "declare_time": "2026-09-17 18:44", "details": {"fields": {"销售订单": "X"}}}
+    existing.update(_detail_schema_version=doa.DETAIL_SCHEMA_VERSION, _detail_fetched_at=datetime.now(timezone.utc))
     assert should_refresh_details(existing, row) is False
     assert should_refresh_details(None, row) is True
     assert should_refresh_details({**existing, "status": "已完成"}, row) is True

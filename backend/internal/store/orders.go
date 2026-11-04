@@ -124,9 +124,7 @@ func (s *Store) OrderOptions(ctx context.Context, base string) (OrderOptionsResu
 }
 
 func orderOptionFilter(base, field string) bson.M {
-	filter := bson.M{
-		field: bson.M{"$exists": true, "$nin": bson.A{"", nil}},
-	}
+	filter := bson.M{field: bson.M{"$exists": true, "$nin": bson.A{"", nil}}}
 	if base != "" {
 		filter["data.LGORT"] = base
 	}

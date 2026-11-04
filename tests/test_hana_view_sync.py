@@ -157,6 +157,11 @@ class FakeDatabase:
         self.collections = {}
 
     def __getitem__(self, name):
+        if name == "sales_orders_sap":
+            class SalesCollection(FakeCollection):
+                def find(self, *_args, **_kwargs):
+                    return iter([{"data": {"AUFNR": "3", "VBELN": "x"}}])
+            return self.collections.setdefault(name, SalesCollection())
         return self.collections.setdefault(name, FakeCollection())
 
 
@@ -243,3 +248,13 @@ def test_full_sync_defers_old_row_deletion_until_cleanup_commits(monkeypatch):
     result = sync.sync_view(spec, mode="full", start_date=None, batch_size=10, lookback_days=7, dry_run=False, defer_finalize=True)
     assert result["success"] is True and result["finalized"] is False
     assert FakeMongoClient.instance.database[spec.collection].delete_queries == []
+
+
+def test_bom_incremental_uses_legacy_checkpoint_and_lookback():
+    spec = sync.VIEW_SPECS['ZSGV_ZSD124']
+    assert sync.view_checkpoint_id(spec) == 'hana_views:ZSGV_ZSD124'
+    other_spec = sync.VIEW_SPECS['ZSGV_ZPP_SERNOLIST']
+    assert sync.view_checkpoint_id(other_spec) == 'hana_views:ZSGV_ZPP_SERNOLIST'
+    sql, params = sync.build_query(spec, {'watermark': '20261026'}, 'incremental', None, 7, '20261028')
+    assert '"BUDAT_MKPF" >= ?' in sql
+    assert params == ['20261019', '20261028']

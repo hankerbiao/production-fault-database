@@ -130,7 +130,14 @@ func (s *Store) ViewDetail(ctx context.Context, viewID, id string) (ViewDetailRe
 		return ViewDetailResult{}, fmt.Errorf("unknown view: %s", viewID)
 	}
 	var doc bson.M
-	err := s.views[viewID].FindOne(ctx, bson.M{"$or": bson.A{bson.M{"_source_key": id}, bson.M{"_id": id}}}).Decode(&doc)
+	filter := bson.M{
+		"_prodh_scope": "00100",
+		"$or":          bson.A{bson.M{"_source_key": id}, bson.M{"_id": id}},
+	}
+	if viewID != "SCS_DOA" && viewID != "SCS_CHANGE" {
+		filter["_scope_rule_version"] = 2
+	}
+	err := s.views[viewID].FindOne(ctx, filter).Decode(&doc)
 	if err != nil {
 		return ViewDetailResult{}, err
 	}

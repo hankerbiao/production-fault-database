@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, datetime, timezone
 from contextlib import contextmanager
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -235,6 +235,8 @@ def test_table_preview_has_zero_db_writes_and_cleans_new_snapshot(monkeypatch):
     from scripts import table_pipeline as pipeline
     target = Mock()
     target.find_one.return_value = {"watermark": "20261014"}
+    target.find.return_value = []
+    target.count_documents.return_value = 0
     db = Mock()
     db.__getitem__ = Mock(return_value=target)
     client = Mock()
@@ -244,18 +246,18 @@ def test_table_preview_has_zero_db_writes_and_cleans_new_snapshot(monkeypatch):
     monkeypatch.setattr(pipeline, "load_dotenv", lambda: None)
     def forbidden(*_args, **_kwargs):
         raise AssertionError("preview attempted lock mutation")
-    monkeypatch.setattr(pipeline, "resource_lock", forbidden)
+    monkeypatch.setattr(pipeline, "resource_locks", forbidden)
     monkeypatch.setattr(pipeline, "process_lock", forbidden)
     def staged(_spec, **kwargs):
         assert kwargs["dry_run"]
         kwargs["preview_snapshot"].add("new", {"_id": "new", "_source_view": "ZSGV_ZSD124",
-                                               "BUDAT_MKPF": "20261014", "CPX": "other"})
+                                               "_prodh_scope": "00100", "BUDAT_MKPF": "20261014", "CPX": "other"})
         return {"success": True, "run_id": "preview"}
     monkeypatch.setattr(pipeline, "sync_view", staged)
     args = SimpleNamespace(mode="incremental", start_date=None, end_date=date(2026, 10, 14),
                            batch_size=2, lookback_days=7, apply=False, limit=None, no_progress=True)
     result = pipeline.run_hana_table("ZSGV_ZSD124", "bom", args)
-    assert result["success"] and result["cleanup"]["delete_candidates"] == 1
+    assert result["success"] and result["cleanup"]["delete_candidates"] == 0
     target.insert_one.assert_not_called()
     target.update_one.assert_not_called()
     target.bulk_write.assert_not_called()
@@ -265,23 +267,23 @@ def test_scs_change_failed_page_does_not_write_or_finish_checkpoint(monkeypatch)
     from contextlib import nullcontext
     from scripts.sources import scs_change_sync as change
     target, checkpoints = Mock(), Mock()
-    checkpoints.find_one.return_value = {"watermark": "2026-09-01"}
+    checkpoints.find_one.return_value = None
     db = {"scs_change_records": target, "sync_checkpoints": checkpoints}
     client = Mock()
     client.__getitem__ = Mock(return_value=db)
     monkeypatch.setattr(change, "MongoClient", lambda *_args, **_kwargs: client)
     monkeypatch.setattr(change, "mongo_uri", lambda: "mongodb://test")
     monkeypatch.setattr(change, "load_dotenv", lambda *_args: None)
-    monkeypatch.setattr(change, "resource_lock", lambda *_args: nullcontext())
+    monkeypatch.setattr(change, "resource_locks", lambda *_args: nullcontext())
     monkeypatch.setattr(change, "login", lambda *_args: None)
     monkeypatch.setattr(change.httpx, "Client", lambda **_kwargs: nullcontext(object()))
     def fetch(_client, page, *_args):
         if page == 2:
             raise change.httpx.ReadTimeout("page timeout")
-        return [{"so_code": "SO-1", "create_time": "2026-09-01"}]
+        return [{"so_code": "SO-1", "create_time": datetime.now(timezone.utc).strftime("%Y-%m-%d")}]
     monkeypatch.setattr(change, "fetch_change_page", fetch)
     with pytest.raises(change.httpx.ReadTimeout):
-        change.sync(SimpleNamespace(full=True, start_date="2026-01-01", page_size=1,
+        change.sync(SimpleNamespace(full=False, start_date=None, page_size=1,
                                     lookback_days=2, dry_run=False))
     target.bulk_write.assert_not_called()
     target.delete_many.assert_not_called()
@@ -289,7 +291,7 @@ def test_scs_change_failed_page_does_not_write_or_finish_checkpoint(monkeypatch)
 
 
 def test_tasks_manifest_is_unique_valid_and_complete():
-    assert len(syncctl.TASKS) == len(syncctl.TASK_BY_ID) == 8
+    assert len(syncctl.TASKS) == len(syncctl.TASK_BY_ID) == 9
     for task in syncctl.TASKS:
         assert (syncctl.ROOT / task.script).is_file()
         assert all(syncctl.TASK_BY_ID[name].priority < task.priority for name in task.dependencies)
@@ -332,14 +334,14 @@ def test_monthly_hana_commit_preserves_newer_checkpoint_and_scopes_cleanup(monke
     monkeypatch.setattr(hana, "MongoClient", lambda *_args, **_kwargs: client)
     monkeypatch.setattr(hana, "mongo_uri", lambda: "mongodb://test")
     cleanup = Mock(return_value=1)
-    monkeypatch.setattr(hana, "cleanup_records", cleanup)
+    monkeypatch.setattr(runtime, "cleanup_records", cleanup)
     from dataclasses import replace
     spec = replace(hana.VIEW_SPECS["ZSGV_ZSD124"], collection="orders")
     hana.finalize_view_run(spec, {
         "success": True, "snapshot_complete": True, "run_id": "monthly", "mode": "full",
         "watermark": "20260930", "unique_rows": 4, "range": {"start": "20260901", "end": "20260930"},
     })
-    assert cleanup.call_args.args[2]["BUDAT_MKPF"] == {"$gte": "20260901", "$lte": "20260930"}
+    cleanup.assert_not_called()
     assert checkpoints.update_one.call_args.args[1]["$set"]["watermark"] == "20261014"
 
 
@@ -380,17 +382,17 @@ def test_bom_backfill_bounds_all_branches_and_skips_unchanged(orders):
     from scripts.maintenance import backfill_order_bom_planned_start as bom
     source = Mock()
     source.count_documents.return_value = 1
-    source.find.return_value = [{"data": {"AUFNR": "1", "GSTRS": "20260901"}}]
+    source.find.return_value = [{"_prodh_scope": "00100", "data": {"AUFNR": "1", "GSTRS": "20260901"}}]
     target = Mock()
     target.count_documents.return_value = 11
     target.find.return_value = [
-        {"_id": str(i), "GSTRS": "20260901", "AUFNR_1": "unknown" if orders else ""}
+        {"_id": str(i), "_prodh_scope": "00100", "GSTRS": "20260901", "AUFNR_1": "unknown" if orders else ""}
         for i in range(10)
     ] + [{"_id": "unchanged", "AUFNR_1": "1", "GSTRS": "2026-09-01", "GSTRS_DATE": "2026-09-01"}]
     sizes = []
     def write(operations, **_kwargs):
         sizes.append(len(operations))
-        return SimpleNamespace(matched_count=len(operations), modified_count=len(operations))
+        return SimpleNamespace(matched_count=len(operations), modified_count=len(operations), upserted_count=0)
     target.bulk_write.side_effect = write
     result = bom.backfill({"bom": target, "sales": source}, bom_collection_name="bom",
                           sales_collection_name="sales", batch_size=3, preview_limit=0, apply=True)

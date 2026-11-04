@@ -28,7 +28,7 @@ class Collection:
 
     def find(self, query=None, projection=None):
         query = query or {}
-        if projection and "data.AUFNR" in projection:
+        if projection and "data" in projection:
             return Cursor(self.docs)
         rows = []
         for doc in self.docs:
@@ -62,33 +62,30 @@ class DB:
         return self.collections[key]
 
 
-def test_bom_keeps_only_5000_company_cpx_values():
+def test_bom_does_not_delete_by_cpx():
     view = cleaner.SPECS["bom"].source_view
     bom = Collection([
-        {"_id": "keep", "_source_view": view, "CPX": "5000公司", "AUFNR_1": "100", "VBELN_EX": "SO-1"},
-        {"_id": "keep-trimmed", "_source_view": view, "CPX": " 5000公司 ", "AUFNR_1": "200", "VBELN_EX": "SO-2"},
-        {"_id": "other-company", "_source_view": view, "CPX": "8301公司"},
-        {"_id": "empty", "_source_view": view, "CPX": ""},
+        {"_id": "keep", "_source_view": view, "_prodh_scope": "00100", "CPX": "5000公司", "AUFNR_1": "100", "VBELN_EX": "SO-1"},
+        {"_id": "keep-trimmed", "_source_view": view, "_prodh_scope": "00100", "CPX": " 5000公司 ", "AUFNR_1": "200", "VBELN_EX": "SO-2"},
+        {"_id": "other-company", "_source_view": view, "_prodh_scope": "00100", "CPX": "8301公司"},
+        {"_id": "empty", "_source_view": view, "_prodh_scope": "00100", "CPX": ""},
     ])
     result = cleaner.process_board(
         DB(bom, Collection([]), Collection([])), cleaner.SPECS["bom"], "bom", "orders",
         apply=True, batch_size=10, limit=None, from_date=None, to_date=None, progress=False,
     )
-    assert result["cpx_5000_company"] == 2
-    assert result["empty_cpx"] == 1
-    assert result["non_5000_cpx"] == 2
-    assert result["delete_candidates"] == 2 and result["deleted"] == 2
+    assert result["delete_candidates"] == 0 and result["deleted"] == 0
     assert bom.bulk_calls == 0
-    assert {d["_id"] for d in bom.docs} == {"keep", "keep-trimmed"}
+    assert {d["_id"] for d in bom.docs} == {"keep", "keep-trimmed", "other-company", "empty"}
 
 
 def test_station_preview_does_not_write_and_keeps_unresolvable_rows():
     view = cleaner.SPECS["station"].source_view
     station = Collection([
-        {"_id": "known", "_source_view": view, "AUFNR": "1", "KDAUF": ""},
-        {"_id": "empty", "_source_view": view, "AUFNR": "", "KDAUF": ""},
+        {"_id": "known", "_source_view": view, "_prodh_scope": "00100", "AUFNR": "1", "KDAUF": ""},
+        {"_id": "empty", "_source_view": view, "_prodh_scope": "00100", "AUFNR": "", "KDAUF": ""},
     ])
-    orders = Collection([{"data": {"AUFNR": "1", "VBELN": "SO-1"}}])
+    orders = Collection([{"_prodh_scope": "00100", "data": {"AUFNR": "1", "VBELN": "SO-1"}}])
     result = cleaner.process_board(DB(Collection([]), station, orders), cleaner.SPECS["station"], "station", "orders", apply=False, batch_size=10, limit=None, from_date=None, to_date=None, progress=False)
     assert result["filled_sales_order"] == 1
     assert result["updated"] == 0 and result["deleted"] == 0
@@ -97,8 +94,8 @@ def test_station_preview_does_not_write_and_keeps_unresolvable_rows():
 
 def test_station_unknown_production_with_empty_sales_is_retained_as_unresolved():
     view = cleaner.SPECS["station"].source_view
-    station = Collection([{"_id": "unknown", "_source_view": view, "AUFNR": "999", "KDAUF": ""}])
-    orders = Collection([{"data": {"AUFNR": "1", "VBELN": "SO-1"}}])
+    station = Collection([{"_id": "unknown", "_source_view": view, "_prodh_scope": "00100", "AUFNR": "999", "KDAUF": ""}])
+    orders = Collection([{"_prodh_scope": "00100", "data": {"AUFNR": "1", "VBELN": "SO-1"}}])
     result = cleaner.process_board(
         DB(Collection([]), station, orders),
         cleaner.SPECS["station"],
@@ -119,10 +116,10 @@ def test_station_unknown_production_with_empty_sales_is_retained_as_unresolved()
 
 def test_station_does_not_fill_ambiguous_production_mapping():
     view = cleaner.SPECS["station"].source_view
-    station = Collection([{"_id": "ambiguous", "_source_view": view, "AUFNR": "1", "KDAUF": ""}])
+    station = Collection([{"_id": "ambiguous", "_source_view": view, "_prodh_scope": "00100", "AUFNR": "1", "KDAUF": ""}])
     orders = Collection([
-        {"data": {"AUFNR": "1", "VBELN": "SO-1"}},
-        {"data": {"AUFNR": "1", "VBELN": "SO-2"}},
+        {"_prodh_scope": "00100", "data": {"AUFNR": "1", "VBELN": "SO-1"}},
+        {"_prodh_scope": "00100", "data": {"AUFNR": "1", "VBELN": "SO-2"}},
     ])
     result = cleaner.process_board(
         DB(Collection([]), station, orders), cleaner.SPECS["station"], "station", "orders",
@@ -134,30 +131,48 @@ def test_station_does_not_fill_ambiguous_production_mapping():
     assert station.docs[0]["KDAUF"] == ""
 
 
-def test_station_deletes_nonempty_sales_order_missing_from_board():
+def test_station_retains_nonempty_sales_order_missing_from_board():
     view = cleaner.SPECS["station"].source_view
     station = Collection([
-        {"_id": "known", "_source_view": view, "AUFNR": "1", "KDAUF": "SO-1"},
-        {"_id": "orphan", "_source_view": view, "AUFNR": "9", "KDAUF": "SO-X"},
-        {"_id": "empty", "_source_view": view, "AUFNR": "", "KDAUF": ""},
+        {"_id": "known", "_source_view": view, "_prodh_scope": "00100", "AUFNR": "1", "KDAUF": "SO-1"},
+        {"_id": "orphan", "_source_view": view, "_prodh_scope": "00100", "AUFNR": "9", "KDAUF": "SO-X"},
+        {"_id": "empty", "_source_view": view, "_prodh_scope": "00100", "AUFNR": "", "KDAUF": ""},
     ])
-    orders = Collection([{"data": {"AUFNR": "1", "VBELN": "SO-1"}}])
+    orders = Collection([{"_prodh_scope": "00100", "data": {"AUFNR": "1", "VBELN": "SO-1"}}])
     result = cleaner.process_board(
         DB(Collection([]), station, orders), cleaner.SPECS["station"], "station", "orders",
         apply=True, batch_size=10, limit=None,
         from_date=date(2026, 1, 1), to_date=date(2026, 1, 1), progress=False,
     )
-    assert result["delete_candidates"] == 1 and result["deleted"] == 1
-    assert {row["_id"] for row in station.docs} == {"known", "empty"}
+    assert result["delete_candidates"] == result["deleted"] == 0
+    assert result["unresolved_rows"] == 1
+    assert {row["_id"] for row in station.docs} == {"known", "empty", "orphan"}
 
 
 def test_station_apply_without_date_range_uses_full_dataset():
     view = cleaner.SPECS["station"].source_view
-    station = Collection([{"_id": "known", "_source_view": view, "AUFNR": "1", "KDAUF": "SO-1"}])
-    orders = Collection([{"data": {"AUFNR": "1", "VBELN": "SO-1"}}])
+    station = Collection([{"_id": "known", "_source_view": view, "_prodh_scope": "00100", "AUFNR": "1", "KDAUF": "SO-1"}])
+    orders = Collection([{"_prodh_scope": "00100", "data": {"AUFNR": "1", "VBELN": "SO-1"}}])
     result = cleaner.process_board(
         DB(Collection([]), station, orders), cleaner.SPECS["station"], "station", "orders",
         apply=True, batch_size=10, limit=None, from_date=None, to_date=None, progress=False,
     )
     assert result["success"] is True
     assert result["scanned"] == 1
+
+
+def test_bom_cleanup_has_no_product_scope_filter():
+    class UnscopedCollection(Collection):
+        def count_documents(self, query):
+            assert '_prodh_scope' not in query
+            return super().count_documents(query)
+        def find(self, query=None, projection=None):
+            assert '_prodh_scope' not in (query or {})
+            return super().find(query, projection)
+        def delete_many(self, query):
+            assert all('_prodh_scope' not in item for item in query['$or'])
+            return super().delete_many(query)
+    view = cleaner.SPECS['bom'].source_view
+    bom = UnscopedCollection([{'_id': 'other', '_source_view': view, 'CPX': '8301公司'}])
+    result = cleaner.process_board(DB(bom, Collection([]), Collection([])), cleaner.SPECS['bom'], 'bom', 'orders', apply=True, batch_size=10, limit=None, from_date=None, to_date=None, progress=False)
+    assert result['deleted'] == 0

@@ -5,9 +5,15 @@ from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
+import re
 
 from scripts.sources.hana.hana_view_sync import process_lock
 from scripts.sync import sync_sales_orders as sync
+
+
+@pytest.fixture(autouse=True)
+def verified_sap_filter(monkeypatch):
+    monkeypatch.setenv("SAP_PRODH_FILTER_VERIFIED", "true")
 
 
 def test_parse_date_and_prodh():
@@ -20,7 +26,8 @@ def test_parse_date_and_prodh():
 def test_payload_and_windows():
     start, end = date(2026, 1, 1), date(2026, 1, 10)
     assert sync.payload(start, end, ["00100"]) == {"CHDAT": "2026-01-01", "CHDAT_TO": "2026-01-10", "PRODH_LIST": ["00100"]}
-    assert "PRODH_LIST" not in sync.payload(start, end, None)
+    with pytest.raises(ValueError, match="00100"):
+        sync.payload(start, end, None)
     assert sync.date_windows(start, end, 7) == [(date(2026, 1, 1), date(2026, 1, 7)), (date(2026, 1, 8), end)]
 
 
@@ -38,7 +45,8 @@ def test_dotenv_uri_and_configuration(monkeypatch, tmp_path):
     uri = sync.mongo_uri()
     assert "user%40x:p%2Fa@db1:27017,db2:27017" in uri and "authSource=admin" in uri
     args = SimpleNamespace(all_prodh=True, prodh_list=None)
-    assert sync.configured_prodh(args) is None
+    with pytest.raises(ValueError, match="00100"):
+        sync.configured_prodh(args)
     args = SimpleNamespace(all_prodh=False, prodh_list=["00100"])
     assert sync.configured_prodh(args) == ["00100"]
 
@@ -74,13 +82,6 @@ def test_validate_records():
             sync.validate_records(body, "SG")
 
 
-def test_covers_sales_full_scope():
-    today = date(2026, 9, 20)
-    assert sync.covers_sales_full_scope(date(2026, 1, 1), today, today=today)
-    assert not sync.covers_sales_full_scope(date(2026, 9, 1), today, today=today)
-    assert not sync.covers_sales_full_scope(date(2026, 1, 1), date(2026, 1, 31), today=today)
-
-
 def test_aggregate_preserves_order_lines():
     rows = [
         {"AUFNR": "100", "GAMNG": "1,000", "WMENG": "2", "VBELN": "SO1"},
@@ -104,10 +105,27 @@ def test_repair_query_uses_repair_date_range():
 
 
 def test_repair_sync_start_date_is_hard_limited():
-    assert sync.REPAIR_START_DATE == date(2026, 1, 1)
+    assert sync.REPAIR_START_DATE == date(2025, 1, 1)
     sql, params = sync.repair_query(sync.REPAIR_START_DATE, date(2026, 1, 31))
     assert '"ZDATE_WX" >= ?' in sql
-    assert params[0] == "20260101"
+    assert params[0] == "20250101"
+
+
+def test_repair_query_supports_calendar_year_2025():
+    sql, params = sync.repair_query(date(2025, 1, 1), date(2025, 12, 31))
+    assert '"ZDATE_WX" >= ?' in sql and '"ZDATE_WX" <= ?' in sql
+    assert params == ["20250101", "20251231"]
+
+
+class FakeCursor(list):
+    def limit(self, count):
+        return FakeCursor(self[:count])
+
+    def sort(self, field, direction=1):
+        return FakeCursor(sorted(self, key=lambda row: str(row.get(field) or ""), reverse=direction < 0))
+
+    def close(self):
+        pass
 
 
 class FakeCollection:
@@ -120,18 +138,34 @@ class FakeCollection:
         self.indexes.append((args, kwargs))
 
     def find_one(self, query, *_args, **_kwargs):
-        key = query.get("_id")
-        return next((doc for doc in self.docs if doc.get("_id") == key), None)
+        return next((dict(doc) for doc in self.docs if self._match(doc, query)), None)
 
     def update_one(self, query, update, upsert=False):
         key = query.get("_id")
-        doc = next((item for item in self.docs if item.get("_id") == key), None)
+        doc = next((item for item in self.docs if self._match(item, query)), None)
+        inserted = doc is None
         if doc is None and upsert:
-            doc = {"_id": key}
+            doc = dict(query)
+            doc.update(update.get("$setOnInsert", {}))
             self.docs.append(doc)
         if doc is not None:
             doc.update(update.get("$set", {}))
-        return SimpleNamespace(modified_count=1 if doc else 0, upserted_id=key if doc and len(doc) == 1 else None)
+            for field in update.get("$unset", {}):
+                doc.pop(field, None)
+            for field, value in update.get("$inc", {}).items():
+                doc[field] = doc.get(field, 0) + value
+        return SimpleNamespace(matched_count=int(doc is not None and not inserted),
+                               modified_count=int(doc is not None), upserted_id=key if inserted and doc else None)
+
+    def update_many(self, query, update):
+        matched = 0
+        for doc in self.docs:
+            if self._match(doc, query):
+                matched += 1
+                doc.update(update.get("$set", {}))
+                for field in update.get("$unset", {}):
+                    doc.pop(field, None)
+        return SimpleNamespace(matched_count=matched, modified_count=matched)
 
     def insert_one(self, doc):
         self.docs.append(dict(doc))
@@ -142,7 +176,7 @@ class FakeCollection:
         return SimpleNamespace(deleted_count=before - len(self.docs))
 
     def find(self, query=None, *_args, **_kwargs):
-        return [dict(doc) for doc in self.docs if self._match(doc, query or {})]
+        return FakeCursor(dict(doc) for doc in self.docs if self._match(doc, query or {}))
 
     def distinct(self, field):
         values = []
@@ -156,15 +190,37 @@ class FakeCollection:
 
     def _match(self, doc, query):
         for key, expected in query.items():
-            actual = doc.get(key)
+            if key in {"$and", "$or"}:
+                matches = [self._match(doc, part) for part in expected]
+                if not (all(matches) if key == "$and" else any(matches)):
+                    return False
+                continue
+            actual = doc
+            for part in key.split("."):
+                actual = actual.get(part) if isinstance(actual, dict) else None
             if isinstance(expected, dict):
-                if "$in" in expected and actual not in expected["$in"]:
+                if isinstance(actual, datetime):
+                    actual = actual.replace(tzinfo=timezone.utc) if actual.tzinfo is None else actual
+                    expected = {
+                        operator: value.replace(tzinfo=timezone.utc) if isinstance(value, datetime) and value.tzinfo is None else value
+                        for operator, value in expected.items()
+                    }
+                if "$in" in expected and not (
+                    any(value in expected["$in"] for value in actual) if isinstance(actual, list)
+                    else actual in expected["$in"]
+                ):
+                    return False
+                if "$exists" in expected and (actual is not None) != expected["$exists"]:
+                    return False
+                if "$regex" in expected and (not isinstance(actual, str) or not re.search(expected["$regex"], actual)):
                     return False
                 if "$ne" in expected and actual == expected["$ne"]:
                     return False
                 if "$gte" in expected and (actual is None or actual < expected["$gte"]):
                     return False
                 if "$lte" in expected and (actual is None or actual > expected["$lte"]):
+                    return False
+                if "$lt" in expected and (actual is None or actual >= expected["$lt"]):
                     return False
             elif actual != expected:
                 return False
@@ -174,18 +230,24 @@ class FakeCollection:
         return sum(1 for doc in self.docs if self._match(doc, query))
 
     def bulk_write(self, operations, ordered=False):
+        inserted = matched = 0
         for operation in operations:
             update = operation._doc
             key_field, key = next(iter(operation._filter.items()))
-            found = next((doc for doc in self.docs if doc.get(key_field) == key), None)
+            found = next((doc for doc in self.docs if self._match(doc, operation._filter)), None)
             if found is None:
+                if not operation._upsert:
+                    continue
+                inserted += 1
                 found = {key_field: key}
                 self.docs.append(found)
                 found.update(update.get("$setOnInsert", {}))
+            else:
+                matched += 1
             found.update(update.get("$set", {}))
             for field, value in update.get("$inc", {}).items():
                 found[field] = found.get(field, 0) + value
-        return SimpleNamespace(upserted_count=0, modified_count=len(operations))
+        return SimpleNamespace(upserted_count=inserted, matched_count=matched, modified_count=matched)
 
 
 class FakeDB:
@@ -264,7 +326,7 @@ def test_sync_sales_failed_full_run_preserves_all_checkpoints(monkeypatch):
         "http://kk": [FakeResponse({}, "KK unavailable")],
     })
     monkeypatch.setattr(sync.httpx, "Client", lambda **_kwargs: http)
-    args = SimpleNamespace(full=True, start_date=date(2026, 1, 1), end_date=date(2026, 1, 2), lookback_days=0, dry_run=False, all_prodh=True, prodh_list=None)
+    args = SimpleNamespace(full=True, start_date=date(2026, 1, 1), end_date=date(2026, 1, 2), lookback_days=0, dry_run=False, all_prodh=False, prodh_list=None)
     result = sync.sync_sales(args)
     assert result["success"] is False and result["sources"]["SG"]["success"] is True
     assert result["sources"]["KK"]["success"] is False
@@ -287,7 +349,7 @@ def test_sync_sales_dry_run_does_not_write(monkeypatch):
     result = sync.sync_sales(args)
     assert result["success"] is True
     db = FakeMongoClient.instances[0].db
-    assert db.collections == {}
+    assert all(not collection.docs and not collection.indexes for collection in db.collections.values())
 
 
 @pytest.mark.parametrize("status_success", [True, False, RuntimeError("connection timed out")])
@@ -328,7 +390,7 @@ def test_incremental_rechecks_history_before_committing_watermark(monkeypatch, s
     monkeypatch.setattr(sync, "refresh_order_statuses", refresh)
     args = SimpleNamespace(
         full=False, start_date=None, end_date=date(2026, 1, 2),
-        lookback_days=0, dry_run=False, all_prodh=True, prodh_list=None,
+        lookback_days=0, dry_run=False, all_prodh=False, prodh_list=None,
     )
     result = sync.sync_sales(args)
     assert result["success"] is (status_success is True)
@@ -341,7 +403,7 @@ def test_incremental_rechecks_history_before_committing_watermark(monkeypatch, s
         )
 
 
-def test_sync_sales_full_cleans_old_source_documents_after_success(monkeypatch):
+def test_sync_sales_full_keeps_absent_documents_without_coverage_evidence(monkeypatch):
     FakeMongoClient.instances.clear()
     monkeypatch.setenv("MONGODB_DATABASE", "test")
     monkeypatch.setenv("TARGET_COLLECTION", "orders")
@@ -363,9 +425,9 @@ def test_sync_sales_full_cleans_old_source_documents_after_success(monkeypatch):
     monkeypatch.setattr(sync, "MongoClient", seeded_client)
     monkeypatch.setattr(sync, "current_date", lambda: date(2026, 1, 1))
     result = sync.sync_sales(args)
-    assert result["success"] is True and result["deleted_out_of_scope"] == 1
-    assert result["cleanup"] == "replaced"
-    assert {doc["_id"] for doc in FakeMongoClient.instances[-1].db["orders"].docs} == {"SG:new-sg", "KK:new-kk"}
+    assert result["success"] is True and result["deleted_out_of_scope"] == 0
+    assert result["cleanup"] == "disabled_unverified_coverage"
+    assert {doc["_id"] for doc in FakeMongoClient.instances[-1].db["orders"].docs} == {"SG:stale", "SG:new-sg", "KK:new-kk"}
 
 
 def _seeded_sales_client(stale=None):
@@ -396,7 +458,7 @@ def test_sync_sales_full_partial_range_does_not_delete(monkeypatch):
     args = SimpleNamespace(full=True, start_date=date(2026, 9, 1), end_date=date(2026, 9, 16), lookback_days=0, dry_run=False, all_prodh=False, prodh_list=None)
     result = sync.sync_sales(args)
     assert result["success"] is True
-    assert result["cleanup"] == "skipped_partial_range"
+    assert result["cleanup"] == "disabled_unverified_coverage"
     assert result["deleted_out_of_scope"] == 0
     assert result["would_delete_out_of_scope"] == 1
     assert {doc["_id"] for doc in FakeMongoClient.instances[-1].db["orders"].docs} == {"SG:stale", "SG:new-sg", "KK:new-kk"}
@@ -419,8 +481,8 @@ def test_sync_sales_full_empty_fetch_aborts_cleanup(monkeypatch):
     args = SimpleNamespace(full=True, start_date=date(2026, 1, 1), end_date=date(2026, 1, 1), lookback_days=0, dry_run=False, all_prodh=False, prodh_list=None)
     result = sync.sync_sales(args)
     assert result["success"] is False
-    assert result["cleanup"] == "aborted"
-    assert result["deleted_out_of_scope"] == 0
+    assert result["sources"]["SG"]["success"] is False
+    assert "空来源" in result["sources"]["SG"]["error"]
     assert FakeMongoClient.instances[-1].db["orders"].docs[0]["_id"] == "SG:stale"
 
 
@@ -431,7 +493,7 @@ def test_sync_sales_replace_collection_requires_confirm(monkeypatch):
         sync.sync_sales(args)
 
 
-def test_sync_sales_replace_collection_deletes_after_confirm(monkeypatch):
+def test_sync_sales_replace_collection_cannot_override_missing_coverage(monkeypatch):
     FakeMongoClient.instances.clear()
     monkeypatch.setenv("MONGODB_DATABASE", "test")
     monkeypatch.setenv("TARGET_COLLECTION", "orders")
@@ -447,15 +509,13 @@ def test_sync_sales_replace_collection_deletes_after_confirm(monkeypatch):
     monkeypatch.setattr(sync, "MongoClient", _seeded_sales_client([{"_id": "SG:stale", "source": "SG", "_scope_run_id": "old"}]))
     monkeypatch.setattr(sync, "current_date", lambda: date(2026, 9, 16))
     args = SimpleNamespace(full=True, start_date=date(2026, 9, 1), end_date=date(2026, 9, 16), lookback_days=0, dry_run=False, all_prodh=False, prodh_list=None, replace_collection=True, confirm_delete=True)
-    result = sync.sync_sales(args)
-    assert result["success"] is True and result["cleanup"] == "replaced"
-    assert result["deleted_out_of_scope"] == 1
-    assert {doc["_id"] for doc in FakeMongoClient.instances[-1].db["orders"].docs} == {"SG:new-sg", "KK:new-kk"}
+    with pytest.raises(ValueError, match="覆盖"):
+        sync.sync_sales(args)
 
 
 def test_sync_repair_retains_unmatched_orders_and_leaves_legacy_watermark(monkeypatch):
     db = FakeDB()
-    db["orders"].docs = [{"_id": "SG:1", "data": {"VBELN": "SO-1"}}]
+    db["orders"].docs = [{"_id": "SG:1", "source": "SG", "data": {"VBELN": "SO-1", "PRODH": "00100"}}]
     monkeypatch.setenv("TARGET_COLLECTION", "orders")
 
     values_by_row = []
@@ -491,9 +551,10 @@ def test_sync_repair_retains_unmatched_orders_and_leaves_legacy_watermark(monkey
     result = sync.sync_repair(db, "repairs", mode="incremental", start_date=date(2026, 1, 1),
                              end_date=date(2026, 1, 2), batch_size=1, dry_run=False, run_id="run-1")
     assert result["success"] is True
-    assert result["source_rows"] == 3 and result["matched_sales_orders"] == 1 and result["empty_sales_orders_retained"] == 1
-    assert result["unmatched_sales_orders_retained"] == 1
-    assert len(db["repairs"].docs) == 3
+    assert result["source_rows"] == 3 and result["matched_sales_orders"] == 1
+    assert result["scope_pending"] == 2
+    assert len(db["repairs"].docs) == 1
+    assert len(db["sync_scope_pending"].docs) == 2
     assert db["checkpoints"].docs == []
 
 
@@ -513,8 +574,9 @@ def test_monthly_repair_cleanup_is_limited_to_the_selected_month_and_keeps_water
         "run-1",
     )
 
-    assert result == {"deleted_out_of_scope": 1}
-    assert {doc["_id"] for doc in db["repairs"].docs} == {"sep-current", "oct-stale", "other-view"}
+    assert result["deleted_out_of_scope"] == 0
+    assert result["invalid_key_rows"] == 2
+    assert {doc["_id"] for doc in db["repairs"].docs} == {"sep-stale", "sep-current", "oct-stale", "other-view"}
     assert db["checkpoints"].find_one({"_id": "repair_records"})["watermark"]["ZDATE"] == "20261012"
     assert "repairs_archive" not in db.collections
 

@@ -51,7 +51,7 @@ func exportOrderKeys(keys []string) []string {
 }
 
 func bomExportFilter(keys []string) bson.M {
-	return bson.M{"AUFNR_1": bson.M{"$in": exportOrderKeys(keys)}}
+	return companyScopeFilter(bson.M{"AUFNR_1": bson.M{"$in": exportOrderKeys(keys)}})
 }
 
 // ExportRows reads source fields in a single bounded cursor, without counting
@@ -73,11 +73,11 @@ func (s *Store) ExportRows(ctx context.Context, resource string, keys []string) 
 		projection = exportProjection([]string{"source", "aufnr", "data"})
 	case "faults":
 		collection = s.repairs
-		filter = bson.M{"AUFNR": bson.M{"$in": exportOrderKeys(keys)}}
+		filter = companyScopeFilter(bson.M{"AUFNR": bson.M{"$in": exportOrderKeys(keys)}})
 		projection = exportProjection(exportFaultFields)
 	case "bindings":
 		collection = s.views["ZSGV_ZPP_SERNOLIST"]
-		filter = bson.M{"AUFNR_HEAD": bson.M{"$in": exportOrderKeys(keys)}}
+		filter = companyScopeFilter(bson.M{"AUFNR_HEAD": bson.M{"$in": exportOrderKeys(keys)}})
 		projection = exportProjection([]string{"AUFNR_HEAD", "AUFNR_ITEM", "ZCODE_HEAD", "ZCODE_ITEM"})
 	case "bom":
 		collection = s.views["ZSGV_ZSD124"]

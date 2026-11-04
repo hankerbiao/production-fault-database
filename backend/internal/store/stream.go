@@ -145,7 +145,7 @@ func (s *Store) PackagingCounts(ctx context.Context, input string) ([]PackagingC
 }
 
 func packagingCountPipeline(values []string) mongo.Pipeline {
-	filter := bson.M{"AUFNR": bson.M{"$in": values}}
+	filter := companyScopeFilter(bson.M{"AUFNR": bson.M{"$in": values}})
 	barcode := bson.M{"$trim": bson.M{"input": bson.M{"$convert": bson.M{
 		"input": "$PCODE", "to": "string", "onError": "", "onNull": "",
 	}}}}
@@ -237,7 +237,7 @@ func (s *Store) ViewSCSStream(ctx context.Context, viewID string, f ViewFilters,
 
 func scsStreamFields(viewID string) []string {
 	if viewID == "SCS_DOA" {
-		return []string{"id", "doa_code", "doa_type", "service_uid", "status", "doa_judge", "customer_uid", "sugon_sn", "spare_part_sn", "product_name", "problem_batch_number", "declare_time", "acceptance_time", "sales_order", "is_5000_company", "factory_date", "warranty_end_date", "enrichment_status"}
+		return []string{"id", "doa_code", "doa_type", "service_uid", "status", "doa_judge", "customer_uid", "sugon_sn", "spare_part_sn", "product_name", "problem_batch_number", "declare_time", "acceptance_time", "sales_order", "is_5000_company", "factory_date", "warranty_end_date", "enrichment_status", "GSTRS", "gstrs_status", "production_orders"}
 	}
 	return []string{"id", "so_code", "customer_name", "device_sn", "change_type", "part_number", "part_sn", "part_name", "operator", "need_return", "is_revoked", "create_time", "is_5000_company"}
 }
@@ -336,7 +336,7 @@ func ensureStreamRowLimit(ctx context.Context, collection interface {
 }
 
 func bomStreamCacheKey(f ViewFilters) string {
-	return strings.Join([]string{f.Keyword, f.From, f.To, f.DateFrom, f.DateTo, f.StationCode, f.SN, f.ProductionOrder, f.SalesOrder, f.Base, f.ProductModel, f.HeadOrder, f.ItemOrder, f.HeadSN, f.ItemSN, f.MaterialCode, strconv.FormatBool(f.MissingSalesOrder)}, "\x00")
+	return strings.Join([]string{f.Keyword, f.From, f.To, f.DateFrom, f.DateTo, f.StationCode, f.SN, f.ProductionOrder, f.SalesOrder, f.Base, f.ProductModel, f.HeadOrder, f.ItemOrder, f.HeadSN, f.ItemSN, f.MaterialCode, f.CPX, strconv.FormatBool(f.MissingSalesOrder)}, "\x00")
 }
 
 func stationStreamCacheKey(f ViewFilters) string {
@@ -360,6 +360,7 @@ func hasBOMFilter(f ViewFilters) bool {
 		strings.TrimSpace(f.HeadSN) != "" ||
 		strings.TrimSpace(f.ItemSN) != "" ||
 		strings.TrimSpace(f.MaterialCode) != "" ||
+		strings.TrimSpace(f.CPX) != "" ||
 		f.MissingSalesOrder
 }
 

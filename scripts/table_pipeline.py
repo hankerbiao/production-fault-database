@@ -22,7 +22,7 @@ from scripts.sources.hana.hana_view_sync import (
     process_lock,
     sync_view,
 )
-from scripts.sync_runtime import Snapshot, cleanup_records, check_leases, resource_lock
+from scripts.sync_runtime import Snapshot, cleanup_records, check_leases, resource_locks
 
 
 SERIAL_KEY_FIELDS = ("ZCODE_HEAD", "ZCODE_ITEM", "AUFNR_HEAD", "AUFNR_ITEM", "PRODH")
@@ -62,7 +62,7 @@ def validate_args(args: argparse.Namespace) -> None:
 
 
 def serial_cleanup(db: Any, spec: Any, *, apply: bool, run_id: str, batch_size: int) -> dict[str, Any]:
-    query: dict[str, Any] = {"_source_view": spec.view_id}
+    query: dict[str, Any] = {"_source_view": spec.view_id, "_prodh_scope": "00100"}
     collection = db[spec.collection]
     incomplete = scanned = duplicate_count = deleted = 0
     duplicate_ids = []
@@ -136,7 +136,7 @@ def run_hana_table(spec_id: str, cleanup_kind: str, args: argparse.Namespace) ->
     try:
         db = client[env("MONGODB_DATABASE")]
         with process_lock(env("SYNC_LOCK_PATH", "/tmp/line-fault-table-sync.lock")) if args.apply else nullcontext():
-            with resource_lock(db, spec.collection) if args.apply else nullcontext():
+            with resource_locks(db, spec.collection, env("TARGET_COLLECTION", "sales_orders_sap")) if args.apply else nullcontext():
                 sync_result = sync_view(
                     spec,
                     mode=mode,

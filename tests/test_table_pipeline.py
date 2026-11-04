@@ -47,9 +47,9 @@ class DB:
 def test_serial_cleanup_removes_only_complete_exact_duplicates():
     spec = VIEW_SPECS["ZSGV_ZPP_SERNOLIST"]
     collection = Collection([
-        {"_id": "keep", "_source_view": spec.view_id, "_sync_run_id": "run", "ZCODE_HEAD": "A", "ZCODE_ITEM": "B", "AUFNR_HEAD": "1", "AUFNR_ITEM": "2", "PRODH": "3"},
-        {"_id": "delete", "_source_view": spec.view_id, "_sync_run_id": "run", "ZCODE_HEAD": "A", "ZCODE_ITEM": "B", "AUFNR_HEAD": "1", "AUFNR_ITEM": "2", "PRODH": "3"},
-        {"_id": "incomplete", "_source_view": spec.view_id, "_sync_run_id": "run", "ZCODE_HEAD": "", "ZCODE_ITEM": "B", "AUFNR_HEAD": "1", "AUFNR_ITEM": "2", "PRODH": "3"},
+        {"_id": "keep", "_source_view": spec.view_id, "_prodh_scope": "00100", "_sync_run_id": "run", "ZCODE_HEAD": "A", "ZCODE_ITEM": "B", "AUFNR_HEAD": "1", "AUFNR_ITEM": "2", "PRODH": "3"},
+        {"_id": "delete", "_source_view": spec.view_id, "_prodh_scope": "00100", "_sync_run_id": "run", "ZCODE_HEAD": "A", "ZCODE_ITEM": "B", "AUFNR_HEAD": "1", "AUFNR_ITEM": "2", "PRODH": "3"},
+        {"_id": "incomplete", "_source_view": spec.view_id, "_prodh_scope": "00100", "_sync_run_id": "run", "ZCODE_HEAD": "", "ZCODE_ITEM": "B", "AUFNR_HEAD": "1", "AUFNR_ITEM": "2", "PRODH": "3"},
     ])
     result = pipeline.serial_cleanup(DB(collection), spec, apply=True, run_id="run", batch_size=10)
     assert result["duplicate_candidates"] == 1
@@ -67,8 +67,8 @@ def test_full_mode_requires_start_date():
 def test_incremental_serial_cleanup_also_removes_legacy_duplicates():
     spec = VIEW_SPECS["ZSGV_ZPP_SERNOLIST"]
     collection = Collection([
-        {"_id": "old", "_source_view": spec.view_id, "_sync_run_id": "old", "ZCODE_HEAD": "A", "ZCODE_ITEM": "B", "AUFNR_HEAD": "1", "AUFNR_ITEM": "2", "PRODH": "3"},
-        {"_id": "new", "_source_view": spec.view_id, "_sync_run_id": "new", "ZCODE_HEAD": "A", "ZCODE_ITEM": "B", "AUFNR_HEAD": "1", "AUFNR_ITEM": "2", "PRODH": "3"},
+        {"_id": "old", "_source_view": spec.view_id, "_prodh_scope": "00100", "_sync_run_id": "old", "ZCODE_HEAD": "A", "ZCODE_ITEM": "B", "AUFNR_HEAD": "1", "AUFNR_ITEM": "2", "PRODH": "3"},
+        {"_id": "new", "_source_view": spec.view_id, "_prodh_scope": "00100", "_sync_run_id": "new", "ZCODE_HEAD": "A", "ZCODE_ITEM": "B", "AUFNR_HEAD": "1", "AUFNR_ITEM": "2", "PRODH": "3"},
     ])
     result = pipeline.serial_cleanup(DB(collection), spec, apply=True, run_id="new", batch_size=10)
     assert result["scanned"] == 2 and result["deleted"] == 1

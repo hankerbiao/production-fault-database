@@ -21,7 +21,7 @@ from contextlib import nullcontext
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any
-from urllib.parse import unquote
+from urllib.parse import unquote, urlsplit, parse_qs
 
 import httpx
 from pymongo import MongoClient, UpdateOne
@@ -37,7 +37,14 @@ from scripts.sources.hana.hana_view_sync import (
     mongo_uri,
     install_graceful_shutdown,
 )
-from scripts.sync_runtime import Snapshot, cleanup_records, check_leases, print_failure, resource_lock, validate_snapshot_cleanup
+from scripts.sync_runtime import (
+    Snapshot, check_leases, print_failure, resource_locks, source_hash, batches,
+    verified_bulk_write, required_prodh_list, save_scope_pending, checkpoint_id,
+    validate_scope_environment,
+    clear_scope_pending,
+)
+from scripts.sales_order_reference import SalesReferences
+from scripts.scs_classification import enqueue_change, service_order_values
 
 ROOT = PROJECT_ROOT
 BASE_URL = "https://scs.sugon.com/prod"
@@ -51,6 +58,8 @@ LIST_FORM_ID = "a8a80e69292b8364e0192bd28d8220c1c"
 DEFAULT_COLLECTION = "scs_doa_records"
 DEFAULT_CHECKPOINTS = "sync_checkpoints"
 LOGGER = logging.getLogger("scs_doa_sync")
+DETAIL_SCHEMA_VERSION = 3
+SALES_ORDER_LABELS = ("合同/订单号", "合同订单号", "销售订单", "订单号")
 
 LIST_FIELDS = (
     "doa_code doa_type declare_reason service_uid status doa_judge customer_uid "
@@ -81,6 +90,7 @@ def throttled_request(client: Any, method: str, url: str, prefix: str, defaults:
         raise ValueError("SCS_REQUEST_DELAY_MIN/MAX 配置无效")
     time.sleep(random.uniform(minimum, maximum))
     check_leases()
+    client._sync_request_count = getattr(client, "_sync_request_count", 0) + 1
     return client.request(method, url, **kwargs)
 
 
@@ -134,9 +144,8 @@ class ListParser(HTMLParser):
         if self.form_depth and tag == "tr" and self.current:
             if self.headers and len(self.current) >= len(self.headers):
                 row = {key: self.current[i]["value"] for i, key in enumerate(self.headers)}
-                first = self.current[0]
                 row["_context_value"] = self.current_attrs.get("value", "")
-                row["_detail_href"] = first.get("href") or ""
+                row["_detail_href"] = next((cell["href"] for cell in self.current if cell["href"]), "")
                 self.rows.append(row)
             else:
                 self.invalid_rows += 1
@@ -161,6 +170,9 @@ def parse_list(html_text: str) -> list[dict[str, Any]]:
     validate_list(parser)
     if "doa_code" not in parser.headers:
         raise RuntimeError("SCS DOA 结果表缺少 doa_code 列")
+    for row in parser.rows:
+        if "customer_name" in row:
+            row["customer_uid"] = text(row.get("customer_name")) or text(row.get("customer_uid"))
     return parser.rows
 
 
@@ -206,12 +218,16 @@ def parse_labels(html_text: str) -> dict[str, str]:
 
 
 def parse_context_value(href: str) -> str:
-    match = re.search(r"contextValue=([^&'}]+)", href or "")
+    href = html.unescape(href or "")
+    values = parse_qs(urlsplit(href).query).get("contextValue")
+    if values:
+        return values[0]
+    match = re.search(r"[?&]contextValue=([^&'\"}\s)]+)", href)
     return unquote(match.group(1)) if match else ""
 
 
 def parse_pml_context(html_text: str, pml_name: str) -> str:
-    match = re.search(rf"['\"]pml['\"]\s*:\s*['\"]{re.escape(pml_name)}.*?contextValue=([A-Za-z0-9]+)", html_text, re.S)
+    match = re.search(rf"['\"]pml['\"]\s*:\s*['\"]{re.escape(pml_name)}[^}}]*?contextValue=([^&'\"}}\s]+)", html.unescape(html_text), re.S)
     return unquote(match.group(1)) if match else ""
 
 
@@ -237,6 +253,7 @@ def iter_list(client: httpx.Client, start: str = "", end: str = "", page_size: i
     if page_size < 1:
         raise ValueError("page-size 必须大于 0")
     page = 1
+    seen: set[str] = set()
     while True:
         params = {
             "1": "1", "clientstamp": str(int(datetime.now().timestamp() * 1000)),
@@ -251,10 +268,25 @@ def iter_list(client: httpx.Client, start: str = "", end: str = "", page_size: i
         LOGGER.info("SCS DOA 列表进度：第 %d 页，%d 条", page, len(batch))
         if not batch:
             break
+        fingerprint = source_hash(batch)
+        if fingerprint in seen:
+            raise RuntimeError("SCS 返回重复页，拒绝推进检查点")
+        seen.add(fingerprint)
+        if len(batch) > page_size:
+            raise RuntimeError("SCS 页大小超出请求范围")
         yield batch
         if len(batch) < page_size:
             break
         page += 1
+
+
+def validate_detail_fields(fields: Any, *, previous: Any = None, order_required: bool = False) -> None:
+    if not isinstance(fields, dict) or not fields:
+        raise RuntimeError("SCS 详情页面无效或会话过期")
+    if order_required and not any(label in fields for label in SALES_ORDER_LABELS):
+        raise RuntimeError("SCS 详情缺少订单字段")
+    if previous and set(previous) - fields.keys():
+        raise RuntimeError("SCS 详情字段缺失，保留已有详情并等待核对")
 
 
 def fetch_detail(client: httpx.Client, row: dict[str, Any]) -> dict[str, Any]:
@@ -265,18 +297,18 @@ def fetch_detail(client: httpx.Client, row: dict[str, Any]) -> dict[str, Any]:
     detail = request(client, "GET", BASE_URL + DOA_DETAIL_PATH, params={"dataBus": "setContext", "contextKey": "sp_doa", "contextValue": context})
     detail.raise_for_status()
     result["fields"] = parse_labels(detail.text)
-    if not result["fields"]:
-        raise RuntimeError("SCS 详情页面无效或会话过期")
+    validate_detail_fields(result["fields"], order_required=True)
     service_uid = text(row.get("service_uid"))
     if service_uid:
         service_context = parse_pml_context(detail.text, "PM_so_service_order_control_main") or parse_pml_context(detail.text, "PM_so_service_order_browse_only_show")
+        if not service_context:
+            raise RuntimeError("SCS 服务单缺少详情上下文")
         service = request(client, "GET", BASE_URL + SERVICE_PATH, params={"dataBus": "setContext", "contextKey": "so_service_order", "contextValue": service_context})
         service.raise_for_status()
         # The service context is more reliably obtained from the service link in
         # the DOA detail; fall back to the service number if the page exposes it.
         service_fields = parse_labels(service.text)
-        if not service_fields:
-            raise RuntimeError("SCS 服务单页面无效或会话过期")
+        validate_detail_fields(service_fields)
         result["service_fields"] = service_fields
         result["equipment"] = extract_equipment(service.text)
         for equipment in result["equipment"]:
@@ -285,8 +317,7 @@ def fetch_detail(client: httpx.Client, row: dict[str, Any]) -> dict[str, Any]:
                 product = request(client, "GET", BASE_URL + PRODUCT_PATH, params={"dataBus": "setContext", "contextKey": "so_sub_service_order", "contextValue": context_value})
                 product.raise_for_status()
                 equipment["product_fields"] = parse_labels(product.text)
-                if not equipment["product_fields"]:
-                    raise RuntimeError("SCS 产品页面无效或会话过期")
+                validate_detail_fields(equipment["product_fields"], order_required=True)
     return result
 
 
@@ -294,11 +325,16 @@ def extract_equipment(html_text: str) -> list[dict[str, Any]]:
     # The equipment table has a stable form id in the SCS template.
     parser = ListParser("a8a80e692922312b1019226d5b47200b5")
     parser.feed(html_text)
-    contexts = re.findall(r"contextKey=so_sub_service_order&contextValue=([A-Za-z0-9]+)", html_text)
-    for index, row in enumerate(parser.rows):
-        if index < len(contexts):
-            row["context_value"] = contexts[index]
+    validate_list(parser)
+    for row in parser.rows:
+        attribute = row.get("_context_value")
+        linked = parse_context_value(row.get("_detail_href", ""))
+        if attribute and linked and attribute != linked:
+            raise RuntimeError("SCS 设备详情上下文冲突")
+        row["context_value"] = attribute or linked
         row["material_sn"] = row.get("mtr_sn", "")
+        if not row["context_value"]:
+            raise RuntimeError("SCS 设备缺少产品详情上下文")
     return parser.rows
 
 
@@ -341,11 +377,19 @@ def query_window(args: argparse.Namespace, checkpoint: dict[str, Any] | None) ->
     return (basis - timedelta(days=lookback_days)).date().isoformat(), end
 
 
-def should_refresh_details(existing: dict[str, Any] | None, row: dict[str, Any]) -> bool:
-    if not existing:
+def should_refresh_details(existing: dict[str, Any] | None, row: dict[str, Any], *, full: bool = False) -> bool:
+    if full or not existing:
         return True
     details = existing.get("details") if isinstance(existing.get("details"), dict) else {}
     if existing.get("_detail_pending") or not details or details.get("error") or not details.get("fields"):
+        return True
+    fetched_at = parse_datetime(existing.get("_detail_fetched_at"))
+    ttl = int(env("SCS_DETAIL_TTL_DAYS", "7"))
+    if ttl < 1:
+        raise ValueError("SCS_DETAIL_TTL_DAYS 必须大于 0")
+    if existing.get("_detail_schema_version") != DETAIL_SCHEMA_VERSION or not fetched_at:
+        return True
+    if fetched_at <= datetime.now(timezone.utc) - timedelta(days=ttl):
         return True
     return any(text(existing.get(field)) != text(row.get(field)) for field in LIST_FIELDS)
 
@@ -355,7 +399,7 @@ def extract_sales_order(details: dict[str, Any]) -> str:
     fields = details.get("fields") if isinstance(details, dict) else None
     if not isinstance(fields, dict):
         return ""
-    for key in ("合同/订单号", "合同订单号", "销售订单", "订单号"):
+    for key in SALES_ORDER_LABELS:
         value = text(fields.get(key))
         if value:
             return value
@@ -376,19 +420,24 @@ def backfill_5000_company(database: Any, collection_name: str) -> int:
     collection = database[collection_name]
     operations: list[UpdateOne] = []
     modified = 0
-    cursor = collection.find({}, {"sales_order": 1, "details.fields": 1, "is_5000_company": 1})
+    cursor = collection.find({"_prodh_scope": "00100"}, {
+        "sales_order": 1, "details": 1, "service_uid": 1, "service_order_keys": 1,
+        "is_5000_company": 1, "_prodh_scope": 1,
+    })
     try:
         for document in cursor:
             derived = classify_doa_document(document)
-            if document.get("sales_order") != derived["sales_order"] or document.get("is_5000_company") != derived["is_5000_company"]:
+            derived["service_order_keys"] = sorted(service_order_values(document))
+            if any(document.get(key) != value for key, value in derived.items()):
+                enqueue_change(database, document, {**document, **derived})
                 operations.append(UpdateOne({"_id": document["_id"]}, {"$set": derived}))
             if len(operations) >= 500:
                 check_leases(verify=True)
-                modified += collection.bulk_write(operations, ordered=False).modified_count
+                modified += verified_bulk_write(collection, operations).modified_count
                 operations.clear()
         if operations:
             check_leases(verify=True)
-            modified += collection.bulk_write(operations, ordered=False).modified_count
+            modified += verified_bulk_write(collection, operations).modified_count
     finally:
         if hasattr(cursor, "close"):
             cursor.close()
@@ -396,22 +445,26 @@ def backfill_5000_company(database: Any, collection_name: str) -> int:
 
 
 def sync(args: argparse.Namespace) -> dict[str, Any]:
+    started = time.monotonic()
     load_dotenv(ROOT / ".env")
+    validate_scope_environment()
     run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
     collection_name = env("SCS_DOA_COLLECTION", DEFAULT_COLLECTION)
     checkpoint_name = env("SYNC_CHECKPOINT_COLLECTION", DEFAULT_CHECKPOINTS)
-    allow_cleanup = bool(getattr(args, "allow_large_cleanup", False))
     if args.page_size < 1 or args.lookback_days < 0:
         raise ValueError("page-size 必须大于 0，lookback-days 不能为负数")
     client = MongoClient(mongo_uri(), **mongo_client_options())
     try:
         db = client[env("MONGODB_DATABASE")]
-        with resource_lock(db, collection_name) if not args.dry_run else nullcontext(), \
+        sales_collection = env("TARGET_COLLECTION", "sales_orders_sap")
+        change_collection = env("SCS_CHANGE_COLLECTION", "scs_change_records")
+        with resource_locks(db, collection_name, sales_collection, change_collection) if not args.dry_run else nullcontext(), \
                 httpx.Client(base_url=BASE_URL, timeout=float(env("SCS_TIMEOUT", "120")), follow_redirects=True) as http, \
-                Snapshot() as snapshot:
+                Snapshot() as snapshot, Snapshot() as planned, Snapshot() as resolved:
             login(http)
             checkpoints = db[checkpoint_name]
-            checkpoint = checkpoints.find_one({"_id": CHECKPOINT_ID})
+            checkpoint_key = checkpoint_id(CHECKPOINT_ID, "scs")
+            checkpoint = checkpoints.find_one({"_id": checkpoint_key})
             start, end = query_window(args, checkpoint)
             if start and end and start > end:
                 raise ValueError("SCS 查询开始日期不能晚于结束日期")
@@ -419,6 +472,8 @@ def sync(args: argparse.Namespace) -> dict[str, Any]:
             for batch in iter_list(http, start, end, args.page_size):
                 for row in batch:
                     validate_scs_row(row, "declare_time", start, end)
+                    if not text(row.get("doa_code")):
+                        raise RuntimeError("DOA 缺少稳定申报单号")
                     snapshot.add(source_key(row), row)
                     fetched += 1
             stats: dict[str, Any] = {
@@ -426,89 +481,120 @@ def sync(args: argparse.Namespace) -> dict[str, Any]:
                 "fetched": fetched, "unique_rows": snapshot.count, "snapshot_complete": True,
                 "upserted": 0, "detail_errors": 0, "skipped_details": 0,
                 "range": {"start": start, "end": end}, "run_id": run_id,
+                "prodh_list": required_prodh_list(), "scope_rule_version": 1,
+                "in_scope": 0, "out_of_scope": 0, "scope_pending": 0, "unchanged": 0,
+                "lookup_batches": 0, "coverage_verified": False,
+                "cleanup": "disabled_unverified_coverage", "deleted_out_of_scope": 0,
             }
             coll = db[collection_name]
-            scope = scs_scope("declare_time", start, end)
-            if args.full:
-                validate_snapshot_cleanup(coll, scope, snapshot, allow=allow_cleanup)
-            if args.dry_run:
-                return stats
-            check_leases(verify=True)
-            checkpoints.update_one({"_id": CHECKPOINT_ID}, {"$set": {
-                "dataset": CHECKPOINT_ID, "status": "running", "mode": stats["mode"],
-                "query_start": start, "query_end": end, "run_id": run_id,
-                "updated_at": datetime.now(timezone.utc),
-            }}, upsert=True)
-            coll.create_index("_source_key", unique=True, name="scs_doa_source_key")
-            operations: list[UpdateOne] = []
+            refs = SalesReferences.load(db[sales_collection])
+            for document in db["sync_scope_pending"].find({"dataset": CHECKPOINT_ID}):
+                if not snapshot.contains(document["key"]):
+                    snapshot.add(document["key"], document["payload"])
+            ttl = int(env("SCS_DETAIL_TTL_DAYS", "7"))
+            retry_limit = int(env("SCS_DETAIL_RETRY_LIMIT", "100"))
+            if ttl < 1 or retry_limit < 1:
+                raise ValueError("详情 TTL 和重试数量必须大于 0")
+            historical = coll.find({"$or": [
+                {"_detail_pending": True}, {"_detail_schema_version": {"$ne": DETAIL_SCHEMA_VERSION}},
+                {"_detail_fetched_at": {"$lt": datetime.now(timezone.utc) - timedelta(days=ttl)}},
+            ]}).sort("_detail_attempted_at", 1).limit(retry_limit)
+            try:
+                for document in historical:
+                    key = text(document.get("_source_key"))
+                    if key and not snapshot.contains(key):
+                        snapshot.add(key, document)
+            finally:
+                historical.close()
             watermark = parse_datetime((checkpoint or {}).get("watermark"))
             batch_size = max(1, int(env("SCS_WRITE_BATCH_SIZE", "25")))
-
-            def flush() -> None:
-                if operations:
-                    check_leases(verify=True)
-                    result = coll.bulk_write(operations, ordered=False)
-                    stats["upserted"] += result.upserted_count + result.modified_count
-                    operations.clear()
-
-            for key, row in snapshot:
-                existing = coll.find_one({"_source_key": key})
-                detail_fields = refreshed_details(http, row, existing, stats)
-                declared = parse_datetime(row.get("declare_time"))
-                if declared and (watermark is None or declared > watermark):
-                    watermark = declared
-                doc = {field: row.get(field, "") for field in LIST_FIELDS}
-                doc.update(detail_fields)
-                doc.update({"_source_key": key, "_source": "scs", "_context_value": row.get("_context_value", ""),
-                    "_detail_href": row.get("_detail_href", ""), "_sync_run_id": run_id,
-                    "_synced_at": datetime.now(timezone.utc)})
-                doc.update(classify_doa_document({**(existing or {}), **doc}))
-                operations.append(UpdateOne({"_source_key": key}, {"$set": doc,
-                    "$setOnInsert": {"_id": hashlib.sha256(key.encode()).hexdigest()}}, upsert=True))
-                if len(operations) >= batch_size:
-                    flush()
-                    LOGGER.info("SCS DOA 已写入 %d 条，待补详情 %d 条", stats["upserted"], stats["detail_errors"])
-            flush()
-            if args.full:
-                stats["deleted_out_of_scope"] = cleanup_records(db, collection_name, scope,
-                    {**scope, "_sync_run_id": {"$ne": run_id}}, snapshot.count,
-                    allow_large_cleanup=allow_cleanup)
-            # Retry historical failures even after the list watermark has passed them.
-            pending = coll.find({"$or": [{"_detail_pending": True}, {"details.error": {"$exists": True}}]}).sort(
-                "_detail_attempted_at", 1).limit(max(1, int(env("SCS_DETAIL_RETRY_LIMIT", "100"))))
-            try:
-                for document in pending:
-                    if snapshot.contains(text(document.get("_source_key"))):
+            for batch in batches(snapshot, batch_size):
+                existing_by_key = {doc["_source_key"]: doc for doc in coll.find({
+                    "_source_key": {"$in": [key for key, _ in batch]},
+                })}
+                stats["lookup_batches"] += 1
+                for key, row in batch:
+                    existing = existing_by_key.get(key)
+                    detail_fields = refreshed_details(http, row, existing or (row if row.get("details") else None),
+                                                      stats, full=args.full)
+                    declared = parse_datetime(row.get("declare_time"))
+                    if declared and (watermark is None or declared > watermark):
+                        watermark = declared
+                    if detail_fields["_detail_pending"]:
+                        stats["scope_pending"] += 1
+                        if not args.dry_run:
+                            save_scope_pending(db, CHECKPOINT_ID, key, {**row, **detail_fields})
+                        if existing and existing.get("_prodh_scope") == "00100":
+                            planned.add(key, {"fields": detail_fields, "upsert": False})
                         continue
-                    row = {**document, "_context_value": document.get("_context_value") or
-                           (document.get("details") or {}).get("context_value", "")}
-                    updates = refreshed_details(http, row, document, stats)
-                    updates.update(classify_doa_document({**document, **updates}))
-                    check_leases(verify=True)
-                    coll.update_one({"_id": document["_id"]}, {"$set": updates})
-            finally:
-                pending.close()
+                    doc = {field: row.get(field, "") for field in LIST_FIELDS}
+                    if not text(doc.get("customer_uid")):
+                        doc["customer_uid"] = text((existing or {}).get("customer_uid")) or text((detail_fields.get("details") or {}).get("fields", {}).get("客户全称"))
+                    doc.update(detail_fields)
+                    doc.update(classify_doa_document({**(existing or {}), **doc}))
+                    scope = refs.resolve(sales=doc["sales_order"])
+                    stats["scope_pending" if scope == "pending" else scope] += 1
+                    if scope != "in_scope":
+                        # Keep the entire row and successful details for independent retries.
+                        if scope == "out_of_scope":
+                            resolved.add(key, {})
+                        elif not args.dry_run:
+                            save_scope_pending(db, CHECKPOINT_ID, key, {**row, **doc})
+                        continue
+                    resolved.add(key, {})
+                    doc.update({"_source_key": key, "_source": "scs",
+                                "_context_value": row.get("_context_value", ""),
+                                "_detail_href": row.get("_detail_href", ""),
+                                "_prodh_scope": "00100", "_scope_rule_version": 1})
+                    doc["service_order_keys"] = sorted(service_order_values(doc))
+                    digest = source_hash({**{field: doc.get(field) for field in LIST_FIELDS},
+                                          "details": doc["details"],
+                                          "schema": DETAIL_SCHEMA_VERSION})
+                    doc["_source_hash"] = digest
+                    unchanged = (not args.full and existing and existing.get("_source_hash") == digest
+                                 and "_detail_attempted_at" not in detail_fields
+                                 and all(existing.get(field) == doc[field]
+                                         for field in ("sales_order", "is_5000_company", "service_order_keys")))
+                    stats["unchanged"] += bool(unchanged)
+                    if unchanged:
+                        continue
+                    doc.update(_sync_run_id=run_id, _synced_at=datetime.now(timezone.utc))
+                    if not args.dry_run:
+                        enqueue_change(db, existing or {}, doc)
+                    planned.add(key, {"fields": doc, "upsert": True})
+            stats["success"] = not (args.full and stats["detail_errors"])
+            stats.update(http_requests=getattr(http, "_sync_request_count", 0),
+                         elapsed_seconds=round(time.monotonic() - started, 3),
+                         scope_backlog=db["sync_scope_pending"].count_documents({"dataset": CHECKPOINT_ID}))
+            if args.dry_run:
+                return stats
+            coll.create_index("_source_key", unique=True, name="scs_doa_source_key")
+            coll.create_index("service_order_keys", name="scs_doa_service_orders")
+            for batch in batches(planned, batch_size):
+                operations = []
+                for key, plan in batch:
+                    update = {"$set": plan["fields"]}
+                    if plan["upsert"]:
+                        update["$setOnInsert"] = {"_id": hashlib.sha256(key.encode()).hexdigest()}
+                    operations.append(UpdateOne({"_source_key": key}, update, upsert=plan["upsert"]))
+                result = verified_bulk_write(coll, operations)
+                stats["upserted"] += result.upserted_count + result.modified_count
+            clear_scope_pending(db, CHECKPOINT_ID, (key for key, _ in resolved))
             stats["5000_company_backfilled"] = backfill_5000_company(db, collection_name)
             check_leases(verify=True)
-            checkpoints.update_one({"_id": CHECKPOINT_ID}, {"$set": {
-                "status": "completed", "watermark": watermark.isoformat() if watermark else None,
-                "run_id": run_id, "total_rows": fetched, "updated_at": datetime.now(timezone.utc),
-            }}, upsert=True)
+            if stats["success"]:
+                checkpoints.update_one({"_id": checkpoint_key}, {"$set": {
+                    "status": "completed", "watermark": watermark.isoformat() if watermark else None,
+                    "query_start": start, "query_end": end,
+                    "run_id": run_id, "total_rows": fetched, "updated_at": datetime.now(timezone.utc),
+                }}, upsert=True)
+            stats.update(elapsed_seconds=round(time.monotonic() - started, 3),
+                         scope_backlog=db["sync_scope_pending"].count_documents({"dataset": CHECKPOINT_ID}),
+                         detail_pending=coll.count_documents({"_detail_pending": True}),
+                         classification_pending=db["sync_classification_pending"].count_documents({}))
             return stats
     finally:
         client.close()
-
-
-def scs_scope(field: str, start: str, end: str) -> dict[str, Any]:
-    scope: dict[str, Any] = {"_source": "scs"}
-    bounds = {}
-    if start:
-        bounds["$gte"] = start
-    if end:
-        bounds["$lt"] = (datetime.fromisoformat(end) + timedelta(days=1)).date().isoformat()
-    if bounds:
-        scope[field] = bounds
-    return scope
 
 
 def validate_scs_row(row: dict[str, Any], field: str, start: str, end: str) -> None:
@@ -521,19 +607,31 @@ def validate_scs_row(row: dict[str, Any], field: str, start: str, end: str) -> N
 
 
 def refreshed_details(http: Any, row: dict[str, Any], existing: dict[str, Any] | None,
-                      stats: dict[str, Any]) -> dict[str, Any]:
+                      stats: dict[str, Any], *, full: bool = False) -> dict[str, Any]:
     details = (existing or {}).get("details") or {}
     pending, error = False, ""
-    if should_refresh_details(existing, row):
+    updates: dict[str, Any] = {}
+    if should_refresh_details(existing, row, full=full):
+        updates["_detail_attempted_at"] = datetime.now(timezone.utc)
         try:
-            details = fetch_detail(http, row)
+            candidate = fetch_detail(http, row)
+            for name in ("fields", "service_fields"):
+                if details.get(name):
+                    validate_detail_fields(candidate.get(name), previous=details[name])
+            old_equipment = {item.get("context_value"): item for item in details.get("equipment", [])}
+            for item in candidate.get("equipment", []):
+                previous = old_equipment.get(item.get("context_value"), {}).get("product_fields")
+                if previous:
+                    validate_detail_fields(item.get("product_fields"), previous=previous)
+            details = candidate
+            updates.update(_detail_fetched_at=datetime.now(timezone.utc),
+                           _detail_schema_version=DETAIL_SCHEMA_VERSION)
         except Exception as exc:
             stats["detail_errors"] += 1
             pending, error = True, str(exc)
     else:
         stats["skipped_details"] += 1
-    return {"details": details, "_detail_pending": pending, "_detail_error": error,
-            "_detail_attempted_at": datetime.now(timezone.utc)}
+    return {"details": details, "_detail_pending": pending, "_detail_error": error, **updates}
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -544,7 +642,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--lookback-days", type=int, default=int(env("SCS_LOOKBACK_DAYS", "2")))
     parser.add_argument("--page-size", type=int, default=int(env("SCS_PAGE_SIZE", "500")))
     parser.add_argument("--dry-run", action="store_true", help="只登录、读取和统计，不写 MongoDB")
-    parser.add_argument("--allow-large-cleanup", action="store_true", help="确认源收缩后允许空快照或大量旧记录清理")
+    parser.add_argument("--allow-large-cleanup", action="store_true", help="兼容旧命令，不解除来源覆盖校验")
     return parser
 
 

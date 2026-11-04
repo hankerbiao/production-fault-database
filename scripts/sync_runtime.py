@@ -11,6 +11,7 @@ import threading
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Iterator
+from itertools import islice
 from uuid import uuid4
 
 from bson import BSON
@@ -20,6 +21,86 @@ from pymongo.errors import DuplicateKeyError
 
 _active_leases: set["Lease"] = set()
 _lease_guard = threading.Lock()
+REQUIRED_PRODH = ("00100",)
+SCOPE_VERSION = 1
+
+
+def required_prodh_list() -> list[str]:
+    return list(REQUIRED_PRODH)
+
+
+def validate_prodh(values: Any) -> list[str]:
+    if values != required_prodh_list():
+        raise ValueError('所有同步数据必须限定 PRODH_LIST=["00100"]')
+    return required_prodh_list()
+
+
+def validate_scope_environment() -> None:
+    raw = os.getenv("SOURCE_PRODH_LIST", "00100")
+    validate_prodh([part.strip() for part in raw.replace("，", ",").split(",") if part.strip()])
+
+
+def product_scope(row: Any) -> str:
+    value = str(row.get("PRODH") or "").strip()
+    if value:
+        return "in_scope" if value == "00100" else "out_of_scope"
+    return "in_scope" if row.get("_prodh_scope") == "00100" else "pending"
+
+
+def source_hash(document: Any) -> str:
+    return hashlib.sha256(json.dumps(
+        document, sort_keys=True, ensure_ascii=False, default=str, separators=(",", ":"),
+    ).encode()).hexdigest()
+
+
+def batches(rows: Any, size: int) -> Iterator[list[Any]]:
+    if size < 1:
+        raise ValueError("batch size must be greater than zero")
+    iterator = iter(rows)
+    while batch := list(islice(iterator, size)):
+        yield batch
+
+
+def verified_bulk_write(collection: Any, operations: list[Any]) -> Any:
+    check_leases(verify=True)
+    result = collection.bulk_write(operations, ordered=False)
+    if result.matched_count + result.upserted_count != len(operations):
+        raise RuntimeError("批量写入数量不足，拒绝推进检查点")
+    return result
+
+
+def checkpoint_id(dataset: str, source: str) -> str:
+    return f"{dataset}:{source}"
+
+
+def sales_scope_checkpoint_id(dataset: str, source: str) -> str:
+    return f"{checkpoint_id(dataset, source)}:prodh-00100:v{SCOPE_VERSION}"
+
+
+def save_scope_pending(db: Any, dataset: str, key: str, row: dict[str, Any]) -> None:
+    check_leases(verify=True)
+    db["sync_scope_pending"].update_one(
+        {"_id": f"{dataset}:{key}"},
+        {"$set": {"dataset": dataset, "key": key, "payload": row,
+                  "updated_at": datetime.now(timezone.utc), "prodh_list": required_prodh_list()}},
+        upsert=True,
+    )
+
+
+def clear_scope_pending(db: Any, dataset: str, keys: Any) -> None:
+    for batch in batches(keys, 1000):
+        check_leases(verify=True)
+        db["sync_scope_pending"].delete_many({"_id": {"$in": [f"{dataset}:{key}" for key in batch]}})
+
+
+@contextmanager
+def resource_locks(db: Any, *collections: str) -> Iterator[None]:
+    from contextlib import ExitStack
+
+    with ExitStack() as stack:
+        for name in sorted(set(collections)):
+            stack.enter_context(resource_lock(db, name))
+        yield
 
 
 def order_key(value: Any) -> str:
@@ -206,7 +287,7 @@ class Snapshot:
 
     def add(self, key: str, document: dict[str, Any], *, group_key: str | None = None) -> None:
         payload = BSON.encode(document)
-        digest = hashlib.sha256(payload).hexdigest()
+        digest = source_hash(document)
         existing = self.connection.execute(
             "SELECT hash, group_key FROM rows WHERE key = ?", (key,),
         ).fetchone()
@@ -231,6 +312,20 @@ class Snapshot:
     def get(self, key: str) -> dict[str, Any] | None:
         row = self.connection.execute("SELECT payload FROM rows WHERE key = ?", (key,)).fetchone()
         return BSON(row[0]).decode() if row is not None else None
+
+    def groups(self) -> Iterator[str]:
+        for (key,) in self.connection.execute(
+            "SELECT DISTINCT group_key FROM rows WHERE group_key IS NOT NULL ORDER BY group_key",
+        ):
+            yield key
+
+    def group(self, key: str, *, limit: int = 10000) -> list[dict[str, Any]]:
+        rows = self.connection.execute(
+            "SELECT payload FROM rows WHERE group_key = ? ORDER BY key LIMIT ?", (key, limit + 1),
+        ).fetchall()
+        if len(rows) > limit:
+            raise RuntimeError(f"Snapshot group exceeds {limit} rows: {key}")
+        return [BSON(row[0]).decode() for row in rows]
 
     def __iter__(self) -> Iterator[tuple[str, dict[str, Any]]]:
         self.connection.commit()
@@ -284,16 +379,3 @@ def matches_snapshot(document: dict[str, Any], query: dict[str, Any]) -> bool:
             if not valid:
                 return False
     return True
-
-
-def validate_snapshot_cleanup(target: Any, scope: dict[str, Any], snapshot: Snapshot, *, allow: bool = False) -> None:
-    existing = stale = 0
-    cursor = target.find(scope, {"_source_key": 1})
-    try:
-        for document in cursor:
-            existing += 1
-            stale += not snapshot.contains(str(document.get("_source_key") or ""))
-    finally:
-        if hasattr(cursor, "close"):
-            cursor.close()
-    validate_cleanup(existing, stale, snapshot.count, allow)

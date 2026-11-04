@@ -2,33 +2,22 @@ from contextlib import nullcontext
 from types import SimpleNamespace
 
 from scripts.maintenance.refresh_scs_5000_company import build_refresh_plan, refresh
+from test_sync_sales_orders import FakeCollection, FakeDB
 
 
-class Collection:
+class Collection(FakeCollection):
     def __init__(self, documents):
-        self.documents = documents
+        super().__init__([{"_prodh_scope": "00100", **row} for row in documents])
 
-    def find(self, *_args, **_kwargs):
-        query = _args[0] if _args else {}
-        return [dict(document) for document in self.documents
-                if all(document.get(key) == value for key, value in query.items())]
-
-    def bulk_write(self, operations, ordered=False):
-        modified = 0
-        for operation in operations:
-            document = next(row for row in self.documents if row["_id"] == operation._filter["_id"])
-            values = operation._doc["$set"]
-            modified += any(document.get(key) != value for key, value in values.items())
-            document.update(values)
-        return SimpleNamespace(modified_count=modified)
+    @property
+    def documents(self):
+        return self.docs
 
 
-class Database:
+class Database(FakeDB):
     def __init__(self, collections):
         self.collections = collections
 
-    def __getitem__(self, name):
-        return self.collections[name]
 
 
 def make_database():

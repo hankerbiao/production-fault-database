@@ -39,6 +39,7 @@ func normalizeFault(doc bson.M) Fault {
 
 func normalizeOrder(doc bson.M) Order {
 	data, _ := doc["data"].(bson.M)
+	company5000 := true
 	return Order{
 		ID:                  firstText(doc, "_id"),
 		Source:              firstText(doc, "source"),
@@ -64,11 +65,9 @@ func normalizeOrder(doc bson.M) Order {
 				"LFIMG", "SHIPMENT_QUANTITY",
 			),
 		),
-		Is5000Company: optionalBool(
-			firstOrderValue(doc, data, "is5000Company", "is_5000_company", "company5000", "IS_5000_COMPANY"),
-		),
-		RecordCount: int(number(doc["record_count"])),
-		Raw:         cloneDocument(doc),
+		Is5000Company: &company5000,
+		RecordCount:   int(number(doc["record_count"])),
+		Raw:           cloneDocument(doc),
 	}
 }
 

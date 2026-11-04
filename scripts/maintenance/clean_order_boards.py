@@ -1,9 +1,5 @@
 #!/usr/bin/env python3
-"""清理订单 BOM 过账，并补全工位记录明细中的订单字段.
-
-订单 BOM 过账只保留 ``CPX=5000公司`` 的数据。工位记录以
-``sales_orders_sap`` 的确定性订单映射补全字段；无法映射的原始记录会保留。
-"""
+"""以销售订单的确定性映射补全 BOM 和工位订单字段。"""
 from __future__ import annotations
 
 import argparse
@@ -28,13 +24,12 @@ from scripts.sources.hana.hana_view_sync import (  # noqa: E402
     mongo_write_concern_summary,
     process_lock,
 )
-from scripts.sync_runtime import cleanup_records, check_leases, order_key, resource_lock
+from scripts.sync_runtime import check_leases, order_key, resource_locks
 
 
 CONFIRMATION = "DELETE-ORDER-BOARD-INVALID"
 DEFAULT_BATCH_SIZE = 500
 DEFAULT_LOCK = "/tmp/line-fault-order-boards-cleanup.lock"
-BOM_COMPANY = "5000公司"
 
 
 def log(message: str) -> None:
@@ -91,135 +86,28 @@ def base_filter(spec: BoardSpec, from_date: date | None, to_date: date | None, s
 
 
 def sales_order_index(
-    collection: Any,
+    collection: Any, *, references: Any = None,
 ) -> tuple[set[str], dict[str, str], dict[str, str], set[str], set[str]]:
-    """Build order-board lookups, retaining only unambiguous mappings for backfill."""
-    productions: set[str] = set()
-    sales_orders: set[str] = set()
-    production_candidates: dict[str, set[str]] = {}
-    sales_candidates: dict[str, set[str]] = {}
-    log("开始建立销售订单看板索引")
-    cursor = collection.find({}, {"data.AUFNR": 1, "data.VBELN": 1, "aufnr": 1})
-    scanned = 0
-    try:
-        for document in cursor:
-            scanned += 1
-            data = document.get("data") if isinstance(document.get("data"), dict) else {}
-            production = normalize_order(data.get("AUFNR") or document.get("aufnr"))
-            sales = normalize(data.get("VBELN"))
-            if not production:
-                continue
-            productions.add(production)
-            if sales:
-                sales_key = normalize_order(sales)
-                source_production = normalize(data.get("AUFNR") or document.get("aufnr"))
-                sales_orders.add(sales_key)
-                production_candidates.setdefault(production, set()).add(sales)
-                sales_candidates.setdefault(sales_key, set()).add(source_production)
-            if scanned % 100000 == 0:
-                log(f"销售订单看板索引已扫描 {scanned:,} 条")
-    finally:
-        if hasattr(cursor, "close"):
-            cursor.close()
-    by_production = {
-        production: next(iter(candidates))
-        for production, candidates in production_candidates.items()
-        if len(candidates) == 1
-    }
-    sales_to_production = {
-        sales: next(iter(candidates))
-        for sales, candidates in sales_candidates.items()
-        if len(candidates) == 1
-    }
-    ambiguous_productions = set(production_candidates) - set(by_production)
-    ambiguous_sales = set(sales_candidates) - set(sales_to_production)
-    log(
-        f"销售订单看板索引完成：扫描 {scanned:,} 条，生产订单 {len(productions):,} 个，"
-        f"销售订单 {len(sales_orders):,} 个，生产订单多映射 {len(ambiguous_productions):,} 个，"
-        f"销售订单多映射 {len(ambiguous_sales):,} 个"
-    )
+    from scripts.sales_order_reference import SalesReferences
+
+    refs = references if references is not None else SalesReferences.load(collection)
+
+    def unique_order(field: str, **keys: Any) -> str | None:
+        rows = refs.candidates(**keys)
+        identities = {(row["source"], row["client"], row["production"]) for row in rows}
+        values = {row[field] for row in rows}
+        if len(identities) == 1 and len(values) == 1 and "" not in values:
+            return next(iter(values))
+        return None
+
+    by_production = {key: value for key in refs.by_production
+                     if (value := unique_order("sales", production=key))}
+    sales_to_production = {key: value for key in refs.by_sales
+                          if (value := unique_order("production", sales=key))}
+    sales_orders = {key for key in refs.by_sales if unique_order("sales", sales=key)}
+    ambiguous_productions = set(refs.by_production) - set(by_production)
+    ambiguous_sales = set(refs.by_sales) - set(sales_to_production)
     return sales_orders, by_production, sales_to_production, ambiguous_productions, ambiguous_sales
-
-
-def process_bom_cpx_cleanup(
-    db: Any,
-    spec: BoardSpec,
-    collection_name: str,
-    order_collection_name: str,
-    *,
-    apply: bool,
-    batch_size: int,
-    limit: int | None,
-    from_date: date | None,
-    to_date: date | None,
-    sync_run_id: str | None,
-    progress: bool,
-) -> dict[str, Any]:
-    """Keep only BOM postings whose CPX value identifies the 5000 company."""
-    query = base_filter(spec, from_date, to_date, sync_run_id)
-    collection = db[collection_name]
-    total = collection.count_documents(query) if hasattr(collection, "count_documents") else None
-    log(f"[bom] CPX 清理扫描范围：{total:,} 条" if total is not None else "[bom] CPX 清理扫描范围：未知")
-    stats: dict[str, Any] = {
-        "success": False, "board": spec.name, "collection": collection_name,
-        "order_collection": order_collection_name, "source_view": spec.source_view,
-        "cpx_target": BOM_COMPANY, "cpx_5000_company": 0, "non_5000_cpx": 0,
-        "empty_cpx": 0, "scanned": 0, "delete_candidates": 0,
-        "updated": 0, "deleted": 0,
-    }
-    deletes: list[dict[str, Any]] = []
-
-    def flush() -> None:
-        if deletes and apply:
-            identities = [{"_id": row["_id"], "_source_view": spec.source_view, "CPX": row.get("CPX")} for row in deletes]
-            selected = {"$or": identities}
-            stats["deleted"] += cleanup_records(db, collection_name, selected, selected,
-                                               1, allow_large_cleanup=True, batch_size=batch_size)
-        deletes.clear()
-
-    cursor = collection.find(query, {"_id": 1, "CPX": 1})
-    try:
-        for row in cursor:
-            if limit is not None and stats["scanned"] >= limit:
-                break
-            stats["scanned"] += 1
-            cpx = normalize(row.get("CPX"))
-            if cpx == BOM_COMPANY:
-                stats["cpx_5000_company"] += 1
-            else:
-                if not cpx:
-                    stats["empty_cpx"] += 1
-                stats["non_5000_cpx"] += 1
-                stats["delete_candidates"] += 1
-                if apply:
-                    deletes.append(row)
-                    if len(deletes) >= batch_size:
-                        flush()
-            if progress and (stats["scanned"] == 1 or stats["scanned"] % 100 == 0):
-                suffix = f"/{total}" if total else ""
-                print(f"\r处理bom: {stats['scanned']}{suffix}", end="", file=sys.stderr, flush=True)
-            if stats["scanned"] % 100000 == 0:
-                log(
-                    f"[bom] 已扫描 {stats['scanned']:,} 条，保留 5000公司 {stats['cpx_5000_company']:,} 条，"
-                    f"删除候选 {stats['delete_candidates']:,} 条"
-                )
-    finally:
-        if hasattr(cursor, "close"):
-            cursor.close()
-    if progress:
-        print(file=sys.stderr, flush=True)
-
-    log(
-        f"[bom] CPX 扫描完成：扫描 {stats['scanned']:,} 条，保留 5000公司 {stats['cpx_5000_company']:,} 条，"
-        f"空 CPX {stats['empty_cpx']:,} 条，非 5000 CPX 删除候选 {stats['delete_candidates']:,} 条"
-    )
-    if apply:
-        flush()
-        log(f"[bom] CPX 清理完成：删除 {stats['deleted']:,} 条")
-    else:
-        log("[bom] dry-run，不执行数据库变更")
-    stats["success"] = True
-    return stats
 
 
 def process_board(
@@ -244,15 +132,11 @@ def process_board(
         raise ValueError("--from-date 不能晚于 --to-date")
 
     log(f"[{spec.name}] 开始处理集合 {collection_name}，来源视图 {spec.source_view}")
-    if spec.name == "bom":
-        return process_bom_cpx_cleanup(
-            db, spec, collection_name, order_collection_name, apply=apply,
-            batch_size=batch_size, limit=limit, from_date=from_date, to_date=to_date,
-            progress=progress, sync_run_id=sync_run_id,
-        )
-    board_sales, by_production, sales_to_production, ambiguous_productions, ambiguous_sales = sales_order_index(db[order_collection_name])
-    if not board_sales:
-        raise RuntimeError(f"{order_collection_name} 中没有有效销售订单，拒绝处理")
+    from scripts.sales_order_reference import SalesReferences
+    refs = SalesReferences.load(db[order_collection_name])
+    board_sales, by_production, sales_to_production, ambiguous_productions, ambiguous_sales = sales_order_index(
+        db[order_collection_name], references=refs,
+    )
     query = base_filter(spec, from_date, to_date, sync_run_id)
     total = db[collection_name].count_documents(query) if hasattr(db[collection_name], "count_documents") else None
     log(f"[{spec.name}] 候选扫描范围：{total:,} 条" if total is not None else f"[{spec.name}] 候选扫描范围：未知")
@@ -266,28 +150,21 @@ def process_board(
         "ambiguous_production_mappings": 0, "ambiguous_sales_mappings": 0,
         "delete_candidates": 0, "updated": 0, "deleted": 0,
     }
-    actions: list[tuple[str, dict[str, Any], dict[str, str] | None]] = []
+    actions: list[tuple[dict[str, Any], dict[str, str]]] = []
     unresolved_productions: set[str] = set()
     update_candidates = 0
 
     def flush() -> None:
         if actions and apply:
-            updates, deletes = [], []
-            for kind, row, fields in actions:
+            updates = []
+            for row, fields in actions:
                 identity = {"_id": row["_id"], "_source_view": spec.source_view,
                             spec.production_field: row.get(spec.production_field),
                             spec.sales_field: row.get(spec.sales_field)}
-                if kind == "update":
-                    updates.append(UpdateOne(identity, {"$set": fields or {}}))
-                else:
-                    deletes.append(identity)
+                updates.append(UpdateOne(identity, {"$set": fields}))
             check_leases(verify=True)
             if updates:
                 stats["updated"] += db[collection_name].bulk_write(updates, ordered=False).modified_count
-            if deletes:
-                selected = {"$or": deletes}
-                stats["deleted"] += cleanup_records(db, collection_name, selected, selected,
-                    1, allow_large_cleanup=True, batch_size=batch_size)
         actions.clear()
 
     cursor = db[collection_name].find(query, {"_id": 1, spec.production_field: 1, spec.sales_field: 1})
@@ -328,18 +205,20 @@ def process_board(
                         stats["ambiguous_production_mappings"] += 1
 
             if sales_raw:
+                matches = refs.candidates(production=production, sales=sales_raw)
+                identities = {(match["source"], match["client"], match["production"]) for match in matches}
+                if len(identities) != 1:
+                    stats["unresolved_rows"] += 1
+                    continue
                 if sales_key not in board_sales:
-                    stats["delete_candidates"] += 1
-                    actions.append(("delete", row, None))
-                    if len(actions) >= batch_size:
-                        flush()
+                    stats["unresolved_rows"] += 1
                     continue
                 stats["matched_sales_orders"] += 1
                 if fields:
-                    actions.append(("update", row, fields))
+                    actions.append((row, fields))
                     update_candidates += 1
             elif fields:
-                actions.append(("update", row, fields))
+                actions.append((row, fields))
                 update_candidates += 1
             else:
                 stats["missing_board_sales"] += 1
@@ -414,7 +293,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 for board in boards:
                     spec = SPECS[board]
                     collection = env(spec.collection_env, spec.default_collection)
-                    with resource_lock(db, collection) if args.apply else nullcontext():
+                    with resource_locks(db, collection, order_collection) if args.apply else nullcontext():
                         result["boards"][board] = process_board(db, spec, collection, order_collection, apply=args.apply, batch_size=args.batch_size, limit=args.limit, from_date=args.from_date, to_date=args.to_date, sync_run_id=getattr(args, "sync_run_id", None), progress=not args.no_progress)
         result.update({"success": True, "finished_at": datetime.now(timezone.utc), "mongo_write_concern": mongo_write_concern_summary(options)})
         log(f"任务完成：run_id={run_id}，处理看板={','.join(boards)}")

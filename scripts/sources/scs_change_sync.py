@@ -33,12 +33,17 @@ from scripts.sources.scs_doa_sync import (
     parse_datetime,
     query_window,
     login as session_login,
-    scs_scope,
     throttled_request,
     validate_list,
     validate_scs_row,
 )
-from scripts.sync_runtime import Snapshot, cleanup_records, check_leases, print_failure, resource_lock, validate_snapshot_cleanup
+from scripts.sync_runtime import (
+    Snapshot, check_leases, print_failure, resource_locks, source_hash, batches,
+    verified_bulk_write, required_prodh_list, save_scope_pending, checkpoint_id,
+    validate_scope_environment,
+    clear_scope_pending,
+)
+from scripts.scs_classification import service_order_values, service_states, consume
 
 ROOT = PROJECT_ROOT
 CHANGE_PATH = "/PM_sp_change_Result_01.pml"
@@ -123,26 +128,12 @@ def change_source_key(row: dict[str, Any]) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
-def service_order_values(document: dict[str, Any]) -> set[str]:
-    """Extract every service-order identifier available on a DOA document."""
-    values: set[str] = set()
-    service = str(document.get("service_uid") or "").strip()
-    if service:
-        values.add(service)
-    details = document.get("details")
-    fields = details.get("service_fields") if isinstance(details, dict) else None
-    if isinstance(fields, dict):
-        for key in ("服务单号", "服务订单号", "服务单"):
-            value = str(fields.get(key) or "").strip()
-            if value:
-                values.add(value)
-    return values
-
-
 def load_5000_service_orders(database: Any, collection_name: str = "scs_doa_records") -> set[str]:
     """Return service-order numbers belonging to 5000 companies."""
     values: set[str] = set()
-    for document in database[collection_name].find({"is_5000_company": True}, {"service_uid": 1, "details.service_fields": 1}):
+    for document in database[collection_name].find(
+        {"is_5000_company": True, "_prodh_scope": "00100"}, {"service_uid": 1, "details.service_fields": 1},
+    ):
         values.update(service_order_values(document))
     return values
 
@@ -181,10 +172,17 @@ def iter_changes(
 ):
     """Yield validated result pages without accumulating a source-sized list."""
     page = 1
+    seen: set[str] = set()
     while True:
         batch = fetch_change_page(client, page, start, end, page_size)
         if not batch:
             break
+        fingerprint = source_hash(batch)
+        if fingerprint in seen:
+            raise RuntimeError("SCS 返回重复页，拒绝推进检查点")
+        seen.add(fingerprint)
+        if len(batch) > page_size:
+            raise RuntimeError("SCS 页大小超出请求范围")
         yield batch
         if len(batch) < page_size:
             break
@@ -192,24 +190,27 @@ def iter_changes(
 
 
 def sync(args: argparse.Namespace) -> dict[str, Any]:
+    started = time.monotonic()
     load_dotenv(ROOT / ".env")
+    validate_scope_environment()
     run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
     collection_name = env("SCS_CHANGE_COLLECTION", DEFAULT_COLLECTION)
     checkpoint_name = env("SYNC_CHECKPOINT_COLLECTION", DEFAULT_CHECKPOINTS)
-    allow_cleanup = bool(getattr(args, "allow_large_cleanup", False))
     mode = "full" if args.full else "incremental"
     if args.page_size < 1 or args.lookback_days < 0:
         raise ValueError("page-size 必须大于 0，lookback-days 不能为负数")
     client = MongoClient(mongo_uri(), **mongo_client_options())
     try:
         db = client[env("MONGODB_DATABASE")]
-        with resource_lock(db, collection_name) if not args.dry_run else nullcontext(), \
+        doa_collection = env("SCS_DOA_COLLECTION", "scs_doa_records")
+        with resource_locks(db, collection_name, doa_collection) if not args.dry_run else nullcontext(), \
                 httpx.Client(base_url=BASE_URL, timeout=float(env("SCS_TIMEOUT", "120")), follow_redirects=True) as http, \
                 Snapshot() as snapshot:
             login(http)
             collection = db[collection_name]
             checkpoints = db[checkpoint_name]
-            checkpoint = checkpoints.find_one({"_id": CHECKPOINT_ID}) or {}
+            checkpoint_key = checkpoint_id(CHECKPOINT_ID, "scs")
+            checkpoint = checkpoints.find_one({"_id": checkpoint_key}) or {}
             start, end = query_window(args, checkpoint)
             start, end = bounded_change_range(start, end)
             if start > end:
@@ -222,21 +223,20 @@ def sync(args: argparse.Namespace) -> dict[str, Any]:
                     fetched += 1
                 LOGGER.info("SCS 换上换下读取：第 %d 页，共 %d 条", page, fetched)
             stats = {"success": True, "mode": mode, "fetched": fetched, "unique_rows": snapshot.count,
-                     "upserted": 0, "snapshot_complete": True, "range": {"start": start, "end": end}}
-            scope = scs_scope("create_time", start, end)
-            if args.full:
-                validate_snapshot_cleanup(collection, scope, snapshot, allow=allow_cleanup)
-            if args.dry_run:
-                return stats
-            check_leases(verify=True)
-            collection.create_index("_source_key", unique=True, name="scs_change_source_key")
-            company_orders = load_5000_service_orders(db, env("SCS_DOA_COLLECTION", "scs_doa_records"))
+                     "upserted": 0, "snapshot_complete": True, "range": {"start": start, "end": end},
+                     "prodh_list": required_prodh_list(), "scope_rule_version": 1,
+                     "in_scope": 0, "out_of_scope": 0, "scope_pending": 0, "unchanged": 0,
+                     "lookup_batches": 0, "coverage_verified": False,
+                     "cleanup": "disabled_unverified_coverage", "deleted_out_of_scope": 0}
+            for document in db["sync_scope_pending"].find({"dataset": CHECKPOINT_ID}):
+                if not snapshot.contains(document["key"]):
+                    snapshot.add(document["key"], document["payload"])
             watermark = parse_datetime(checkpoint.get("watermark"))
             batch_size = max(1, int(env("SCS_WRITE_BATCH_SIZE", "100")))
             def save_checkpoint(status: str) -> None:
                 check_leases(verify=True)
                 checkpoints.update_one(
-                    {"_id": CHECKPOINT_ID},
+                    {"_id": checkpoint_key},
                     {"$set": {
                         "dataset": "scs_changes", "status": status, "mode": mode,
                         "start_date": args.start_date if args.full else None,
@@ -248,39 +248,60 @@ def sync(args: argparse.Namespace) -> dict[str, Any]:
                     upsert=True,
                 )
 
-            save_checkpoint("running")
-            operations: list[UpdateOne] = []
-            def flush() -> None:
-                if operations:
-                    check_leases(verify=True)
-                    result = collection.bulk_write(operations, ordered=False)
-                    stats["upserted"] += result.upserted_count + result.modified_count
-                    operations.clear()
-            for key, row in snapshot:
-                created = parse_datetime(row.get("create_time"))
-                if created and (watermark is None or created > watermark):
-                    watermark = created
-                document = {field: row.get(field, "") for field in FIELD_ALIASES}
-                document.update({
-                    "_source_key": key, "_source": "scs", "raw": row.get("raw", {}),
-                    "is_5000_company": bool(row.get("so_code") and row["so_code"] in company_orders),
-                    "_sync_run_id": run_id, "_synced_at": datetime.now(timezone.utc),
-                })
-                operations.append(UpdateOne({"_source_key": key}, {"$set": document,
-                                            "$setOnInsert": {"_id": key}}, upsert=True))
-                if len(operations) >= batch_size:
-                    flush()
-            flush()
-            if args.full:
-                stats["deleted_out_of_scope"] = cleanup_records(db, collection_name, scope,
-                    {**scope, "_sync_run_id": {"$ne": run_id}}, snapshot.count,
-                    allow_large_cleanup=allow_cleanup)
-            stats["5000_company_backfilled"] = backfill_company(collection, company_orders)
-            save_checkpoint("completed")
+            if not args.dry_run:
+                collection.create_index("_source_key", unique=True, name="scs_change_source_key")
+            for batch in batches(snapshot, batch_size):
+                keys = [key for key, _ in batch]
+                existing = {row["_source_key"]: row for row in collection.find({"_source_key": {"$in": keys}})}
+                states, company_orders = service_states(db, doa_collection, list({row.get("so_code", "") for _, row in batch}))
+                stats["lookup_batches"] += 1
+                operations = []
+                admitted = []
+                for key, row in batch:
+                    created = parse_datetime(row.get("create_time"))
+                    if created and (watermark is None or created > watermark):
+                        watermark = created
+                    scope = states.get(row.get("so_code"), set())
+                    if scope != {"in_scope"}:
+                        stats["scope_pending"] += 1
+                        if not args.dry_run:
+                            save_scope_pending(db, CHECKPOINT_ID, key, row)
+                        continue
+                    stats["in_scope"] += 1
+                    document = {field: row.get(field, "") for field in FIELD_ALIASES}
+                    digest = source_hash({"fields": document, "raw": row.get("raw", {}), "schema": 1})
+                    document.update({
+                        "_source_key": key, "_source": "scs", "raw": row.get("raw", {}),
+                        "_source_hash": digest, "_prodh_scope": "00100", "_scope_rule_version": 1,
+                        "is_5000_company": row.get("so_code") in company_orders,
+                    })
+                    old = existing.get(key, {})
+                    admitted.append(key)
+                    if not args.full and old.get("_source_hash") == digest and old.get("is_5000_company") == document["is_5000_company"]:
+                        stats["unchanged"] += 1
+                        continue
+                    document.update(_sync_run_id=run_id, _synced_at=datetime.now(timezone.utc))
+                    operations.append(UpdateOne({"_source_key": key}, {"$set": document,
+                                                "$setOnInsert": {"_id": key}}, upsert=True))
+                if not args.dry_run:
+                    if operations:
+                        result = verified_bulk_write(collection, operations)
+                        stats["upserted"] += result.upserted_count + result.modified_count
+                    clear_scope_pending(db, CHECKPOINT_ID, admitted)
+            if not args.dry_run:
+                stats["classification_updated"] = consume(db, doa_collection, collection_name)
+                # Keep the existing freshness contract until the initial migration is verified.
+                stats["5000_company_backfilled"] = backfill_company(
+                    collection, load_5000_service_orders(db, doa_collection),
+                )
+                save_checkpoint("completed")
             LOGGER.info(
                 "SCS 换上换下同步完成：进度 100%%，共 %d 条，写入 %d 条",
                 stats["fetched"], stats["upserted"],
             )
+            stats.update(http_requests=getattr(http, "_sync_request_count", 0),
+                         elapsed_seconds=round(time.monotonic() - started, 3),
+                         scope_backlog=db["sync_scope_pending"].count_documents({"dataset": CHECKPOINT_ID}))
             return stats
     finally:
         client.close()
@@ -288,7 +309,7 @@ def sync(args: argparse.Namespace) -> dict[str, Any]:
 
 def backfill_company(collection: Any, company_orders: set[str]) -> int:
     operations, modified = [], 0
-    cursor = collection.find({}, {"so_code": 1, "is_5000_company": 1})
+    cursor = collection.find({"_prodh_scope": "00100"}, {"so_code": 1, "is_5000_company": 1})
     try:
         for row in cursor:
             value = bool(row.get("so_code") and row["so_code"] in company_orders)
@@ -296,11 +317,11 @@ def backfill_company(collection: Any, company_orders: set[str]) -> int:
                 operations.append(UpdateOne({"_id": row["_id"]}, {"$set": {"is_5000_company": value}}))
             if len(operations) >= 500:
                 check_leases(verify=True)
-                modified += collection.bulk_write(operations, ordered=False).modified_count
+                modified += verified_bulk_write(collection, operations).modified_count
                 operations.clear()
         if operations:
             check_leases(verify=True)
-            modified += collection.bulk_write(operations, ordered=False).modified_count
+            modified += verified_bulk_write(collection, operations).modified_count
     finally:
         if hasattr(cursor, "close"):
             cursor.close()
@@ -315,7 +336,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--lookback-days", type=int, default=int(env("SCS_LOOKBACK_DAYS", "2")))
     parser.add_argument("--page-size", type=int, default=int(env("SCS_PAGE_SIZE", "500")))
     parser.add_argument("--dry-run", action="store_true", help="只登录、读取和统计，不写 MongoDB")
-    parser.add_argument("--allow-large-cleanup", action="store_true", help="确认源收缩后允许空快照或大量旧记录清理")
+    parser.add_argument("--allow-large-cleanup", action="store_true", help="兼容旧命令，不解除来源覆盖校验")
     return parser
 
 

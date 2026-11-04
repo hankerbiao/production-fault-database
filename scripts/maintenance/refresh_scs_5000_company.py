@@ -31,6 +31,7 @@ from scripts.sources.scs_doa_sync import (
     classify_doa_document,
 )
 from scripts.sync_runtime import resource_lock
+from scripts.scs_classification import consume
 
 
 def build_refresh_plan(
@@ -44,7 +45,7 @@ def build_refresh_plan(
     doa_would_update = 0
 
     cursor = doa.find(
-        {},
+        {"_prodh_scope": "00100"},
         {
             "sales_order": 1,
             "details.fields": 1,
@@ -69,7 +70,7 @@ def build_refresh_plan(
 
     changes = database[change_collection]
     change_would_update = 0
-    cursor = changes.find({}, {"so_code": 1, "is_5000_company": 1})
+    cursor = changes.find({"_prodh_scope": "00100"}, {"so_code": 1, "is_5000_company": 1})
     try:
         for document in cursor:
             service_order = str(document.get("so_code") or "").strip()
@@ -116,6 +117,7 @@ def refresh(database: Any, *, apply: bool) -> dict[str, Any]:
             database[change_collection],
             company_service_orders,
         )
+        result["classification_pending_updated"] = consume(database, doa_collection, change_collection)
         result["company_service_orders"] = len(company_service_orders)
         return result
 

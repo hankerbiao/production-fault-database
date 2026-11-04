@@ -27,12 +27,15 @@ if str(ROOT) not in sys.path:
 from pymongo import MongoClient
 
 from scripts.sources.hana.hana_view_sync import env, install_graceful_shutdown, load_dotenv, mongo_client_options, mongo_uri
-from scripts.sync_runtime import Lease as ResourceLease, check_leases, error_payload
+from scripts.sync_runtime import Lease as ResourceLease, check_leases, error_payload, validate_scope_environment
 
 
 RUN_COLLECTION = "sync_orchestrator_runs"
+PUBLICATION_COLLECTION = "sync_publications"
+PUBLICATION_REQUIRED_TASKS = frozenset({"sales_orders", "station_records", "repair_records"})
 LOCK_NAME = "sync-orchestrator"
 DEFAULT_RETRY_ATTEMPTS = 3
+PAUSED_TASK_IDS = frozenset({"serial_bindings"})
 
 
 @dataclass(frozen=True)
@@ -44,7 +47,18 @@ class Task:
     priority: int = 0
     full_supported: bool = True
 
-    def command(self, python: str, mode: str, start_date: str | None, end_date: str | None, run_id: str | None = None) -> list[str]:
+    def command(
+        self,
+        python: str,
+        mode: str,
+        start_date: str | None,
+        end_date: str | None,
+        run_id: str | None = None,
+        *,
+        all_prodh: bool = False,
+    ) -> list[str]:
+        if all_prodh:
+            raise ValueError("--all-prodh 已禁用，所有同步必须限定 00100")
         path = str(ROOT / self.script)
         args = [python, path]
         if self.id == "sales_orders":
@@ -58,6 +72,8 @@ class Task:
                 args.extend(["--start-date", start_date or ""])
             if end_date:
                 args.extend(["--end-date", end_date])
+        elif self.id == "scs_doa_gstrs":
+            args.append("--apply")
         elif self.id == "order_bom_planned_start":
             args.append("--apply")
             if run_id:
@@ -99,11 +115,20 @@ def resolve_tasks(requested: Iterable[str] | None, *, skip_scs: bool = False) ->
     unknown = sorted(set(requested_ids) - TASK_BY_ID.keys())
     if unknown:
         raise SyncError("未知同步任务: " + ", ".join(unknown), code="invalid_task")
+    requested_ids = [task_id for task_id in requested_ids if task_id not in PAUSED_TASK_IDS]
+    if not requested_ids:
+        raise SyncError("序列号绑定同步已暂停，没有可执行的同步任务", code="invalid_request")
+    if skip_scs:
+        requested_ids = [task_id for task_id in requested_ids if not task_id.startswith("scs_")]
+        if not requested_ids:
+            raise SyncError("跳过 SCS 后没有可执行的同步任务", code="invalid_request")
     resolved: set[str] = set()
 
     def visit(task_id: str) -> None:
         if task_id in resolved:
             return
+        if task_id in PAUSED_TASK_IDS:
+            raise SyncError(f"同步任务 {task_id} 已暂停，无法作为依赖执行", code="invalid_request")
         task = TASK_BY_ID[task_id]
         for dependency in task.dependencies:
             visit(dependency)
@@ -111,11 +136,9 @@ def resolve_tasks(requested: Iterable[str] | None, *, skip_scs: bool = False) ->
 
     for task_id in requested_ids:
         visit(task_id)
+    if "scs_doa" in resolved:
+        visit("scs_doa_gstrs")
     tasks = sorted((TASK_BY_ID[task_id] for task_id in resolved), key=lambda item: item.priority)
-    if skip_scs:
-        tasks = [task for task in tasks if not task.id.startswith("scs_")]
-        if not tasks:
-            raise SyncError("跳过 SCS 后没有可执行的同步任务", code="invalid_request")
     return tasks
 
 
@@ -161,13 +184,26 @@ class Lease(ResourceLease):
 class RunStore:
     def __init__(self, db: Any):
         self.collection = db[RUN_COLLECTION]
+        self.publications = db[PUBLICATION_COLLECTION]
         self.collection.create_index([("state", 1), ("started_at", -1)])
         self.collection.create_index("heartbeat_at")
+        self.publications.create_index([("state", 1), ("updated_at", -1)])
+        self.publications.create_index("published_at")
 
     def abandon_stale(self, cutoff: datetime) -> None:
+        now = datetime.now(timezone.utc)
         self.collection.update_many(
             {"state": "running", "heartbeat_at": {"$lt": cutoff}},
-            {"$set": {"state": "abandoned", "finished_at": datetime.now(timezone.utc), "message": "编排器心跳超时"}},
+            {"$set": {"state": "abandoned", "finished_at": now, "message": "编排器心跳超时"}},
+        )
+        self.publications.update_many(
+            {"_id": "prodh-00100", "state": "running", "updated_at": {"$lt": cutoff}},
+            {"$set": {
+                "state": "stale",
+                "updated_at": now,
+                "message": "发布账本心跳超时，保留上一版发布",
+                "last_error": "发布账本心跳超时",
+            }},
         )
 
     def create(self, run_id: str, *, mode: str, requested: list[str], tasks: list[Task], start_date: str | None, end_date: str | None, source: str) -> None:
@@ -192,6 +228,72 @@ class RunStore:
 
     def run(self, run_id: str) -> dict[str, Any] | None:
         return self.collection.find_one({"_id": run_id})
+
+    def begin_publication(self, run_id: str, tasks: list[Task]) -> None:
+        now = datetime.now(timezone.utc)
+        previous = self.publications.find_one({"_id": "prodh-00100"}, {"active_run_id": 1})
+        self.publications.update_one(
+            {"_id": "prodh-00100"},
+            {"$set": {
+                "state": "running",
+                "run_id": run_id,
+                "task_ids": [task.id for task in tasks],
+                "prodh_list": ["00100"],
+                "started_at": now,
+                "updated_at": now,
+                "previous_run_id": (previous or {}).get("active_run_id"),
+            }, "$unset": {
+                "last_error": "",
+                "last_failed_run_id": "",
+                "message": "",
+            }},
+            upsert=True,
+        )
+
+    def publish(self, run_id: str, tasks: list[Task]) -> None:
+        now = datetime.now(timezone.utc)
+        task_ids = {task.id for task in tasks}
+        if not PUBLICATION_REQUIRED_TASKS.issubset(task_ids):
+            self.publications.update_one(
+                {"_id": "prodh-00100", "run_id": run_id},
+                {"$set": {
+                    "state": "partial",
+                    "updated_at": now,
+                    "message": "核心订单、工位、维修任务未全部完成，保留上一版发布",
+                }, "$unset": {
+                    "last_error": "",
+                    "last_failed_run_id": "",
+                }},
+            )
+            return
+        self.publications.update_one(
+            {"_id": "prodh-00100", "run_id": run_id},
+            {"$set": {
+                "state": "ready",
+                "active_run_id": run_id,
+                "task_ids": sorted(task_ids),
+                "prodh_list": ["00100"],
+                "published_at": now,
+                "updated_at": now,
+                "message": "核心订单、工位、维修任务已发布",
+            }, "$unset": {
+                "last_error": "",
+                "last_failed_run_id": "",
+            }},
+        )
+
+    def fail_publication(self, run_id: str, message: str, *, preserve_ready: bool = False) -> None:
+        fields = {
+            "last_failed_run_id": run_id,
+            "last_error": message,
+            "updated_at": datetime.now(timezone.utc),
+        }
+        if not preserve_ready:
+            fields["state"] = "failed"
+        self.publications.update_one(
+            {"_id": "prodh-00100", "run_id": run_id},
+            {"$set": fields},
+        )
 
 
 def json_result(output: str, task: Task, mode: str) -> dict[str, Any]:
@@ -272,28 +374,62 @@ class Orchestrator:
         self.python = python or os.getenv("SYNC_PYTHON", sys.executable)
         self.attempts = max(1, attempts)
 
-    def execute(self, *, mode: str, requested: list[str] | None = None, start_date: str | None = None, end_date: str | None = None, source: str = "cli", run_id: str | None = None, skip_scs: bool = False) -> dict[str, Any]:
+    def execute(
+        self,
+        *,
+        mode: str,
+        requested: list[str] | None = None,
+        start_date: str | None = None,
+        end_date: str | None = None,
+        source: str = "cli",
+        run_id: str | None = None,
+        skip_scs: bool = False,
+        all_prodh: bool = False,
+    ) -> dict[str, Any]:
+        validate_scope_environment()
+        if all_prodh:
+            raise ValueError("--all-prodh 已禁用，所有同步必须限定 00100")
+        if source == "cron" and skip_scs and env("SYNC_ALLOW_CRON_SKIP_SCS", "").lower() not in {"1", "true", "yes"}:
+            raise SyncError(
+                "cron 不允许跳过 SCS；请移除 --skip-scs，临时例外需显式设置 SYNC_ALLOW_CRON_SKIP_SCS=true",
+                code="invalid_request",
+            )
         tasks, start, end = validate_request(mode, requested, start_date, end_date, skip_scs=skip_scs)
         run_id = run_id or uuid4().hex
         lease = Lease(self.db, run_id, int(os.getenv("SYNC_ORCHESTRATOR_LEASE_SECONDS", "120")))
         lease.acquire()
         current_task: Task | None = None
+        publication_published = False
+        completed_tasks: set[str] = set()
         try:
             self.store.abandon_stale(datetime.fromtimestamp(time.time() - int(os.getenv("SYNC_ORCHESTRATOR_STALE_SECONDS", "300")), timezone.utc))
             self.store.create(run_id, mode=mode, requested=list(requested or [task.id for task in tasks]), tasks=tasks, start_date=start, end_date=end, source=source)
+            self.store.begin_publication(run_id, tasks)
             for task in tasks:
                 current_task = task
                 if lease.lost:
                     raise SyncError("同步租约已丢失", code="lease_lost")
-                result = self._execute_task(run_id, task, mode, start, end)
+                result = self._execute_task(run_id, task, mode, start, end, all_prodh=all_prodh)
                 if not result.get("success"):
                     error = result.get("error") or {"code": "task_failed", "message": f"{task.id} 同步失败", "retryable": False}
+                    self.store.fail_publication(
+                        run_id,
+                        str(error.get("message", error) if isinstance(error, dict) else error),
+                        preserve_ready=publication_published,
+                    )
                     self.store.finish(run_id, "failed", str(error.get("message", error) if isinstance(error, dict) else error))
                     self._skip_remaining(run_id, tasks, task)
                     return self.store.run(run_id) or {"_id": run_id, "state": "failed"}
+                completed_tasks.add(task.id)
+                if not publication_published and PUBLICATION_REQUIRED_TASKS.issubset(completed_tasks):
+                    self.store.publish(run_id, tasks)
+                    publication_published = True
+            if not publication_published:
+                self.store.publish(run_id, tasks)
             self.store.finish(run_id, "success", "同步完成")
             return self.store.run(run_id) or {"_id": run_id, "state": "success"}
         except Exception as exc:
+            self.store.fail_publication(run_id, str(exc), preserve_ready=publication_published)
             if current_task:
                 self.store.stage(run_id, current_task.id, state="failed", error=error_payload(exc),
                                  finished_at=datetime.now(timezone.utc))
@@ -311,10 +447,19 @@ class Orchestrator:
         check_leases(verify=True)
         self.store.heartbeat(run_id)
 
-    def _execute_task(self, run_id: str, task: Task, mode: str, start: str | None, end: str | None) -> dict[str, Any]:
+    def _execute_task(
+        self,
+        run_id: str,
+        task: Task,
+        mode: str,
+        start: str | None,
+        end: str | None,
+        *,
+        all_prodh: bool = False,
+    ) -> dict[str, Any]:
         for attempt in range(1, self.attempts + 1):
             self.store.stage(run_id, task.id, state="running", attempts=attempt, started_at=datetime.now(timezone.utc), finished_at=None, error=None)
-            command = task.command(self.python, mode, start, end, run_id)
+            command = task.command(self.python, mode, start, end, run_id, all_prodh=all_prodh)
             log_prefix = Path(env("SYNC_TASK_LOG_DIR", str(ROOT / "logs" / "syncctl"))) / f"{run_id}.{task.id}.{attempt}"
             self.store.stage(run_id, task.id, log_prefix=str(log_prefix))
             try:
@@ -367,6 +512,7 @@ def main() -> int:
     run_parser.add_argument("--mode", choices=("incremental", "full"), default="incremental")
     run_parser.add_argument("--tasks", nargs="*", help="任务 ID；省略则执行全部任务")
     run_parser.add_argument("--skip-scs", action="store_true", help="跳过 SCS DOA 和换上换下采集，保留其他任务及其依赖")
+    run_parser.add_argument("--all-prodh", action="store_true", help="已禁用，所有同步必须限定 00100")
     run_parser.add_argument("--start-date")
     run_parser.add_argument("--end-date")
     run_parser.add_argument("--source", default="cli")
@@ -381,7 +527,16 @@ def main() -> int:
         install_graceful_shutdown()
         client = MongoClient(mongo_uri(), **mongo_client_options())
         try:
-            result = Orchestrator(client[env("MONGODB_DATABASE")]).execute(mode=args.mode, requested=args.tasks, start_date=args.start_date, end_date=args.end_date, source=args.source, run_id=args.run_id, skip_scs=args.skip_scs)
+            result = Orchestrator(client[env("MONGODB_DATABASE")]).execute(
+                mode=args.mode,
+                requested=args.tasks,
+                start_date=args.start_date,
+                end_date=args.end_date,
+                source=args.source,
+                run_id=args.run_id,
+                skip_scs=args.skip_scs,
+                all_prodh=args.all_prodh,
+            )
         finally:
             client.close()
         print(json.dumps(serialize(result), ensure_ascii=False, default=str))

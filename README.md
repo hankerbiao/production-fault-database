@@ -113,7 +113,7 @@ BACKEND_PORT=18080 FRONTEND_PORT=5174 ./scripts/devctl.sh restart
 
 ### 维修故障主同步与清洗
 
-`scripts/sync/增量同步和清洗维修故障记录.py` 是维修故障记录唯一的同步和清洗脚本：默认按 `ZDATE_WX` 刷新当月及前两个月的完整快照，再回填订单和计划生产时间，成功后清理窗口内未覆盖的旧记录，不另存归档副本。具体恢复和保护机制以 [`scripts/sync/README.md`](scripts/sync/README.md) 为准。它从工位记录表构建集合 A：仅保留
+`scripts/sync/增量同步和清洗维修故障记录.py` 是维修故障记录同步和清洗脚本：默认按 `ZDATE_WX` 刷新当月及前两个月的完整快照，再回填订单和计划生产时间，成功后按 `PCODE + ZWXDT + ZMCOD1 + ZRCOD1 + MATNR` 清理字段兼容的重复记录。具体恢复和保护机制以 [`scripts/sync/README.md`](scripts/sync/README.md) 为准。它从工位记录表构建集合 A：仅保留
 `PCODE`、`AUFNR`、`KDAUF` 均非空且同一 `PCODE` 仅对应一个不同 `(AUFNR, KDAUF)`
 组合的数据。发生多订单冲突的序列号会在汇总中计数并跳过。随后脚本只处理维修表中
 `VBELN` 缺失、`null`、空串或仅空白的记录，并同时回填 `AUFNR` 和 `VBELN`。
@@ -223,7 +223,7 @@ PCODE 查询 SG（client 800）。该模式只回填当前为空的 AUFNR，始�
   --apply --skip-hana-sync
 ```
 
-默认顺序为：完整读取并校验 HANA 滚动快照、写入维修表、构建订单来源并回填空字段、核对覆盖数量并清理窗口内旧记录。
+默认顺序为：完整读取并校验 HANA 滚动快照、确认 00100 归属、写入维修表、构建订单来源并回填空字段、核对覆盖数量并清理字段兼容的重复记录。
 回填或 SAP 查询失败时不进入后续快照清理，重跑会重新校验窗口。`--sync-end-date YYYY-MM-DD` 控制窗口结束日期；
 `--sync-lookback-days` 仅保留命令兼容，不控制当前滚动快照范围，也不再推进旧维修水位线。
 
@@ -231,8 +231,8 @@ PCODE 查询 SG（client 800）。该模式只回填当前为空的 AUFNR，始�
 SAP SN 存在任一失败批次时，`--apply` 会在写入前停止。只有明确接受部分 SAP 结果时才使用
 `--allow-partial-sap`。
 
-全量同步必须传入 `--start-date`。全量数据先按本次 `run_id` 写入，清洗成功后才删除未出现在本次
-运行中的旧数据并提交水位线；同步或清洗失败时不会删除旧数据，也不会推进水位线。增量清洗只处理
+全量同步必须传入 `--start-date`。全量数据先完整暂存和校验，再按本次 `run_id` 写入；
+缺少来源覆盖证明时，不按本次未返回删除旧记录。同步或清洗失败时不会推进水位线。增量清洗只处理
 本次同步写入的数据。每个命令输出含 `sync`、`cleanup`、`run_id` 和执行统计的 JSON 报告。
 
 ### 1. 销售订单表 `sales_orders_sap`
@@ -240,12 +240,12 @@ SAP SN 存在任一失败批次时，`--apply` 会在写入前停止。只有明
 | 项目 | 说明 |
 |---|---|
 | 数据来源 | SAP HTTP 接口 `ZSIMS_CL_INBOUND_MO_PSINFO`，分别访问 SG（client 800）和 KK（client 600） |
-| 请求参数 | `CHDAT`、`CHDAT_TO`；默认带 `PRODH_LIST=00100`，可用 `--all-prodh` 取消 |
+| 请求参数 | `CHDAT`、`CHDAT_TO`；始终显式发送 `PRODH_LIST=["00100"]`，`--all-prodh` 和其他产品值会报错 |
 | 目标集合 | `.env` 的 `TARGET_COLLECTION`，默认 `sales_orders_sap` |
 | 业务唯一键 | `source + AUFNR`；MongoDB `_id` 为 `{source}:{AUFNR}`，SG/KK 同号不会互相覆盖 |
-| 增量水位 | `sync_checkpoints` 中的 `sales_orders:SG`、`sales_orders:KK`，按接口查询日期推进 |
+| 增量水位 | `sync_checkpoints` 按来源、固定产品范围及接口契约隔离；旧的未标明过滤范围的水位不自动继承 |
 | 增量窗口 | 水位日期向前回看 `SYNC_LOOKBACK_DAYS` 天（默认 7 天）到当天，覆盖迟到或修改记录 |
-| 全量窗口 | `--full --start-date YYYY-MM-DD`；按 `FULL_WINDOW_DAYS`（默认 7 天）分段请求，SAP `No Data` 视为空窗。仅当起始日期不晚于 `2026-01-01` 且结束日期覆盖当天时，成功后才清理本次未覆盖的 SG/KK 旧订单；更晚的起始日期只补数不删历史。本次写入为 0 或待删超过写入量 2 倍时拒绝清理，除非 `--replace-collection --confirm-delete`。失败时保留旧数据 |
+| 全量窗口 | `--full --start-date YYYY-MM-DD`；按 `FULL_WINDOW_DAYS`（默认 7 天）分段请求，SAP `No Data` 视为空窗。跨窗校验、按稳定明细键合并后写入；没有源覆盖证明时不删除未返回订单，拒绝 `--replace-collection`。某来源本地非空而全窗返回空时失败 |
 | 历史状态刷新 | 日常增量后额外读取 `2026-01-01` 至本次结束日期的 SG/KK 数据，仅核对源返回的已有订单。先完整读取和校验，再通过临时 SQLite 索引严格匹配代表行及明细，同时刷新 `ZSTAT` 和 `AUART`；任一行未匹配或状态/订单类型缺失时，该订单不更新，任务失败且不推进水位。未返回订单单独报告为未覆盖，不推断为缺失。支持 `--status-start-date` 和 `--skip-status-refresh`；全量同步不重复查询 |
 
 立即单独刷新已有订单状态：先运行 `.venv/bin/python scripts/maintenance/refresh_sales_order_status.py` 预览，再加 `--apply` 写入。该脚本不新增或删除订单，不修改数量字段和增量水位，与日常同步共用集合锁；详细行为及统计见 [`scripts/sync/README.md`](scripts/sync/README.md)。
@@ -258,7 +258,7 @@ SAP SN 存在任一失败批次时，`--apply` 会在写入前停止。只有明
 | `source` | string | SAP 来源：`SG` 或 `KK` |
 | `aufnr` | string | 生产订单号（接口 `AUFNR`） |
 | `source_aufnr` | string | 来源和生产订单的组合键 |
-| `data` | object | 接口返回的最新一条订单记录，保留全部源字段，如 `VBELN`、`KID`、`NAME1_ZU`、`MAKTX_TH`、`LGORT`、`GSTRS`、`ZDATE_STARTED`、`GAMNG`、`WMENG` |
+| `data` | object | 00100 明细中的代表行，保留源字段；完整匹配使用 `records`，不把请求顺序视为源版本 |
 | `records` | array | 同一来源、同一 `AUFNR` 返回的全部明细行 |
 | `record_count` | integer | `records` 的行数 |
 | `order_quantity` | number | 明细 `GAMNG`（订单数量）求和 |
@@ -267,7 +267,7 @@ SAP SN 存在任一失败批次时，`--apply` 会在写入前停止。只有明
 | `first_seen_at` | datetime | 首次写入时间，仅插入时设置 |
 | `last_synced_at` | datetime | 最近一次同步时间 |
 | `sync_count` | integer | 成功 upsert 次数 |
-| `_scope_run_id` | string | 最近一次成功全量同步批次；用于清理全量范围外旧订单 |
+| `_scope_run_id` | string | 最近一次全量写入批次，用于覆盖诊断，不独立授权删除 |
 
 ### 2. 维修数据表 `repair_records_sap`
 
@@ -275,12 +275,12 @@ SAP SN 存在任一失败批次时，`--apply` 会在写入前停止。只有明
 |---|---|
 | 数据来源 | SAP HANA 视图 `"_SYS_BIC"."BW_LOCAL.PP/ZSGV_ZZT_WLJL"` |
 | 目标集合 | `.env` 的 `REPAIR_COLLECTION`，默认 `repair_records_sap` |
-| 日期范围 | 按 `ZDATE_WX` 刷新当月及前两个月，最早 `2026-01-01`；结束日期由 `--sync-end-date` 指定。首次全部历史导入使用 `--mode full --start-date 2026-01-01` |
-| 销售订单匹配 | 本地销售订单仅用于匹配统计；参考数据为空不阻断同步，空值和未匹配 VBELN 均保留并计数 |
-| 业务唯一键 | `MANDT + PCODE + ZWXDT + ZMCOD1 + ZMCOD2`；身份缺失或冲突阻断，不使用可变整行哈希 |
+| 日期范围 | 按 `ZDATE_WX` 刷新当月及前两个月，最早 `2025-01-01`；结束日期由 `--sync-end-date` 指定。首次历史导入可使用 `--mode full --start-date 2025-01-01` |
+| 销售订单匹配 | 按来源兼容的完整销售明细或可信主机关系确认 00100；未知、歧义记录持久化待核对，不进入正式集合 |
+| 业务唯一键 | `MANDT + PCODE + ZWXDT + ZMCOD1 + ZRCOD1 + ZMCOD2 + ZRCOD2`（v3）；身份缺失或冲突阻断，不使用可变整行哈希 |
 | 增量水位 | 不再读取或推进旧 `ZDATE + ZTIME` 水位，使用滚动快照 |
 | 写入方式 | 完整源数据在临时 SQLite 校验后，MongoDB 分批幂等写入和回填 |
-| 快照清理 | 成功且覆盖数量一致后，直接删除窗口内未覆盖记录；窗口之外保留，原始数据由外部系统备份 |
+| 快照清理 | 成功且覆盖数量一致后，仅清理已由 canonical 文档接管的同身份别名；未返回记录保留 |
 
 维修原始字段来自 HANA 视图，脚本当前同步以下字段：
 
@@ -299,8 +299,8 @@ RECORD01REPAIRM SLOT AUFNR VBELN POSNR U_FIND U_RMA_NAME RMA_RESULT RMA_TYPE2
 
 | 脚本 | 目标集合 | 同步后自动处理 |
 |---|---|---|
-| `scripts/sync/增量同步和清洗维修故障记录.py` | `repair_records_sap` | HANA 滚动快照、订单与 `GSTRS` 回填、窗口内旧记录清理 |
-| `scripts/sync/station_records.py` | `station_records_sap` | 销售订单/生产订单字段补全和无效销售订单清理 |
+| `scripts/sync/增量同步和清洗维修故障记录.py` | `repair_records_sap` | HANA 滚动快照、订单与 `GSTRS` 回填、确认重复身份清理 |
+| `scripts/sync/station_records.py` | `station_records_sap` | 同步所有产品过站记录；可确定时补全订单字段，参考缺失不删除 |
 | `scripts/sync/order_bom_postings.py` | `order_bom_postings_sap` | 仅保留 `CPX=5000公司` |
 | `scripts/sync/serial_bindings.py` | `serial_bindings_sap` | 仅删除完整业务键的精确重复记录，保留并统计不完整键 |
 
@@ -318,6 +318,19 @@ RECORD01REPAIRM SLOT AUFNR VBELN POSNR U_FIND U_RMA_NAME RMA_RESULT RMA_TYPE2
 
 该参数也支持全量模式及 `--tasks` 指定的任务；过滤后没有可执行任务会报错。
 恢复 SCS 采集时移除该参数即可。
+
+同步 2025 全年且排除 SCS 时，使用 `--skip-scs`，产品仍固定为 00100：
+
+```bash
+.venv/bin/python scripts/sync/syncctl.py run --mode full \
+  --start-date 2025-01-01 --end-date 2025-12-31 \
+  --skip-scs --source 2025-full
+```
+
+2025 年销售订单按已验证明细合并；没有稳定明细契约时阻断同键冲突，不按源缺失删除旧订单。
+维修须通过 00100 归属校验；工位过站及 BOM 同步不限制产品范围，BOM 仍按 CPX 公司规则清理。
+序列号绑定源视图无日期字段，按当前全表快照同步；BOM 计划开始时间回填也按当前 BOM 集合执行。
+正式运行会写入和清理目标 MongoDB，SAP 源端保持只读，运行前应先备份目标集合。
 
 编排器会记录 MongoDB 运行历史、阶段摘要、心跳和失败原因；全量同步需显式指定任务及起始日期：
 
@@ -398,7 +411,7 @@ MongoDB 的 `sync_locks` 租约锁跨主机协调；租约时长由 `SYNC_MONGO_
 
 `scripts/sources/scs_doa_sync.py` 登录 SCS 后同步 DOA 申报列表，并沿服务单和物料 SN
 补充设备、产品实体信息。目标集合默认为 `scs_doa_records`，检查点写入
-`sync_checkpoints` 的 `_id=scs_doa`，以 `declare_time` 作为增量水位；DOA 申报单号是稳定幂等键。
+`sync_checkpoints` 的 `scs_doa:scs:prodh-00100:v1`，以 `declare_time` 作为增量水位；DOA 申报单号是稳定幂等键。
 
 `is_5000_company` 直接按 DOA 自身销售订单号是否以 `XNC` 开头判定，去除首尾空白并忽略大小写；
 订单号为空或其他前缀时为 false，不再关联销售订单交付明细，也不对订单号补位。
@@ -413,7 +426,7 @@ MongoDB 的 `sync_locks` 租约锁跨主机协调；租约时长由 `SYNC_MONGO_
 
 默认仅预览预计变更数，`--apply` 按集合资源锁分批更新，重复执行只更新变化值。
 销售订单交付明细自 2026-10-15 起停用，页面、查询 API、物化汇总和同步入口已移除。
-SCS DOA 无前置数据同步依赖，换上换下仍依赖 DOA。升级时先重新构建并重启 Go 后端，
+SCS DOA 依赖销售订单提供 00100 归属证明，换上换下依赖已核实的 DOA。升级时先重新构建并重启 Go 后端，
 再运行 `scripts/maintenance/remove_sales_order_delivery.py --apply` 清理明细、历史汇总及其同步元数据；
 不带 `--apply` 时仅预览。此脚本可重复执行，不访问 SAP HANA。
 
@@ -430,21 +443,21 @@ python scripts/sources/scs_doa_sync.py
 python scripts/sources/scs_doa_sync.py --dry-run
 ```
 
-详情请求失败时保留列表和旧有效详情，并用 `_detail_pending`、`_detail_error` 记录待补状态；完整全量成功后才清理
-读取窗口内未覆盖的 SCS 文档。可用 `SCS_DOA_COLLECTION`、`SCS_LOOKBACK_DAYS`、`SCS_TIMEOUT`
+详情请求失败时保留旧有效列表和详情，用 `_detail_pending`、`_detail_error` 记录待补状态，新行持久化待核对；
+缺少来源覆盖证明时，全量也不删除未返回文档。可用 `SCS_DOA_COLLECTION`、`SCS_LOOKBACK_DAYS`、`SCS_TIMEOUT`
 和 `SCS_PAGE_SIZE` 覆盖默认配置。每次 HTTP 请求默认随机等待 3–5 秒，可通过
 `SCS_REQUEST_DELAY_MIN` 和 `SCS_REQUEST_DELAY_MAX` 调整。
-详情按 `SCS_WRITE_BATCH_SIZE`（默认 25）分批写入，抓取过程中看板会逐步显示已完成记录。
-同步日志输出分页、写入和详情错误数量。增量从上次 `declare_time` 水位回看 `SCS_LOOKBACK_DAYS`（默认 2 天）；水位支持 ISO 时间。水位缺失或无法解析时按当天回看。列表字段未变化且已有完整详情的记录跳过详情页。失败重跑从窗口第一页读取并按业务键去重，不按变化的页码或行索引跳过记录；历史待补详情每次额外补偿最多 `SCS_DETAIL_RETRY_LIMIT` 条，默认 100。
+列表、详情先暂存并校验，再按 `SCS_WRITE_BATCH_SIZE`（默认 25）分批写入。
+同步摘要输出分页、写入、范围积压和详情错误数量。增量从上次 `declare_time` 水位回看 `SCS_LOOKBACK_DAYS`（默认 2 天）；水位支持 ISO 时间。缺少新范围检查点时须先全量补跑。全量强刷详情；增量对变化、待补、旧解析版本或超过 `SCS_DETAIL_TTL_DAYS`（默认 7 天）的详情刷新。失败重跑从窗口第一页读取并按业务键去重；历史详情每次限额补偿 `SCS_DETAIL_RETRY_LIMIT` 条，默认 100。
 
 ### 5. SCS 换上换下数据源
 
 `scripts/sources/scs_change_sync.py` 同步 SCS“数据查询 -> 换上换下”结果页，目标集合默认为
-`scs_change_records`，检查点为 `sync_checkpoints` 的 `_id=scs_changes`，以“操作时间”作为增量水位。
+`scs_change_records`，检查点为 `sync_checkpoints` 的 `scs_changes:scs:prodh-00100:v1`，以“操作时间”作为增量水位。
 记录按服务单号、设备 SN、操作类型、备件 PN/SN、操作时间和操作人组成的哈希幂等写入；每条记录的
 `is_5000_company` 通过服务单号匹配 `scs_doa_records` 中已判定为 5000 公司的 DOA 记录。
 
-换上换下同步固定限制在 2026 年（`2026-01-01` 至 `2026-12-31`），不会抓取其他年份。增量从上次操作时间水位回看 `SCS_LOOKBACK_DAYS`（默认 2 天）；水位缺失时同样按当天回看，避免再次爬取全年。
+换上换下同步固定限制在 2026 年（`2026-01-01` 至 `2026-12-31`），不会抓取其他年份。增量从上次操作时间水位回看 `SCS_LOOKBACK_DAYS`（默认 2 天）；缺少新范围检查点时须先全量补跑。范围未知记录持久化待核对，公司分类不能替代 00100 证明。
 每次登录或列表 HTTP 请求会随机等待 5-10 秒，可通过 `SCS_CHANGE_REQUEST_DELAY_MIN/MAX` 调整。
 日志会持续展示当前页、已抓取数量、已入库数量和 checkpoint 位置。
 

@@ -31,8 +31,10 @@ ROOT = PROJECT_ROOT
 CHECKPOINT_PREFIX = "hana_views:"
 
 from scripts.sync_runtime import (
-    Snapshot, cleanup_records, check_leases, validate_snapshot_cleanup,
+    Snapshot, batches, check_leases, clear_scope_pending, required_prodh_list,
+    save_scope_pending, validate_scope_environment, verified_bulk_write,
 )
+from scripts.sales_order_reference import SalesReferences
 
 
 def install_graceful_shutdown() -> None:
@@ -376,6 +378,10 @@ def configured_spec(view_id: str) -> ViewSpec:
     return replace(spec, collection=env(collection_env[view_id], spec.collection))
 
 
+def view_checkpoint_id(spec: ViewSpec) -> str:
+    return CHECKPOINT_PREFIX + spec.view_id
+
+
 def view_scope(spec: ViewSpec, start: str | None, end: str | None) -> dict[str, Any]:
     query: dict[str, Any] = {"_source_view": spec.view_id}
     if spec.start_date_field and (start or end):
@@ -404,6 +410,7 @@ def sync_view(
     preview_snapshot: Snapshot | None = None,
     allow_large_cleanup: bool = False,
 ) -> dict[str, Any]:
+    bounded_views = {"Z_V_ZMES_T_001": "工位记录", "ZSGV_ZSD124": "订单 BOM"}
     if batch_size < 1 or lookback_days < 0:
         raise ValueError("batch-size 必须大于 0，lookback-days 不能为负数")
     run_id = uuid4().hex
@@ -436,10 +443,14 @@ def sync_view(
         database = mongo_client[env("MONGODB_DATABASE")]
         collection = database[spec.collection]
         checkpoints = database[env("SYNC_CHECKPOINT_COLLECTION", "sync_checkpoints")]
-        checkpoint = checkpoints.find_one({"_id": CHECKPOINT_PREFIX + spec.view_id})
+        checkpoint = checkpoints.find_one({"_id": view_checkpoint_id(spec)})
+        if spec.view_id in bounded_views and mode == "incremental" and not start_date and not (checkpoint or {}).get("watermark"):
+            raise RuntimeError(f"{bounded_views[spec.view_id]}缺少同步检查点，请指定 --start-date，拒绝无时间下限的增量读取")
+        stats.update(in_scope=0, out_of_scope=0, scope_pending=0, scope_rule_version=2)
+        stats.update(coverage_verified=False, cleanup="disabled_unverified_coverage")
         sql, params = build_query(spec, checkpoint, mode, start_date, lookback_days, end_date)
         watermark = None
-        with Snapshot() as snapshot:
+        with Snapshot() as snapshot, Snapshot() as raw:
             with hana_connection() as connection:
                 cursor = connection.cursor()
                 try:
@@ -449,18 +460,43 @@ def sync_view(
                         for values in rows:
                             row = dict(zip(spec.columns, values, strict=True))
                             watermark = max_watermark(spec, watermark, row)
-                            snapshot.add(source_key(row, spec), {field: bson_value(value) for field, value in row.items()})
+                            raw.add(source_key(row, spec), {field: bson_value(value) for field, value in row.items()})
                             stats["source_rows"] += 1
                         stats["batches"] += 1
                         if stats["batches"] == 1 or stats["batches"] % 100 == 0:
                             progress_log(f"[{spec.view_id}] 读取进度：batches={stats['batches']:,} rows={stats['source_rows']:,}")
                 finally:
                     cursor.close()
+            dataset = f"hana:{spec.view_id}"
+            refs = SalesReferences.load(database[env("TARGET_COLLECTION", "sales_orders_sap")])
+            if not refs.rows:
+                raise RuntimeError("销售订单表为空，无法判断公司归属")
+            for document in database["sync_scope_pending"].find({"dataset": dataset}):
+                if not raw.contains(document["key"]):
+                    raw.add(document["key"], document["payload"])
+            pending_operations = []
+            for key, row in raw:
+                scope = refs.company_scope(row)
+                stats["scope_pending" if scope == "pending" else scope] += 1
+                if scope == "in_scope":
+                    snapshot.add(key, {**row, "_prodh_scope": "00100", "_scope_rule_version": 2})
+                elif scope == "pending" and not dry_run:
+                    if spec.view_id == "ZSGV_ZPP_SERNOLIST":
+                        pending_operations.append(UpdateOne(
+                            {"_id": f"{dataset}:{key}"},
+                            {"$set": {"dataset": dataset, "key": key, "payload": row,
+                                      "updated_at": datetime.now(timezone.utc),
+                                      "prodh_list": required_prodh_list()}}, upsert=True,
+                        ))
+                        if len(pending_operations) >= batch_size:
+                            verified_bulk_write(database["sync_scope_pending"], pending_operations)
+                            pending_operations.clear()
+                    else:
+                        save_scope_pending(database, dataset, key, row)
+            if pending_operations:
+                verified_bulk_write(database["sync_scope_pending"], pending_operations)
             stats.update(watermark=watermark, unique_rows=snapshot.count,
-                         duplicate_source_keys=snapshot.duplicates, snapshot_complete=True)
-            if mode == "full":
-                validate_snapshot_cleanup(collection, view_scope(spec, start_date, end_date), snapshot,
-                                          allow=allow_large_cleanup)
+                         duplicate_source_keys=raw.duplicates, snapshot_complete=True)
             if dry_run and preview_snapshot is not None:
                 for key, document in snapshot:
                     preview_snapshot.add(key, {**document, "_source_view": spec.view_id,
@@ -481,13 +517,18 @@ def sync_view(
 
                 def flush() -> None:
                     if operations:
-                        check_leases(verify=True)
-                        result = collection.bulk_write(operations, ordered=False)
+                        result = verified_bulk_write(collection, operations)
                         stats["upserted"] += result.upserted_count
-                        stats["matched"] += getattr(result, "matched_count", 0)
-                        stats["modified"] += getattr(result, "modified_count", 0)
+                        stats["matched"] += result.matched_count
+                        stats["modified"] += result.modified_count
                         operations.clear()
 
+                pending_keys = (key for key, row in raw if refs.company_scope(row) == "pending")
+                for keys in batches(pending_keys, batch_size):
+                    check_leases(verify=True)
+                    collection.update_many({"_source_key": {"$in": keys}}, {"$unset": {
+                            "_prodh_scope": "", "_scope_rule_version": "",
+                    }})
                 for key, document in snapshot:
                     document.update({"_source_view": spec.view_id, "_source_key": key,
                                      "_sync_run_id": run_id, "_synced_at": datetime.now(timezone.utc)})
@@ -496,6 +537,9 @@ def sync_view(
                     if len(operations) >= batch_size:
                         flush()
                 flush()
+                clear_scope_pending(database, dataset, (
+                    key for key, row in raw if refs.company_scope(row) == "in_scope"
+                ))
         stats["success"] = True
         progress_log(f"[{spec.view_id}] 同步完成：rows={stats['source_rows']:,} batches={stats['batches']:,}")
         if not dry_run and not defer_finalize:
@@ -520,24 +564,22 @@ def finalize_view_run(spec: ViewSpec, sync_result: Mapping[str, Any]) -> dict[st
     client = MongoClient(mongo_uri(), **mongo_client_options())
     try:
         database = client[env("MONGODB_DATABASE")]
-        collection = database[spec.collection]
         deleted = 0
-        if sync_result.get("mode") == "full":
-            scope = view_scope(spec, sync_result["range"]["start"], sync_result["range"]["end"])
-            deleted = cleanup_records(database, spec.collection, scope,
-                {**scope, "_sync_run_id": {"$ne": run_id}}, int(sync_result["unique_rows"]),
-                allow_large_cleanup=bool(sync_result.get("allow_large_cleanup")))
+        # The reference snapshot cannot prove that absent source rows were deleted.
         check_leases(verify=True)
         now = datetime.now(timezone.utc)
         checkpoints = database[env("SYNC_CHECKPOINT_COLLECTION", "sync_checkpoints")]
-        previous = checkpoints.find_one({"_id": CHECKPOINT_PREFIX + spec.view_id}) or {}
+        checkpoint_key = view_checkpoint_id(spec)
+        previous = checkpoints.find_one({"_id": checkpoint_key}) or {}
         candidates = [value for value in (normalize_watermark(spec, previous.get("watermark")),
                                           normalize_watermark(spec, sync_result.get("watermark"))) if value]
         watermark = max(candidates) if candidates else None
-        database[env("SYNC_CHECKPOINT_COLLECTION", "sync_checkpoints")].update_one(
-            {"_id": CHECKPOINT_PREFIX + spec.view_id},
-            {"$set": {"view_id": spec.view_id, "collection": spec.collection, "watermark": watermark, "run_id": run_id, "updated_at": now}},
-            upsert=True,
+        checkpoint_fields = {
+            "view_id": spec.view_id, "collection": spec.collection,
+            "watermark": watermark, "run_id": run_id, "updated_at": now,
+        }
+        checkpoints.update_one(
+            {"_id": checkpoint_key}, {"$set": checkpoint_fields}, upsert=True,
         )
         database[env("SYNC_RUN_COLLECTION", "sync_runs")].update_one(
             {"_id": f"{run_id}:{spec.view_id}"},

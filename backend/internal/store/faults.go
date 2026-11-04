@@ -3,7 +3,6 @@ package store
 import (
 	"context"
 	"strings"
-	"time"
 
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo/options"
@@ -48,45 +47,10 @@ func repairSortFields(f Filters) bson.D {
 
 func (s *Store) repairFilterWithCompany(ctx context.Context, f Filters) (bson.M, error) {
 	filter := repairFilter(f)
-	if f.Company5000 != "yes" && f.Company5000 != "no" {
-		return filter, nil
-	}
-	values, err := s.companyOrderCandidates(ctx)
-	if err != nil {
-		return nil, err
-	}
-	condition := bson.M{"AUFNR": bson.M{"$in": values}}
 	if f.Company5000 == "no" {
-		condition = bson.M{"AUFNR": bson.M{"$nin": values}}
+		return withFilter(filter, bson.M{"_id": bson.M{"$exists": false}}), nil
 	}
-	return withFilter(filter, condition), nil
-}
-
-func (s *Store) companyOrderCandidates(ctx context.Context) ([]string, error) {
-	s.companyOrderCacheMu.Lock()
-	defer s.companyOrderCacheMu.Unlock()
-	if len(s.companyOrderCache) > 0 && time.Since(s.companyOrderCacheAt) < companyOrderCacheTTL {
-		return s.companyOrderCache, nil
-	}
-	items, err := s.orders.Distinct(ctx, "aufnr", bson.M{
-		"aufnr": bson.M{"$exists": true, "$nin": bson.A{"", nil}},
-	})
-	if err != nil {
-		return nil, err
-	}
-	values := normalizedOrderCandidates(items)
-	seen := make(map[string]struct{}, len(values))
-	result := make([]string, 0, len(values))
-	for _, value := range values {
-		if _, ok := seen[value]; ok {
-			continue
-		}
-		seen[value] = struct{}{}
-		result = append(result, value)
-	}
-	s.companyOrderCache = result
-	s.companyOrderCacheAt = time.Now()
-	return result, nil
+	return filter, nil
 }
 
 // FaultSNs returns only the order/SN relationship needed by RTY joins.
@@ -146,7 +110,10 @@ func (s *Store) FaultRowsBySNS(ctx context.Context, sns []string, dateFrom, date
 	if len(values) == 0 {
 		return []bson.M{}, nil
 	}
-	conditions := bson.A{bson.M{"PCODE": bson.M{"$in": values}}}
+	conditions := bson.A{
+		companyScopeFilter(nil),
+		bson.M{"PCODE": bson.M{"$in": values}},
+	}
 	if strings.EqualFold(strings.TrimSpace(timeField), "planned") {
 		if dateFrom != "" || dateTo != "" {
 			conditions = append(conditions, repairPlannedDateRangeFilter(dateFrom, dateTo))
@@ -227,16 +194,16 @@ func faultLookupFilter(f Filters) bson.M {
 		}
 	}
 	if len(conditions) == 0 {
-		return bson.M{"_id": bson.M{"$exists": false}}
+		return companyScopeFilter(bson.M{"_id": bson.M{"$exists": false}})
 	}
-	return bson.M{"$and": conditions}
+	return companyScopeFilter(bson.M{"$and": conditions})
 }
 
 func (s *Store) FaultDetail(ctx context.Context, id string) (FaultDetail, error) {
 	var doc bson.M
 	err := s.repairs.FindOne(ctx, bson.M{"$or": bson.A{
 		bson.M{"_source_key": id}, bson.M{"_id": id}, bson.M{"_legacy_ids": id},
-	}}).Decode(&doc)
+	}, "_prodh_scope": "00100", "_scope_rule_version": 2}).Decode(&doc)
 	if err != nil {
 		return FaultDetail{}, err
 	}

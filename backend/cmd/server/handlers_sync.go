@@ -228,5 +228,23 @@ func (s *server) dataStatus(w http.ResponseWriter, r *http.Request) {
 	if run, runErr := s.store.LatestSyncRun(r.Context()); runErr == nil {
 		status = syncStatusFromRun(run)
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"salesOrdersLastSyncedAt": result.SalesOrdersLastSyncedAt, "faultsLastSyncedAt": result.FaultsLastSyncedAt, "stationRecordsLastSyncedAt": result.StationRecordsLastSyncedAt, "serialBindingsLastSyncedAt": result.SerialBindingsLastSyncedAt, "bomPostingsLastSyncedAt": result.BOMPostingsLastSyncedAt, "scsDoaLastSyncedAt": result.SCSDoaLastSyncedAt, "scsChangeLastSyncedAt": result.SCSChangeLastSyncedAt, "scsDoaRecordCount": result.SCSDoaRecordCount, "scsChangeRecordCount": result.SCSChangeRecordCount, "state": status.State, "startedAt": status.StartedAt, "finishedAt": status.FinishedAt})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"salesOrdersLastSyncedAt":    result.SalesOrdersLastSyncedAt,
+		"faultsLastSyncedAt":         result.FaultsLastSyncedAt,
+		"stationRecordsLastSyncedAt": result.StationRecordsLastSyncedAt,
+		"serialBindingsLastSyncedAt": result.SerialBindingsLastSyncedAt,
+		"bomPostingsLastSyncedAt":    result.BOMPostingsLastSyncedAt,
+		"scsDoaLastSyncedAt":         result.SCSDoaLastSyncedAt,
+		"scsChangeLastSyncedAt":      result.SCSChangeLastSyncedAt,
+		"scsDoaRecordCount":          result.SCSDoaRecordCount,
+		"scsChangeRecordCount":       result.SCSChangeRecordCount,
+		"publicationState":           result.PublicationState,
+		"publicationRunId":           result.PublicationRunID,
+		"publicationPublishedAt":     result.PublicationPublishedAt,
+		"publicationLastError":       result.PublicationLastError,
+		"publicationReady":           result.PublicationReady,
+		"state":                      status.State,
+		"startedAt":                  status.StartedAt,
+		"finishedAt":                 status.FinishedAt,
+	})
 }

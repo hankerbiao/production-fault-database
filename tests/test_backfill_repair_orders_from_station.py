@@ -5,6 +5,7 @@ from datetime import date
 import pytest
 
 from scripts.sync import 增量同步和清洗维修故障记录 as backfill
+from test_sync_sales_orders import FakeCollection
 
 
 class Result:
@@ -14,7 +15,7 @@ class Result:
 
 class Collection:
     def __init__(self, documents):
-        self.documents = [dict(document) for document in documents]
+        self.documents = [{"_prodh_scope": "00100", **document} for document in documents]
         self.bulk_calls = 0
 
     def count_documents(self, query):
@@ -45,21 +46,10 @@ class Collection:
         return Result(changed)
 
     def _matching(self, query):
-        if not query:
-            return [dict(document) for document in self.documents]
-        if "$or" not in query:
-            raise AssertionError(f"Unexpected query: {query}")
-        missing_fields = set()
-
-        def collect_fields(condition):
-            if "$or" in condition:
-                for item in condition["$or"]:
-                    collect_fields(item)
-            else:
-                missing_fields.update(condition)
-
-        collect_fields(query)
-        return [dict(document) for document in self.documents if any(not backfill.text(document.get(field)) for field in missing_fields)]
+        matcher = FakeCollection()
+        # These fixtures represent records already reclassified under the new rule.
+        return [dict(document) for document in self.documents
+                if matcher._match({"_scope_rule_version": 2, **document}, query)]
 
 
 class AuditCollection:
@@ -74,7 +64,9 @@ class AuditCollection:
 
 
 class DB:
-    def __init__(self, stations, repairs, orders=()):
+    def __init__(self, stations, repairs, orders=None):
+        if orders is None:
+            orders = [{"data": {"AUFNR": "P-1", "VBELN": "S-1"}}]
         self.collections = {
             "stations": Collection(stations),
             "repairs": Collection(repairs),
@@ -115,18 +107,18 @@ def args(apply=False):
 def test_dry_run_builds_unique_collection_a_and_does_not_write():
     db = DB(
         [
-            {"_id": "s1", "PCODE": "SN-1", "AUFNR": "P-1", "KDAUF": "S-1"},
-            {"_id": "s2", "PCODE": "SN-1", "AUFNR": "P-1", "KDAUF": "S-1"},
-            {"_id": "s3", "PCODE": "SN-2", "AUFNR": "P-2", "KDAUF": "S-2"},
-            {"_id": "s4", "PCODE": "SN-2", "AUFNR": "P-3", "KDAUF": "S-3"},
-            {"_id": "s5", "PCODE": "SN-3", "AUFNR": "", "KDAUF": "S-3"},
+            {"_prodh_scope": "00100", "_id": "s1", "PCODE": "SN-1", "AUFNR": "P-1", "KDAUF": "S-1"},
+            {"_prodh_scope": "00100", "_id": "s2", "PCODE": "SN-1", "AUFNR": "P-1", "KDAUF": "S-1"},
+            {"_prodh_scope": "00100", "_id": "s3", "PCODE": "SN-2", "AUFNR": "P-2", "KDAUF": "S-2"},
+            {"_prodh_scope": "00100", "_id": "s4", "PCODE": "SN-2", "AUFNR": "P-3", "KDAUF": "S-3"},
+            {"_prodh_scope": "00100", "_id": "s5", "PCODE": "SN-3", "AUFNR": "", "KDAUF": "S-3"},
         ],
         [
-            {"_id": "r1", "PCODE": "SN-1", "AUFNR": "", "VBELN": ""},
-            {"_id": "r2", "PCODE": "SN-2", "AUFNR": "", "VBELN": ""},
-            {"_id": "r3", "PCODE": "SN-3", "AUFNR": "", "VBELN": ""},
-            {"_id": "r4", "PCODE": "SN-4", "AUFNR": "", "VBELN": ""},
-            {"_id": "r5", "PCODE": "SN-1", "AUFNR": "P-old", "VBELN": "already"},
+            {"_prodh_scope": "00100", "_id": "r1", "PCODE": "SN-1", "AUFNR": "", "VBELN": ""},
+            {"_prodh_scope": "00100", "_id": "r2", "PCODE": "SN-2", "AUFNR": "", "VBELN": ""},
+            {"_prodh_scope": "00100", "_id": "r3", "PCODE": "SN-3", "AUFNR": "", "VBELN": ""},
+            {"_prodh_scope": "00100", "_id": "r4", "PCODE": "SN-4", "AUFNR": "", "VBELN": ""},
+            {"_prodh_scope": "00100", "_id": "r5", "PCODE": "SN-1", "AUFNR": "P-old", "VBELN": "already"},
         ],
     )
 
@@ -149,10 +141,10 @@ def test_dry_run_builds_unique_collection_a_and_does_not_write():
 
 def test_apply_does_not_overwrite_a_conflicting_existing_production_order():
     db = DB(
-        [{"_id": "s1", "PCODE": "SN-1", "AUFNR": "P-1", "KDAUF": "S-1"}],
+        [{"_prodh_scope": "00100", "_id": "s1", "PCODE": "SN-1", "AUFNR": "P-1", "KDAUF": "S-1"}],
         [
-            {"_id": "r1", "PCODE": "SN-1", "AUFNR": "P-old", "VBELN": "  "},
-            {"_id": "r2", "PCODE": "SN-1", "AUFNR": "P-2", "VBELN": "S-2"},
+            {"_prodh_scope": "00100", "_id": "r1", "PCODE": "SN-1", "AUFNR": "P-old", "VBELN": "  "},
+            {"_prodh_scope": "00100", "_id": "r2", "PCODE": "SN-1", "AUFNR": "P-2", "VBELN": "S-2"},
         ],
     )
 
@@ -163,8 +155,8 @@ def test_apply_does_not_overwrite_a_conflicting_existing_production_order():
     assert result["repair_existing_aufnr_differs"] == 1
     assert result["station_skipped_existing_aufnr_conflict"] == 1
     assert db["repairs"].documents == [
-        {"_id": "r1", "PCODE": "SN-1", "AUFNR": "P-old", "VBELN": "  "},
-        {"_id": "r2", "PCODE": "SN-1", "AUFNR": "P-2", "VBELN": "S-2"},
+        {"_prodh_scope": "00100", "_id": "r1", "PCODE": "SN-1", "AUFNR": "P-old", "VBELN": "  "},
+        {"_prodh_scope": "00100", "_id": "r2", "PCODE": "SN-1", "AUFNR": "P-2", "VBELN": "S-2"},
     ]
 
 
@@ -172,11 +164,11 @@ def test_repair_pcode_fallback_backfills_only_unique_complete_repair_pairs():
     db = DB(
         [],
         [
-            {"_id": "known", "PCODE": "SN-1", "AUFNR": "P-1", "VBELN": "S-1"},
-            {"_id": "missing", "PCODE": "SN-1", "AUFNR": "", "VBELN": ""},
-            {"_id": "conflict-1", "PCODE": "SN-2", "AUFNR": "P-2", "VBELN": "S-2"},
-            {"_id": "conflict-2", "PCODE": "SN-2", "AUFNR": "P-3", "VBELN": "S-3"},
-            {"_id": "conflict-missing", "PCODE": "SN-2", "AUFNR": "", "VBELN": ""},
+            {"_prodh_scope": "00100", "_id": "known", "PCODE": "SN-1", "AUFNR": "P-1", "VBELN": "S-1"},
+            {"_prodh_scope": "00100", "_id": "missing", "PCODE": "SN-1", "AUFNR": "", "VBELN": ""},
+            {"_prodh_scope": "00100", "_id": "conflict-1", "PCODE": "SN-2", "AUFNR": "P-2", "VBELN": "S-2"},
+            {"_prodh_scope": "00100", "_id": "conflict-2", "PCODE": "SN-2", "AUFNR": "P-3", "VBELN": "S-3"},
+            {"_prodh_scope": "00100", "_id": "conflict-missing", "PCODE": "SN-2", "AUFNR": "", "VBELN": ""},
         ],
     )
     workflow_args = args(apply=True)
@@ -190,50 +182,24 @@ def test_repair_pcode_fallback_backfills_only_unique_complete_repair_pairs():
     assert result["station_matches"] == 0
     assert result["repair_pcode_matches"] == 1
     assert result["updated"] == 1
-    assert db["repairs"].documents[1] == {"_id": "missing", "PCODE": "SN-1", "AUFNR": "P-1", "VBELN": "S-1"}
-    assert db["repairs"].documents[4] == {"_id": "conflict-missing", "PCODE": "SN-2", "AUFNR": "", "VBELN": ""}
+    assert db["repairs"].documents[1] == {"_prodh_scope": "00100", "_id": "missing", "PCODE": "SN-1", "AUFNR": "P-1", "VBELN": "S-1"}
+    assert db["repairs"].documents[4] == {"_prodh_scope": "00100", "_id": "conflict-missing", "PCODE": "SN-2", "AUFNR": "", "VBELN": ""}
 
 
-def test_sap_pcode_fallback_fills_only_an_empty_production_order():
+def test_sap_pcode_fallback_is_disabled_before_writing():
     db = DB([], [{"_id": "missing", "PCODE": "SN-1", "AUFNR": "", "VBELN": ""}])
     workflow_args = args(apply=True)
     workflow_args.sap_pcode_fallback = True
-
-    class Response:
-        def raise_for_status(self):
-            return None
-
-        def json(self):
-            return {"MSGTY": "S", "DATA": [{"PCODE": "SN-1", "AUFNR": "123"}]}
-
-    class Client:
-        def __init__(self, **_kwargs):
-            self.calls = []
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *_args):
-            return None
-
-        def post(self, url, **kwargs):
-            self.calls.append((url, kwargs))
-            return Response()
-
-    result = backfill.run_workflow(db, workflow_args, sap_client_factory=Client)
-
-    assert result["sap_pcode_candidates"] == 1
-    assert result["sap_kk_found"] == 1
-    assert result["sap_pcode_matches"] == 1
-    assert result["updated"] == 1
-    assert db["repairs"].documents == [{"_id": "missing", "PCODE": "SN-1", "AUFNR": "123", "VBELN": ""}]
+    with pytest.raises(RuntimeError, match="已阻断写入"):
+        backfill.run_workflow(db, workflow_args)
+    assert db["repairs"].documents[0]["AUFNR"] == ""
 
 
 def test_sales_order_fallback_fills_sales_order_for_an_existing_production_order():
     db = DB(
         [],
-        [{"_id": "repair", "PCODE": "SN-1", "AUFNR": "000123", "VBELN": ""}],
-        [{"_id": "order", "aufnr": "123", "data": {"AUFNR": "123", "VBELN": "S-123"}}],
+        [{"_prodh_scope": "00100", "_id": "repair", "PCODE": "SN-1", "AUFNR": "000123", "VBELN": ""}],
+        [{"_prodh_scope": "00100", "_id": "order", "aufnr": "123", "data": {"AUFNR": "123", "VBELN": "S-123"}}],
     )
     workflow_args = args(apply=True)
     workflow_args.sales_order_fallback = True
@@ -244,15 +210,15 @@ def test_sales_order_fallback_fills_sales_order_for_an_existing_production_order
     assert result["sales_order_detail_matches"] == 1
     assert result["updated"] == 1
     assert db["repairs"].documents == [
-        {"_id": "repair", "PCODE": "SN-1", "AUFNR": "000123", "VBELN": "S-123"},
+        {"_prodh_scope": "00100", "_id": "repair", "PCODE": "SN-1", "AUFNR": "000123", "VBELN": "S-123"},
     ]
 
 
 def test_planned_start_fallback_fills_empty_gstrs_from_sales_order_detail():
     db = DB(
         [],
-        [{"_id": "repair", "PCODE": "SN-1", "AUFNR": "000123", "VBELN": "S-123", "GSTRS": ""}],
-        [{"_id": "order", "aufnr": "123", "data": {"AUFNR": "123", "VBELN": "S-123", "GSTRS": "2026-09-01"}}],
+        [{"_prodh_scope": "00100", "_id": "repair", "PCODE": "SN-1", "AUFNR": "000123", "VBELN": "S-123", "GSTRS": ""}],
+        [{"_prodh_scope": "00100", "_id": "order", "aufnr": "123", "data": {"AUFNR": "123", "VBELN": "S-123", "GSTRS": "2026-09-01"}}],
     )
     workflow_args = args(apply=True)
     workflow_args.planned_start_fallback = True
@@ -264,17 +230,17 @@ def test_planned_start_fallback_fills_empty_gstrs_from_sales_order_detail():
     assert result["planned_start_matches"] == 1
     assert result["updated"] == 1
     assert db["repairs"].documents == [
-        {"_id": "repair", "PCODE": "SN-1", "AUFNR": "000123", "VBELN": "S-123", "GSTRS": "2026-09-01"},
+        {"_prodh_scope": "00100", "_id": "repair", "PCODE": "SN-1", "AUFNR": "000123", "VBELN": "S-123", "GSTRS": "2026-09-01"},
     ]
 
 
 def test_planned_start_fallback_skips_ambiguous_sales_order_dates():
     db = DB(
         [],
-        [{"_id": "repair", "PCODE": "SN-1", "AUFNR": "123", "VBELN": "S-123", "GSTRS": ""}],
+        [{"_prodh_scope": "00100", "_id": "repair", "PCODE": "SN-1", "AUFNR": "123", "VBELN": "S-123", "GSTRS": ""}],
         [
-            {"_id": "order-1", "aufnr": "123", "data": {"AUFNR": "123", "VBELN": "S-123", "GSTRS": "2026-09-01"}},
-            {"_id": "order-2", "aufnr": "123", "data": {"AUFNR": "123", "VBELN": "S-123", "GSTRS": "2026-09-02"}},
+            {"_prodh_scope": "00100", "_id": "order-1", "aufnr": "123", "data": {"AUFNR": "123", "VBELN": "S-123", "GSTRS": "2026-09-01"}},
+            {"_prodh_scope": "00100", "_id": "order-2", "aufnr": "123", "data": {"AUFNR": "123", "VBELN": "S-123", "GSTRS": "2026-09-02"}},
         ],
     )
     workflow_args = args(apply=True)
@@ -288,53 +254,13 @@ def test_planned_start_fallback_skips_ambiguous_sales_order_dates():
     assert db["repairs"].documents[0]["GSTRS"] == ""
 
 
-def test_sales_order_fallback_combines_sap_production_order_with_sales_detail():
-    db = DB(
-        [],
-        [{"_id": "repair", "PCODE": "SN-1", "AUFNR": "", "VBELN": ""}],
-        [{"_id": "order", "aufnr": "123", "data": {"AUFNR": "123", "VBELN": "S-123"}}],
-    )
-    workflow_args = args(apply=True)
-    workflow_args.sap_pcode_fallback = True
-    workflow_args.sales_order_fallback = True
-
-    class Response:
-        def raise_for_status(self):
-            return None
-
-        def json(self):
-            return {"MSGTY": "S", "DATA": [{"PCODE": "SN-1", "AUFNR": "000123"}]}
-
-    class Client:
-        def __init__(self, **_kwargs):
-            return None
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *_args):
-            return None
-
-        def post(self, _url, **_kwargs):
-            return Response()
-
-    result = backfill.run_workflow(db, workflow_args, sap_client_factory=Client)
-
-    assert result["sap_sales_order_detail_matches"] == 1
-    assert result["sap_pcode_matches"] == 0
-    assert result["updated"] == 1
-    assert db["repairs"].documents == [
-        {"_id": "repair", "PCODE": "SN-1", "AUFNR": "000123", "VBELN": "S-123"},
-    ]
-
-
 def test_sales_order_fallback_skips_ambiguous_sales_orders():
     db = DB(
         [],
-        [{"_id": "repair", "PCODE": "SN-1", "AUFNR": "123", "VBELN": ""}],
+        [{"_prodh_scope": "00100", "_id": "repair", "PCODE": "SN-1", "AUFNR": "123", "VBELN": ""}],
         [
-            {"_id": "order-1", "aufnr": "123", "data": {"AUFNR": "123", "VBELN": "S-1"}},
-            {"_id": "order-2", "aufnr": "123", "data": {"AUFNR": "123", "VBELN": "S-2"}},
+            {"_prodh_scope": "00100", "_id": "order-1", "aufnr": "123", "data": {"AUFNR": "123", "VBELN": "S-1"}},
+            {"_prodh_scope": "00100", "_id": "order-2", "aufnr": "123", "data": {"AUFNR": "123", "VBELN": "S-2"}},
         ],
     )
     workflow_args = args(apply=True)
@@ -345,13 +271,13 @@ def test_sales_order_fallback_skips_ambiguous_sales_orders():
     assert result["sales_detail_ambiguous_production_orders"] == 1
     assert result["would_update"] == 0
     assert result["updated"] == 0
-    assert db["repairs"].documents == [{"_id": "repair", "PCODE": "SN-1", "AUFNR": "123", "VBELN": ""}]
+    assert db["repairs"].documents == [{"_prodh_scope": "00100", "_id": "repair", "PCODE": "SN-1", "AUFNR": "123", "VBELN": ""}]
 
 
 def test_one_click_enables_every_backfill_source():
     db = DB(
-        [{"_id": "station", "PCODE": "SN-1", "AUFNR": "P-1", "KDAUF": "S-1"}],
-        [{"_id": "repair", "PCODE": "SN-1", "AUFNR": "", "VBELN": ""}],
+        [{"_prodh_scope": "00100", "_id": "station", "PCODE": "SN-1", "AUFNR": "P-1", "KDAUF": "S-1"}],
+        [{"_prodh_scope": "00100", "_id": "repair", "PCODE": "SN-1", "AUFNR": "", "VBELN": ""}],
     )
     workflow_args = args()
     workflow_args.one_click = True
@@ -360,7 +286,7 @@ def test_one_click_enables_every_backfill_source():
 
     assert result["one_click"] is True
     assert result["repair_pcode_fallback"] is True
-    assert result["sap_pcode_fallback"] is True
+    assert result["sap_pcode_fallback"] is False
     assert result["sales_order_fallback"] is True
     assert result["station_matches"] == 1
 
@@ -377,7 +303,7 @@ def test_main_parser_defaults_to_hana_sync_and_complete_backfill():
 
 
 def test_apply_stops_before_writing_when_sap_queries_fail():
-    db = DB([], [{"_id": "repair", "PCODE": "SN-1", "AUFNR": "", "VBELN": ""}])
+    db = DB([], [{"_prodh_scope": "00100", "_id": "repair", "PCODE": "SN-1", "AUFNR": "", "VBELN": ""}])
     workflow_args = args(apply=True)
     workflow_args.sap_pcode_fallback = True
 
@@ -397,13 +323,13 @@ def test_apply_stops_before_writing_when_sap_queries_fail():
     with pytest.raises(RuntimeError, match="已阻断写入"):
         backfill.run_workflow(db, workflow_args, sap_client_factory=Client)
 
-    assert db["repairs"].documents == [{"_id": "repair", "PCODE": "SN-1", "AUFNR": "", "VBELN": ""}]
+    assert db["repairs"].documents == [{"_prodh_scope": "00100", "_id": "repair", "PCODE": "SN-1", "AUFNR": "", "VBELN": ""}]
 
 
 def test_apply_persists_an_audit_record_for_each_repair_write():
     db = DB(
-        [{"_id": "station", "PCODE": "SN-1", "AUFNR": "P-1", "KDAUF": "S-1"}],
-        [{"_id": "repair", "PCODE": "SN-1", "AUFNR": "", "VBELN": ""}],
+        [{"_prodh_scope": "00100", "_id": "station", "PCODE": "SN-1", "AUFNR": "P-1", "KDAUF": "S-1"}],
+        [{"_prodh_scope": "00100", "_id": "repair", "PCODE": "SN-1", "AUFNR": "", "VBELN": ""}],
     )
     workflow_args = args(apply=True)
     workflow_args.audit_collection = "audit"
@@ -427,8 +353,8 @@ def test_apply_persists_an_audit_record_for_each_repair_write():
 
 def test_hana_sync_runs_before_backfill_and_commits_after_success(monkeypatch):
     db = DB(
-        [{"_id": "station", "PCODE": "SN-1", "AUFNR": "P-1", "KDAUF": "S-1"}],
-        [{"_id": "repair", "PCODE": "SN-1", "AUFNR": "", "VBELN": ""}],
+        [{"_prodh_scope": "00100", "_id": "station", "PCODE": "SN-1", "AUFNR": "P-1", "KDAUF": "S-1"}],
+        [{"_prodh_scope": "00100", "_id": "repair", "PCODE": "SN-1", "AUFNR": "", "VBELN": ""}],
     )
     workflow_args = args(apply=True)
     workflow_args.sync_repair_hana = True
@@ -457,8 +383,8 @@ def test_hana_sync_runs_before_backfill_and_commits_after_success(monkeypatch):
 
 def test_hana_sync_failure_stops_order_backfill(monkeypatch):
     db = DB(
-        [{"_id": "station", "PCODE": "SN-1", "AUFNR": "P-1", "KDAUF": "S-1"}],
-        [{"_id": "repair", "PCODE": "SN-1", "AUFNR": "", "VBELN": ""}],
+        [{"_prodh_scope": "00100", "_id": "station", "PCODE": "SN-1", "AUFNR": "P-1", "KDAUF": "S-1"}],
+        [{"_prodh_scope": "00100", "_id": "repair", "PCODE": "SN-1", "AUFNR": "", "VBELN": ""}],
     )
     workflow_args = args(apply=True)
     workflow_args.sync_repair_hana = True
@@ -467,4 +393,4 @@ def test_hana_sync_failure_stops_order_backfill(monkeypatch):
     with pytest.raises(RuntimeError, match="HANA 维修故障记录同步失败"):
         backfill.run_workflow(db, workflow_args)
 
-    assert db["repairs"].documents == [{"_id": "repair", "PCODE": "SN-1", "AUFNR": "", "VBELN": ""}]
+    assert db["repairs"].documents == [{"_prodh_scope": "00100", "_id": "repair", "PCODE": "SN-1", "AUFNR": "", "VBELN": ""}]

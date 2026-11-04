@@ -13,6 +13,7 @@ def row(status="STARTED", *, line="10"):
     return {
         "MANDT": "800", "AUFNR": "100", "VBELN": "SO1",
         "POSNR": line, "ETENR": "1", "MATNR": "M1", "ZSTAT": status, "AUART": "ZP01",
+        "PRODH": "00100",
     }
 
 
@@ -122,12 +123,13 @@ def test_order_type_change_without_status_change_is_updated(refresh):
     assert "data.ZSTAT" not in update
 
 
-def test_missing_order_type_preserves_order_and_reports_failure(refresh):
+def test_missing_order_type_preserves_order_and_reports_warning(refresh):
     source_row = row("REL")
     source_row.pop("AUART")
     run = refresh([document()], [source_row])
     result = run.execute()
-    assert result["success"] is False and result["missing_order_type"] == 1
+    assert result["success"] is True and result["missing_order_type"] == 1
+    assert result["skipped_orders"] == 1
     run.collection.bulk_write.assert_not_called()
 
 
@@ -161,13 +163,14 @@ def test_unchanged_status_only_updates_check_metadata(refresh):
 
 
 @pytest.mark.parametrize("status", [None, "missing"])
-def test_missing_status_preserves_order_and_reports_failure(refresh, status):
+def test_missing_status_preserves_order_and_reports_warning(refresh, status):
     source_row = row(status)
     if status == "missing":
         source_row.pop("ZSTAT")
     run = refresh([document()], [source_row])
     result = run.execute()
-    assert result["success"] is False and result["missing_status"] == 1
+    assert result["success"] is True and result["missing_status"] == 1
+    assert result["skipped_orders"] == 1
     run.collection.bulk_write.assert_not_called()
 
 
@@ -247,45 +250,49 @@ def test_invalid_source_row_fails_before_writes(refresh, source_row):
     run.collection.bulk_write.assert_not_called()
 
 
-def test_unmatched_detail_is_not_overwritten(refresh):
+def test_unmatched_detail_is_skipped(refresh):
     run = refresh([document()], [row("REL", line="20")])
     result = run.execute()
-    assert result["success"] is False and result["unmatched_details"] == 1
+    assert result["success"] is True and result["unmatched_details"] == 1
+    assert result["partial"] is True and result["skipped_orders"] == 1
     assert result["would_update"] == result["updated"] == result["checked"] == 0
     assert result["transitions"] == {}
     run.collection.bulk_write.assert_not_called()
 
 
 @pytest.mark.parametrize("apply", [True, False])
-def test_one_unmatched_detail_blocks_the_entire_order_update(refresh, apply):
+def test_one_unmatched_detail_skips_the_entire_order_update(refresh, apply):
     run = refresh(
         [document(rows=[row(line="10"), row(line="20")])],
         [row("REL", line="20")], apply=apply,
     )
     result = run.execute()
-    assert result["success"] is False and result["unmatched_details"] == 1
+    assert result["success"] is True and result["unmatched_details"] == 1
+    assert result["skipped_orders"] == 1
     assert result["would_update"] == result["updated"] == result["checked"] == 0
     assert result["transitions"] == {}
     run.collection.bulk_write.assert_not_called()
 
 
-def test_unmatched_representative_is_not_replaced_by_the_only_source_row(refresh):
+def test_unmatched_representative_is_skipped(refresh):
     stored = document()
     stored["data"] = row(line="20")
     run = refresh([stored], [row("REL")])
     result = run.execute()
-    assert result["success"] is False and result["missing_status"] == 1
+    assert result["success"] is True and result["missing_status"] == 1
+    assert result["skipped_orders"] == 1
     assert result["would_update"] == result["checked"] == 0
     run.collection.bulk_write.assert_not_called()
 
 
-def test_missing_detail_status_blocks_preview_changes_and_transitions(refresh):
+def test_missing_detail_status_skips_changes_and_transitions(refresh):
     run = refresh(
         [document(rows=[row(line="10"), row(line="20")])],
         [row(None, line="10"), row("REL", line="20")], apply=False,
     )
     result = run.execute()
-    assert result["success"] is False and result["missing_status"] == 1
+    assert result["success"] is True and result["missing_status"] == 1
+    assert result["skipped_orders"] == 1
     assert result["would_update"] == 0 and result["transitions"] == {}
     run.collection.bulk_write.assert_not_called()
 
@@ -297,7 +304,8 @@ def test_incomplete_order_does_not_block_other_valid_orders(refresh, monkeypatch
         [row("REL", line="20")], [row("REL")],
     )
     result = run.execute()
-    assert result["success"] is False and result["unmatched_details"] == 1
+    assert result["success"] is True and result["unmatched_details"] == 1
+    assert result["skipped_orders"] == 1
     assert result["would_update"] == result["updated"] == result["checked"] == 1
     assert result["transitions"] == {"STARTED -> REL": 1}
     assert [op._filter["_id"] for op in writes(run)] == ["KK:100"]
@@ -317,4 +325,5 @@ def test_temporary_script_defaults_to_preview():
     args = maintenance.build_parser().parse_args([])
     assert args.apply is False and args.start_date == date(2026, 1, 1)
     args = maintenance.build_parser().parse_args(["--apply", "--all-prodh"])
-    assert args.apply is True and sales.configured_prodh(args) is None
+    with pytest.raises(ValueError, match="00100"):
+        sales.configured_prodh(args)

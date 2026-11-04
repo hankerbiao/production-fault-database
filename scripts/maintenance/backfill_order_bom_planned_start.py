@@ -2,7 +2,7 @@
 """Backfill BOM posting planned start time from synchronized sales orders.
 
 The sales-order collection is the authoritative local source for GSTRS. A BOM
-row is matched by AUFNR_1 first and VBELN_EX second. Numeric production-order
+row is matched by its production/sales order pair and client. Numeric order
 keys are compared after removing SAP left padding zeros. Existing values are
 corrected only when a unique authoritative date is found; rows without both
 order numbers are ignored.
@@ -15,11 +15,10 @@ import argparse
 import json
 import sys
 import time
-from collections import defaultdict
 from contextlib import nullcontext
 from datetime import date, datetime, timezone
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any
 
 from pymongo import MongoClient, UpdateOne
 
@@ -34,7 +33,8 @@ from scripts.sources.hana.hana_view_sync import (
     mongo_uri,
     process_lock,
 )
-from scripts.sync_runtime import check_leases, order_key, print_failure, resource_lock
+from scripts.sync_runtime import order_key, print_failure, resource_locks, verified_bulk_write
+from scripts.sales_order_reference import SalesReferences
 
 
 ORCHESTRATOR_RUN_COLLECTION = "sync_orchestrator_runs"
@@ -70,20 +70,6 @@ def normalize_planned_date(value: Any) -> str:
     return ""
 
 
-def add_candidate(index: dict[str, set[str]], key: str, value: str) -> None:
-    if key and value:
-        index[key].add(value)
-
-
-def unique_value(index: Mapping[str, set[str]], key: str) -> tuple[str, str]:
-    values = index.get(key, set())
-    if len(values) == 1:
-        return next(iter(values)), "matched"
-    if len(values) > 1:
-        return "", "ambiguous"
-    return "", "unmatched"
-
-
 class ProgressReporter:
     def __init__(self, database: Any, run_id: str | None) -> None:
         self.collection = database[ORCHESTRATOR_RUN_COLLECTION] if run_id else None
@@ -107,54 +93,10 @@ class ProgressReporter:
         )
 
 
-def build_source_indexes(
-    collection: Any,
-    progress: ProgressReporter | None = None,
-) -> tuple[dict[str, set[str]], dict[str, set[str]], dict[str, int]]:
-    """Build unambiguous production-order and sales-order -> GSTRS indexes."""
-    production: dict[str, set[str]] = defaultdict(set)
-    sales: dict[str, set[str]] = defaultdict(set)
-    stats = {
-        "source_rows_scanned": 0,
-        "source_rows_with_planned_start": 0,
-        "source_rows_without_planned_start": 0,
-    }
-    total = collection.count_documents({})
-    progress and progress.report("构建销售订单索引", 0, total, force=True)
-    projection = {
-        "aufnr": 1,
-        "gstrs_date": 1,
-        "data.AUFNR": 1,
-        "data.VBELN": 1,
-        "data.GSTRS": 1,
-    }
-    cursor = collection.find({}, projection)
-    try:
-        for document in cursor:
-            stats["source_rows_scanned"] += 1
-            progress and progress.report("构建销售订单索引", stats["source_rows_scanned"], total)
-            data = document.get("data") if isinstance(document.get("data"), Mapping) else {}
-            planned_start = normalize_planned_date(data.get("GSTRS") or document.get("gstrs_date"))
-            if not planned_start:
-                stats["source_rows_without_planned_start"] += 1
-                continue
-            stats["source_rows_with_planned_start"] += 1
-            production_order = order_key(data.get("AUFNR") or document.get("aufnr"))
-            sales_order = order_key(data.get("VBELN"))
-            add_candidate(production, production_order, planned_start)
-            add_candidate(sales, sales_order, planned_start)
-    finally:
-        if hasattr(cursor, "close"):
-            cursor.close()
-    progress and progress.report("构建销售订单索引", total, total, force=True)
-    return production, sales, stats
-
-
 def flush_operations(collection: Any, operations: list[UpdateOne], *, apply: bool) -> tuple[int, int]:
     if not operations or not apply:
         return 0, 0
-    check_leases(verify=True)
-    result = collection.bulk_write(operations, ordered=False)
+    result = verified_bulk_write(collection, operations)
     return result.matched_count, result.modified_count
 
 
@@ -171,13 +113,15 @@ def backfill(
     bom = db[bom_collection_name]
     sales_orders = db[sales_collection_name]
     progress = ProgressReporter(db, run_id if apply else None)
-    production_index, sales_index, source_stats = build_source_indexes(sales_orders, progress)
+    refs = SalesReferences.load(sales_orders)
     summary: dict[str, Any] = {
         "success": True,
         "dry_run": not apply,
         "bom_collection": bom_collection_name,
         "source_collection": sales_collection_name,
-        **source_stats,
+        "source_rows_scanned": sales_orders.count_documents({}),
+        "source_rows_with_planned_start": sum(bool(row["planned"]) for row in refs.rows),
+        "source_rows_without_planned_start": sum(not row["planned"] for row in refs.rows),
         "bom_rows_scanned": 0,
         "skipped_empty_orders": 0,
         "matched_by_production_order": 0,
@@ -208,7 +152,7 @@ def backfill(
     progress.report("扫描并规范化 BOM 计划开始时间", 0, total, force=True)
     cursor = bom.find(
         {},
-        {"_id": 1, "AUFNR_1": 1, "VBELN_EX": 1, "GSTRS": 1, "GSTRS_DATE": 1},
+        {"_id": 1, "AUFNR_1": 1, "VBELN_EX": 1, "MANDT": 1, "GSTRS": 1, "GSTRS_DATE": 1},
     )
     try:
         for document in cursor:
@@ -231,25 +175,20 @@ def backfill(
                     summary["normalized"] += 1
                 continue
 
-            planned_start = ""
-            match_type = ""
-            production_status = "unmatched"
-            sales_status = "unmatched"
-            if production_order:
-                planned_start, production_status = unique_value(production_index, production_order)
-                if production_status == "matched":
-                    match_type = "production_order"
-            if not planned_start and sales_order:
-                planned_start, sales_status = unique_value(sales_index, sales_order)
-                if sales_status == "matched":
-                    match_type = "sales_order"
+            keys = {"production": production_order_raw, "sales": sales_order_raw, "client": document.get("MANDT")}
+            candidates = refs.candidates(**keys)
+            dates = {normalize_planned_date(row["planned"]) for row in candidates}
+            identities = {(row["source"], row["client"], row["production"]) for row in candidates}
+            sales_values = {row["sales"] for row in candidates}
+            valid_clients = all(row["client"] == {"SG": "800", "KK": "600"}.get(row["source"], row["client"]) for row in candidates)
+            planned_start = next(iter(dates)) if len(identities) == 1 and len(sales_values) == 1 and valid_clients and len(dates) == 1 and "" not in dates else ""
+            match_type = "production_order" if production_order else "sales_order"
 
             if not planned_start:
-                if "ambiguous" in {production_status, sales_status}:
+                if candidates:
                     summary["ambiguous_orders"] += 1
-                elif production_order or sales_order:
-                    if production_order not in production_index and sales_order not in sales_index:
-                        summary["unmatched_orders"] += 1
+                else:
+                    summary["unmatched_orders"] += 1
                 if existing_date and existing_date != text(document.get("GSTRS_DATE")):
                     enqueue(document["_id"], {"GSTRS_DATE": existing_date})
                     summary["normalized"] += 1
@@ -330,7 +269,7 @@ def main() -> int:
         db = client[env("MONGODB_DATABASE")]
         lock_path = env("BOM_PLANNED_START_LOCK_PATH", "/tmp/order-bom-planned-start.lock")
         with process_lock(lock_path) if args.apply else nullcontext(), \
-                resource_lock(db, args.bom_collection) if args.apply else nullcontext():
+                resource_locks(db, args.bom_collection, args.source_collection) if args.apply else nullcontext():
             result = backfill(
                 db,
                 bom_collection_name=args.bom_collection,

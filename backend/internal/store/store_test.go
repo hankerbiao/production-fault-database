@@ -113,9 +113,24 @@ func TestOrderFilterAndMissingField(t *testing.T) {
 	if len(filter["$and"].(primitive.A)) != 3 {
 		t.Fatalf("filter=%v", filter)
 	}
+	if _, ok := filter["_prodh_scope"]; ok {
+		t.Fatalf("orders must not require a scope marker: %v", filter)
+	}
 	missing := missingField("VBELN")
 	if len(missing["$or"].(primitive.A)) != 3 {
 		t.Fatalf("missing=%v", missing)
+	}
+}
+
+func TestGatewayFiltersKeepScopeForOtherDatasets(t *testing.T) {
+	if got := repairFilter(Filters{}); got["_prodh_scope"] != "00100" {
+		t.Fatalf("repair filter=%v", got)
+	}
+	if got := viewFilter("Z_V_ZMES_T_001", ViewFilters{}, nil, ""); got["_prodh_scope"] != "00100" {
+		t.Fatalf("view filter=%v", got)
+	}
+	if got := orderOptionFilter("", "data.VBELN"); got["_prodh_scope"] != nil {
+		t.Fatalf("order option filter must not require a scope marker: %v", got)
 	}
 }
 
@@ -150,7 +165,7 @@ func TestOrderFilterOverseasMatchesMaterialDescription(t *testing.T) {
 		t.Fatalf("expected case-insensitive WW substring search on material description: %v", description)
 	}
 	if filter := orderFilter(OrderFilters{}); len(filter) != 0 {
-		t.Fatalf("unchecked overseas filter must include all orders: %v", filter)
+		t.Fatalf("unfiltered order query=%v", filter)
 	}
 }
 
@@ -198,7 +213,7 @@ func TestBOMExportUsesExactPaddedOrderKeysAndNarrowProjection(t *testing.T) {
 			t.Errorf("BOM filter keys=%v, missing %q", keys, key)
 		}
 	}
-	if len(filter) != 1 || len(filter["AUFNR_1"].(bson.M)) != 1 {
+	if filter["_prodh_scope"] != "00100" || len(filter["AUFNR_1"].(bson.M)) != 1 {
 		t.Fatalf("BOM filter should use exact indexed order keys: %v", filter)
 	}
 	projection := exportProjection(bomExportFields)
@@ -401,6 +416,24 @@ func TestBOMViewFilterUsesOrderType(t *testing.T) {
 	}
 }
 
+func TestBOMViewFilterUsesCompany(t *testing.T) {
+	filter := viewFilter("ZSGV_ZSD124", ViewFilters{CPX: "海光服务器产品事业部"}, nil, "GSTRS")
+	conditions := filter["$and"].(primitive.A)
+	if len(conditions) != 1 {
+		t.Fatalf("filter=%v", filter)
+	}
+	condition, ok := conditions[0].(bson.M)["CPX"].(bson.M)
+	if !ok || condition["$regex"] != "^海光服务器产品事业部$" {
+		t.Fatalf("company condition=%v", conditions[0])
+	}
+}
+
+func TestBOMCompanyAloneQualifiesForStream(t *testing.T) {
+	if err := ValidateBOMFilter(ViewFilters{CPX: "5000公司"}); err != nil {
+		t.Fatalf("CPX-only filter rejected: %v", err)
+	}
+}
+
 func TestBulkRepairProjectionKeepsBothLRRMaterialFields(t *testing.T) {
 	for _, field := range []string{"MATNR", "RECORD01REPAIRM", "GSTRS", "AUFNR", "VBELN"} {
 		if repairListProjection[field] != 1 {
@@ -555,7 +588,7 @@ func TestNormalizeOrderExposesActualShipmentContractWithoutFallbacks(t *testing.
 	}
 
 	withoutShipment := normalizeOrder(bson.M{"data": bson.M{"GSTRS": "20260102", "WMENG": "99"}})
-	if withoutShipment.ShipmentDate != nil || withoutShipment.ShipmentQuantity != nil || withoutShipment.Is5000Company != nil {
+	if withoutShipment.ShipmentDate != nil || withoutShipment.ShipmentQuantity != nil || withoutShipment.Is5000Company == nil || !*withoutShipment.Is5000Company {
 		t.Fatalf("unexpected fallback contract=%+v", withoutShipment)
 	}
 }

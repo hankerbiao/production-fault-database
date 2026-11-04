@@ -29,7 +29,7 @@ from scripts.sources.hana.hana_view_sync import (
     process_lock,
 )
 from scripts.sync import sync_sales_orders
-from scripts.sync_runtime import Snapshot, check_leases, order_key, print_failure, resource_lock
+from scripts.sync_runtime import Snapshot, check_leases, order_key, print_failure, resource_locks
 from scripts.sources.sap_http.client import headers, records as sap_rows
 
 
@@ -69,7 +69,7 @@ def missing_text_filter(field: str) -> dict[str, Any]:
 
 
 def scoped_filter(query: dict[str, Any], scope: dict[str, Any] | None) -> dict[str, Any]:
-    return {"$and": [scope, query]} if scope else query
+    return {"$and": [{"_prodh_scope": "00100", "_scope_rule_version": 2}, scope or {}, query]}
 
 
 def sap_headers() -> dict[str, str]:
@@ -118,7 +118,7 @@ def configure_logging(level: str, log_file: str | None) -> None:
 
 def build_collection_a(collection: Any, progress: Progress, query: dict[str, Any] | None = None) -> tuple[dict[str, tuple[str, str]], dict[str, int]]:
     """Build PCODE -> (AUFNR, KDAUF), retaining only one-pair serial numbers."""
-    query = query or {}
+    query = scoped_filter(query or {}, None)
     total = collection.count_documents(query)
     pairs_by_sn: dict[str, dict[tuple[str, str], tuple[str, str]]] = {}
     stats = {
@@ -160,7 +160,7 @@ def build_collection_a(collection: Any, progress: Progress, query: dict[str, Any
 
 def build_repair_pcode_pairs(collection: Any, progress: Progress, scope: dict[str, Any] | None = None) -> tuple[dict[str, tuple[str, str]], dict[str, int]]:
     """Build PCODE -> (AUFNR, VBELN) from repair rows that already have both orders."""
-    query = scope or {}
+    query = scoped_filter({}, scope)
     total = collection.count_documents(query)
     pairs_by_sn: dict[str, dict[tuple[str, str], tuple[str, str]]] = {}
     stats = {
@@ -204,8 +204,6 @@ def build_repair_pcode_pairs(collection: Any, progress: Progress, scope: dict[st
 def build_sales_order_pairs(collection: Any, progress: Progress) -> tuple[dict[str, str], dict[str, str], dict[str, int]]:
     """Build unambiguous AUFNR -> VBELN and AUFNR -> GSTRS indexes from sales details."""
     total = collection.count_documents({})
-    sales_candidates: dict[str, set[str]] = {}
-    planned_start_candidates: dict[str, set[str]] = {}
     stats = {
         "sales_detail_rows_scanned": 0,
         "sales_detail_rows_skipped_missing_fields": 0,
@@ -215,36 +213,18 @@ def build_sales_order_pairs(collection: Any, progress: Progress) -> tuple[dict[s
         "planned_start_unique_production_orders": 0,
         "planned_start_ambiguous_production_orders": 0,
     }
-    cursor = collection.find({}, {"aufnr": 1, "gstrs_date": 1, "data.AUFNR": 1, "data.VBELN": 1, "data.GSTRS": 1})
-    try:
-        for document in cursor:
-            stats["sales_detail_rows_scanned"] += 1
-            progress.update("构建销售订单明细索引", stats["sales_detail_rows_scanned"], total)
-            data = document.get("data") if isinstance(document.get("data"), dict) else {}
-            production = normalized_order(data.get("AUFNR") or document.get("aufnr"))
-            sales = text(data.get("VBELN"))
-            planned_start = text(data.get("GSTRS") or document.get("gstrs_date"))
-            if not production:
-                stats["sales_detail_rows_skipped_missing_fields"] += 1
-                continue
-            if sales:
-                sales_candidates.setdefault(production, set()).add(sales)
-            if planned_start:
-                planned_start_candidates.setdefault(production, set()).add(planned_start)
-    finally:
-        if hasattr(cursor, "close"):
-            cursor.close()
-    stats["sales_detail_unique_production_orders"] = len(sales_candidates)
-    pairs = {production: next(iter(values)) for production, values in sales_candidates.items() if len(values) == 1}
-    planned_starts = {
-        production: next(iter(values))
-        for production, values in planned_start_candidates.items()
-        if len(values) == 1
-    }
-    stats["sales_detail_ambiguous_production_orders"] = len(sales_candidates) - len(pairs)
+    from scripts.sales_order_reference import SalesReferences
+
+    refs = SalesReferences.load(collection)
+    stats["sales_detail_rows_scanned"] = total
+    progress.update("构建销售订单明细索引", total, total)
+    stats["sales_detail_unique_production_orders"] = len(refs.by_production)
+    pairs = {key: value for key in refs.by_production if (value := refs.unique_company("sales", production=key))}
+    planned_starts = {key: value for key in refs.by_production if (value := refs.unique_company("planned", production=key))}
+    stats["sales_detail_ambiguous_production_orders"] = len(refs.by_production) - len(pairs)
     stats["sales_detail_pair_count"] = len(pairs)
     stats["planned_start_unique_production_orders"] = len(planned_starts)
-    stats["planned_start_ambiguous_production_orders"] = len(planned_start_candidates) - len(planned_starts)
+    stats["planned_start_ambiguous_production_orders"] = len(refs.by_production) - len(planned_starts)
     LOGGER.info(
         "销售订单明细索引完成: scanned=%d usable=%d ambiguous=%d skipped_missing=%d",
         stats["sales_detail_rows_scanned"], stats["sales_detail_pair_count"],
@@ -549,12 +529,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--allow-large-cleanup", action="store_true",
-        help="核实 dry-run 后允许空快照或大量减少的窗口对账清理；默认阻断",
+        help="兼容旧命令，不启用未验证的缺失删除",
     )
     backfill_mode = parser.add_mutually_exclusive_group()
     backfill_mode.add_argument(
         "--one-click", dest="one_click", action="store_true",
-        help="启用工位、维修表、SAP SN 和销售订单明细四级回填来源（默认）",
+        help="启用工位、维修表和销售订单明细回填来源（默认）",
     )
     backfill_mode.add_argument(
         "--basic-backfill", dest="one_click", action="store_false",
@@ -566,7 +546,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--sap-pcode-fallback", action="store_true",
-        help="集合 A/B 未命中且 AUFNR 为空时，批量查询 SAP SN 接口，仅回填生产订单",
+        help="暂不可用：等待确认 SAP SN 接口支持不带产品层次的查询",
     )
     parser.add_argument(
         "--sales-order-fallback", action="store_true",
@@ -589,7 +569,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--log-file", default=env("LOG_FILE", ""), help="追加写入日志文件")
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--dry-run", action="store_true", help="仅生成预览和汇总，不写入（默认）")
-    mode.add_argument("--apply", action="store_true", help="写入维修快照、回填订单，并清理窗口内旧记录")
+    mode.add_argument("--apply", action="store_true", help="写入维修快照、回填订单，并清理无冲突的维修重复记录")
     parser.set_defaults(
         repair_collection=env("REPAIR_COLLECTION", "repair_records_sap"),
         station_collection=env("STATION_COLLECTION", "station_records_sap"),
@@ -605,7 +585,6 @@ def resolve_sources(args: argparse.Namespace) -> None:
     """Enable the complete deterministic source chain for one-click execution."""
     if getattr(args, "one_click", False):
         args.repair_pcode_fallback = True
-        args.sap_pcode_fallback = True
         args.sales_order_fallback = True
         args.planned_start_fallback = True
 
@@ -615,6 +594,8 @@ def run_workflow(
     run_id: str | None = None,
 ) -> dict[str, Any]:
     resolve_sources(args)
+    if args.sap_pcode_fallback:
+        raise RuntimeError("SAP 序列号接口尚未确认支持不带 PRODH_LIST 的查询，已阻断写入")
     run_id = run_id or uuid4().hex
     progress = Progress(not args.no_progress)
     hana_sync: dict[str, Any] = {}
@@ -636,6 +617,8 @@ def run_workflow(
                 defer_finalize=args.apply,
                 allow_large_cleanup=getattr(args, "allow_large_cleanup", False),
                 preview_snapshot=preview,
+                sales_collection=args.sales_order_collection,
+                station_collection=args.station_collection,
             )
             progress.update("刷新 HANA 维修故障快照", 1, 1)
             if not hana_sync.get("success"):
@@ -645,13 +628,7 @@ def run_workflow(
         scope = None
         station_query = None
         if hana_sync.get("range"):
-            if args.apply:
-                scope = {"_source_view": sync_sales_orders.REPAIR_VIEW_ID, "_scope_run_id": run_id}
-            else:
-                scope = sync_sales_orders.repair_scope_filter(
-                    date.fromisoformat(hana_sync["range"]["start"]),
-                    date.fromisoformat(hana_sync["range"]["end"]),
-                )
+            scope = {"_source_view": sync_sales_orders.REPAIR_VIEW_ID, "_scope_run_id": run_id}
             cursor = repairs.find(scope, {"PCODE": 1})
             try:
                 serials = sorted({text(doc.get("PCODE")) for doc in cursor if text(doc.get("PCODE"))})
@@ -678,18 +655,15 @@ def run_workflow(
         repair_source_stats: dict[str, Any] = {}
         if args.repair_pcode_fallback:
             repair_pcode_pairs, repair_source_stats = build_repair_pcode_pairs(repairs, progress, scope)
+        from scripts.sales_order_reference import SalesReferences
+        refs = SalesReferences.load(db[args.sales_order_collection])
+        def verified_pair(pair: tuple[str, str]) -> bool:
+            rows = refs.candidates(production=pair[0], sales=pair[1])
+            return len({(row["source"], row["client"], row["production"]) for row in rows}) == 1
+        collection_a = {sn: pair for sn, pair in collection_a.items() if verified_pair(pair)}
+        repair_pcode_pairs = {sn: pair for sn, pair in repair_pcode_pairs.items() if verified_pair(pair)}
         sap_pcode_orders: dict[str, str] = {}
         sap_stats: dict[str, Any] = {}
-        if args.sap_pcode_fallback:
-            sap_pcode_orders, sap_stats = build_sap_pcode_orders(
-                repairs, collection_a, repair_pcode_pairs,
-                args, progress, sap_client_factory, scope,
-            )
-            if args.apply and sap_stats["sap_failed_sns"] and not getattr(args, "allow_partial_sap", False):
-                raise RuntimeError(
-                    f"SAP SN 查询失败 {sap_stats['sap_failed_sns']} 个序列号，已阻断写入；"
-                    "请修复 SAP 连接后重试，或显式使用 --allow-partial-sap"
-                )
         sales_order_pairs: dict[str, str] = {}
         planned_starts: dict[str, str] = {}
         sales_detail_stats: dict[str, Any] = {}
@@ -771,7 +745,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         lock_path = env("REPAIR_STATION_BACKFILL_LOCK_PATH", DEFAULT_LOCK)
         with process_lock(lock_path) if args.apply else nullcontext():
             with process_lock(env("SYNC_LOCK_PATH", "/tmp/line-fault-table-sync.lock")) if args.apply else nullcontext():
-                lease = resource_lock(db, args.repair_collection) if args.apply else nullcontext()
+                lease = resource_locks(db, args.repair_collection, args.sales_order_collection,
+                                       args.station_collection) if args.apply else nullcontext()
                 with lease:
                     result = run_workflow(db, args, run_id=run_id)
         result.update({

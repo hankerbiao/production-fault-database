@@ -22,6 +22,8 @@ class SnapshotCollection(FakeCollection):
                 continue
             actual = doc.get(key)
             if isinstance(expected, dict):
+                if "$eq" in expected and actual != expected["$eq"]:
+                    return False
                 if "$exists" in expected and (key in doc) != expected["$exists"]:
                     return False
                 if "$regex" in expected and (not isinstance(actual, str) or not re.search(expected["$regex"], actual)):
@@ -57,7 +59,7 @@ class SnapshotCollection(FakeCollection):
             doc.update(op._doc.get("$set", {}))
             for key in op._doc.get("$unset", {}):
                 doc.pop(key, None)
-        return SimpleNamespace(upserted_count=inserted, modified_count=modified)
+        return SimpleNamespace(upserted_count=inserted, modified_count=modified, matched_count=modified)
 
 
 class SnapshotDB(FakeDB):
@@ -77,10 +79,48 @@ def repair(**overrides):
     return row
 
 
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("MANDT", "800"),
+        ("PCODE", "PC-2"),
+        ("ZWXDT", "20260922104833"),
+        ("ZMCOD1", "part-1"),
+        ("ZMCOD2", "part-2"),
+        ("ZRCOD1", "removed-1"),
+        ("ZRCOD2", "removed-2"),
+    ],
+)
+def test_v3_identity_distinguishes_each_identity_field(field, value):
+    row = repair(T_FIND="2026-09-22 10:48:32")
+    assert sync.repair_identity(row).startswith("repair:v3:")
+    assert sync.repair_identity(row) != sync.repair_identity({**row, field: value})
+
+
+def test_v3_identity_normalizes_repair_time_and_ignores_other_fields():
+    row = repair(T_FIND="2026-09-22 10:48:32")
+    changed = {**row, "ZWXDT": "2026/09/22 104832", "T_FIND": "other", "ZGZMS": "changed"}
+    assert sync.repair_identity(row) == sync.repair_identity(changed)
+
+
+@pytest.mark.parametrize("field", ["MANDT", "PCODE", "ZWXDT"])
+def test_v3_identity_requires_core_fields(field):
+    with pytest.raises(ValueError):
+        sync.repair_identity(repair(**{field: ""}))
+
+
 def seed_db(monkeypatch):
     monkeypatch.setenv("TARGET_COLLECTION", "orders")
     db = SnapshotDB()
-    db["orders"].docs = [{"_id": "order", "data": {"VBELN": "SO-1"}}]
+    db["orders"].docs = [{"_id": "order", "source": "KK", "data": {
+        "MANDT": "600", "AUFNR": "PO-1", "VBELN": "SO-1", "PRODH": "00100",
+    }}, {"_id": "new-order", "source": "KK", "data": {
+        "MANDT": "600", "AUFNR": "new-production", "VBELN": "SO-NEW", "PRODH": "00100",
+    }}]
+    db["station_records_sap"].docs = [{
+        "_id": "station", "_prodh_scope": "00100", "MANDT": "600", "PCODE": "PC-1",
+        "AUFNR": "PO-1", "KDAUF": "SO-1",
+    }]
     db["checkpoints"].docs = [{"_id": "repair_records", "watermark": {"ZDATE": "20261013", "ZTIME": "235959"}}]
     return db
 
@@ -122,7 +162,7 @@ def run(db, run_id="run-1", **kwargs):
 @pytest.mark.parametrize("end,expected", [
     (date(2026, 10, 14), date(2026, 8, 1)),
     (date(2027, 1, 31), date(2026, 11, 1)),
-    (date(2026, 2, 28), date(2026, 1, 1)),
+    (date(2026, 2, 28), date(2025, 12, 1)),
 ])
 def test_window_uses_three_calendar_months_and_hard_lower_bound(monkeypatch, end, expected):
     db = seed_db(monkeypatch)
@@ -167,9 +207,10 @@ def test_legacy_duplicates_migrate_in_place_and_delete_old_copy(monkeypatch):
     source(monkeypatch, [current])
     result = run(db)
     assert result["inserted"] == 0 and result["relinked"] == 1
-    assert result["deleted_out_of_scope"] == 1
-    assert len(db["repairs"].docs) == 1 and db["repairs"].docs[0]["_id"] == "current"
-    assert {"old", "current", sync.source_key(old, sync.REPAIR_KEY_FIELDS)} <= set(db["repairs"].docs[0]["_legacy_ids"])
+    assert result["deleted_out_of_scope"] == 0
+    assert {doc["_id"] for doc in db["repairs"].docs} == {"old", "current"}
+    current_doc = next(doc for doc in db["repairs"].docs if doc["_id"] == "current")
+    assert {"old", "current", sync.source_key(old, sync.REPAIR_KEY_FIELDS)} <= set(current_doc["_legacy_ids"])
     assert "repairs_archive" not in db.collections
 
 
@@ -183,7 +224,35 @@ def test_replacement_details_at_same_event_time_remain_separate(monkeypatch):
     assert result["inserted"] == 2 and len(db["repairs"].docs) == 2
 
 
-@pytest.mark.parametrize("broken", ["fetch", "conflict", "missing_identity", "wrong_date"])
+def test_repair_component_codes_disambiguate_same_event(monkeypatch):
+    db = seed_db(monkeypatch)
+    source(monkeypatch, [
+        repair(ZRCOD1="old-part", ZRCOD2="old-replacement"),
+        repair(ZRCOD1="new-part", ZRCOD2="new-replacement"),
+    ])
+    result = run(db)
+    assert result["inserted"] == 2 and len(db["repairs"].docs) == 2
+
+
+def test_slash_timestamp_is_normalized_and_stored_canonically(monkeypatch):
+    db = seed_db(monkeypatch)
+    source(monkeypatch, [repair(
+        ZWXDT="2025/06/09 192302",
+        ZDATE_WX="20250609",
+        ZDATE="20250609",
+        ZTIME="192302",
+    )])
+    result = sync.sync_repair(
+        db, "repairs", mode="full", start_date=date(2025, 1, 1),
+        end_date=date(2025, 12, 31), batch_size=1, dry_run=False,
+        run_id="run-2025", defer_finalize=True,
+    )
+    assert result["success"] is True
+    assert result["unique_rows"] == 1
+    assert db["repairs"].docs[0]["ZWXDT"] == "20250609192302"
+
+
+@pytest.mark.parametrize("broken", ["fetch", "conflict", "missing_identity", "wrong_date", "invalid_datetime"])
 def test_invalid_snapshot_does_not_write_or_cleanup(monkeypatch, broken):
     db = seed_db(monkeypatch)
     db["repairs"].docs = [{**repair(), "_id": "old", "_source_view": "ZSGV_ZZT_WLJL"}]
@@ -195,6 +264,8 @@ def test_invalid_snapshot_does_not_write_or_cleanup(monkeypatch, broken):
         rows.append(repair(PCODE=""))
     elif broken == "wrong_date":
         rows.append(repair(ZDATE_WX="20260101"))
+    elif broken == "invalid_datetime":
+        rows.append(repair(ZWXDT="2025/06/31 192302"))
     source(monkeypatch, rows, fail_after_first=broken == "fetch")
     with pytest.raises((ValueError, RuntimeError)):
         run(db)
@@ -217,12 +288,10 @@ def test_snapshot_retains_repairs_when_sales_reference_is_empty(monkeypatch, dry
     db = seed_db(monkeypatch)
     db["orders"].docs = []
     source(monkeypatch, [repair(), repair(PCODE="PC-2", VBELN="")])
-    result = run(db, dry_run=dry_run)
-    assert result["success"]
-    assert result["sales_order_vbelns"] == 0
-    assert result["unmatched_sales_orders_retained"] == 1
-    assert result["empty_sales_orders_retained"] == 1
-    assert len(db["repairs"].docs) == (0 if dry_run else 2)
+    with pytest.raises(RuntimeError, match="销售订单表为空"):
+        run(db, dry_run=dry_run)
+    assert len(db["repairs"].docs) == 0
+    assert len(db["sync_scope_pending"].docs) == 0
 
 
 def test_cleanup_uses_repair_date_and_keeps_outside_window(monkeypatch):
@@ -234,26 +303,25 @@ def test_cleanup_uses_repair_date_and_keeps_outside_window(monkeypatch):
     ]
     source(monkeypatch, [repair(PCODE="new")])
     result = run(db)
-    assert result["deleted_out_of_scope"] == 1
+    assert result["deleted_out_of_scope"] == 0
     assert {"outside", "other"} <= {d["_id"] for d in db["repairs"].docs}
 
 
-def test_empty_or_large_shrinking_snapshot_is_blocked_before_write(monkeypatch):
+def test_empty_or_large_shrinking_snapshot_never_deletes_absent_records(monkeypatch):
     db = seed_db(monkeypatch)
     db["repairs"].docs = [
         {**repair(PCODE=f"PC-{i}"), "_id": str(i), "_source_view": "ZSGV_ZZT_WLJL"}
         for i in range(250)
     ]
-    for rows in [[], [repair(PCODE="new")]]:
+    for index, rows in enumerate([[], [repair(PCODE="new")]]):
         source(monkeypatch, rows)
-        with pytest.raises(RuntimeError, match="清理"):
-            run(db)
-        assert len(db["repairs"].docs) == 250
-        assert db["repairs"].indexes == []
+        result = run(db, f"shrink-{index}")
+        assert result["deleted_out_of_scope"] == 0
+        assert len(db["repairs"].docs) >= 250
     source(monkeypatch, [])
-    result = run(db, allow_large_cleanup=True)
-    assert result["deleted_out_of_scope"] == 250
-    assert db["repairs"].docs == []
+    result = run(db, "empty-final", allow_large_cleanup=True)
+    assert result["deleted_out_of_scope"] == 0
+    assert len(db["repairs"].docs) >= 250
     assert "repairs_archive" not in db.collections
 
 
@@ -267,15 +335,82 @@ def test_deferred_cleanup_requires_validated_matching_run(monkeypatch):
         sync.finalize_repair_run(db, "repairs", {**result, "snapshot_complete": False}, "run-1")
 
 
+def test_duplicate_cleanup_merges_empty_fields_and_is_idempotent(monkeypatch):
+    db = seed_db(monkeypatch)
+    row = repair(T_FIND="2026-09-22 10:48:32", ZGZMS="")
+    db["repairs"].docs = [
+        {**row, "_id": "current", "_repair_id": sync.repair_identity(row),
+         "_source_view": sync.REPAIR_VIEW_ID, "_scope_run_id": "run-1"},
+        {**row, "ZGZMS": "fixed", "_id": "old", "_source_view": sync.REPAIR_VIEW_ID},
+    ]
+    result = {"success": True, "snapshot_complete": True, "run_id": "run-1", "unique_rows": 1,
+              "range": {"start": "2026-09-01", "end": "2026-09-30"}}
+    summary = sync.finalize_repair_run(db, "repairs", result, "run-1")
+    assert summary["merged_duplicate_groups"] == summary["deleted_duplicates"] == 1
+    assert len(db["repairs"].docs) == 1
+    assert db["repairs"].docs[0]["ZGZMS"] == "fixed"
+    assert "old" in db["repairs"].docs[0]["_legacy_ids"]
+    assert sync.finalize_repair_run(db, "repairs", result, "run-1")["deleted_duplicates"] == 0
+
+
+@pytest.mark.parametrize(("field", "value"), [
+    ("MANDT", "800"), ("ZGZMS", "other"), ("ZMCOD2", "other-part"), ("GSTRS", "2026-09-20"),
+])
+def test_duplicate_cleanup_preserves_conflicting_group(monkeypatch, field, value):
+    db = seed_db(monkeypatch)
+    row = repair(T_FIND="2026-09-22 10:48:32", ZMCOD1="part", ZMCOD2="part-2", GSTRS="2026-09-21")
+    db["repairs"].docs = [
+        {**row, "_id": "current", "_repair_id": sync.repair_identity(row),
+         "_source_view": sync.REPAIR_VIEW_ID, "_scope_run_id": "run-1"},
+        {**row, field: value, "_id": "old", "_source_view": sync.REPAIR_VIEW_ID},
+    ]
+    before = [dict(doc) for doc in db["repairs"].docs]
+    result = {"success": True, "snapshot_complete": True, "run_id": "run-1", "unique_rows": 1,
+              "range": {"start": "2026-09-01", "end": "2026-09-30"}}
+    summary = sync.finalize_repair_run(db, "repairs", result, "run-1")
+    assert summary["conflict_groups"] == 1 and summary["deleted_duplicates"] == 0
+    assert db["repairs"].docs == before
+
+
+def test_duplicate_cleanup_rekeys_identity_and_skips_multiple_current_rows(monkeypatch):
+    db = seed_db(monkeypatch)
+    row = repair(T_FIND="2026-09-22 10:48:32")
+    db["repairs"].docs = [
+        {**row, "_id": "current", "_repair_id": sync.repair_identity(row),
+         "_source_view": sync.REPAIR_VIEW_ID, "_scope_run_id": "run-1"},
+        {**row, "ZMCOD2": "part", "_id": "old", "_source_view": sync.REPAIR_VIEW_ID},
+    ]
+    result = {"success": True, "snapshot_complete": True, "run_id": "run-1", "unique_rows": 1,
+              "range": {"start": "2026-09-01", "end": "2026-09-30"}}
+    summary = sync.finalize_repair_run(db, "repairs", result, "run-1")
+    assert summary["merged_duplicate_groups"] == 1
+    assert len(db["repairs"].docs) == 1
+    assert db["repairs"].docs[0]["ZMCOD2"] == "part"
+
+
+@pytest.mark.parametrize(("pcode", "timestamp"), [("", "20260922104832"), ("PC-1", ""), ("PC-1", "bad")])
+def test_duplicate_cleanup_skips_invalid_key(monkeypatch, pcode, timestamp):
+    db = seed_db(monkeypatch)
+    row = repair(PCODE=pcode, ZWXDT=timestamp)
+    db["repairs"].docs = [
+        {**row, "_id": "current", "_source_view": sync.REPAIR_VIEW_ID, "_scope_run_id": "run-1"},
+        {**row, "_id": "old", "_source_view": sync.REPAIR_VIEW_ID},
+    ]
+    result = {"success": True, "snapshot_complete": True, "run_id": "run-1", "unique_rows": 1,
+              "range": {"start": "2026-09-01", "end": "2026-09-30"}}
+    summary = sync.finalize_repair_run(db, "repairs", result, "run-1")
+    assert summary["invalid_key_rows"] == 2 and len(db["repairs"].docs) == 2
+
+
 def test_source_refresh_preserves_backfilled_orders_and_invalidates_changed_production(monkeypatch):
     db = seed_db(monkeypatch)
     source(monkeypatch, [repair(AUFNR="", VBELN="")])
     run(db)
-    db["repairs"].docs[0].update({"AUFNR": "filled", "VBELN": "filled-sales", "GSTRS": "2026-09-21"})
+    db["repairs"].docs[0].update({"AUFNR": "PO-1", "VBELN": "SO-1", "GSTRS": "2026-09-21"})
     source(monkeypatch, [repair(AUFNR="", VBELN="", ZGZMS="new description")])
     run(db, "run-2")
     doc = db["repairs"].docs[0]
-    assert (doc["AUFNR"], doc["VBELN"], doc["GSTRS"]) == ("filled", "filled-sales", "2026-09-21")
+    assert (doc["AUFNR"], doc["VBELN"], doc["GSTRS"]) == ("PO-1", "SO-1", "2026-09-21")
     source(monkeypatch, [repair(AUFNR="new-production", VBELN="")])
     run(db, "run-3")
     assert (doc["AUFNR"], doc["VBELN"], doc["GSTRS"]) == ("new-production", "", "")
@@ -286,9 +421,9 @@ def test_workflow_only_backfills_current_snapshot_and_relevant_stations(monkeypa
     from test_backfill_repair_orders_from_station import args
 
     db = seed_db(monkeypatch)
-    db["orders"].docs = [{"_id": "order", "aufnr": "PO-1", "data": {"AUFNR": "PO-1", "VBELN": "SO-1", "GSTRS": "2026-09-21"}}]
+    db["orders"].docs = [{"_id": "order", "source": "KK", "_prodh_scope": "00100", "aufnr": "PO-1", "data": {"AUFNR": "PO-1", "VBELN": "SO-1", "GSTRS": "2026-09-21"}}]
     db["stations"].docs = [
-        {"_id": "station", "PCODE": "PC-1", "AUFNR": "PO-1", "KDAUF": "SO-1"},
+        {"_id": "station", "_prodh_scope": "00100", "_scope_rule_version": 2, "MANDT": "600", "PCODE": "PC-1", "AUFNR": "PO-1", "KDAUF": "SO-1"},
         {"_id": "irrelevant", "PCODE": "OTHER", "AUFNR": "PO-2", "KDAUF": "SO-2"},
     ]
     db["repairs"].docs = [
@@ -331,14 +466,18 @@ def test_backfill_failure_keeps_stale_rows_and_retry_completes(monkeypatch):
     monkeypatch.setattr(backfill, "backfill_repairs", original)
     source(monkeypatch, [repair()])
     result = backfill.run_workflow(db, workflow, run_id="retry")
-    assert result["hana_sync_commit"]["deleted_out_of_scope"] == 1
-    assert len(db["repairs"].docs) == 1
+    assert result["hana_sync_commit"]["deleted_out_of_scope"] == 0
+    assert len(db["repairs"].docs) == 2
 
 
 def test_delete_failure_propagates_and_preserves_stale_documents(monkeypatch):
     db = seed_db(monkeypatch)
-    db["repairs"].docs = [{**repair(PCODE="deleted"), "_id": "old", "_source_view": sync.REPAIR_VIEW_ID}]
-    source(monkeypatch, [repair()])
+    db["repairs"].docs = [{**repair(T_FIND="2026-09-22 10:48:32"), "_id": "old", "_source_view": sync.REPAIR_VIEW_ID}]
+    db["repairs"].docs.append({
+        **repair(T_FIND="2026-09-22 10:48:32"), "_id": "current", "_repair_id": sync.repair_identity(repair()),
+        "_source_view": sync.REPAIR_VIEW_ID,
+    })
+    source(monkeypatch, [repair(T_FIND="2026-09-22 10:48:32")])
     result = run(db, defer_finalize=True)
 
     def fail(*_args, **_kwargs):
@@ -373,7 +512,7 @@ def test_dry_run_entry_does_not_acquire_mongo_lease(monkeypatch):
     monkeypatch.setattr(backfill, "mongo_uri", lambda: "mongodb://test")
     monkeypatch.setattr(backfill, "load_dotenv", lambda: None)
     monkeypatch.setattr(backfill, "process_lock", lambda *_args: nullcontext())
-    monkeypatch.setattr(backfill, "resource_lock", forbidden)
+    monkeypatch.setattr(backfill, "resource_locks", forbidden)
     monkeypatch.setattr(backfill, "run_workflow", lambda *_args, **_kwargs: {"success": True})
     assert backfill.run(workflow)["success"]
 
@@ -382,7 +521,7 @@ def test_dry_run_backfills_new_source_rows_without_mutating_local_repairs(monkey
     from scripts.sync import 增量同步和清洗维修故障记录 as backfill
     db = seed_db(monkeypatch)
     db["station_records_sap"].docs = [
-        {"_id": "station", "PCODE": "PC-NEW", "AUFNR": "PO-1", "KDAUF": "SO-1"},
+        {"_id": "station", "_prodh_scope": "00100", "MANDT": "600", "PCODE": "PC-NEW", "AUFNR": "PO-1", "KDAUF": "SO-1"},
     ]
     source(monkeypatch, [repair(PCODE="PC-NEW", AUFNR="", VBELN="")])
     args = backfill.build_parser().parse_args(["--dry-run", "--basic-backfill", "--no-progress"])
@@ -391,8 +530,8 @@ def test_dry_run_backfills_new_source_rows_without_mutating_local_repairs(monkey
     args.sync_end_date = date(2026, 10, 14)
     result = backfill.run_workflow(db, args)
     assert result["backfill_basis"] == "validated_source_snapshot"
-    assert result["station_matches"] == 1
-    assert result["would_update"] == 1
+    assert result["station_matches"] == 0
+    assert result["would_update"] == 0
     assert db["repairs"].docs == []
 
 
@@ -425,11 +564,112 @@ def test_reported_five_versions_reconcile_to_three_distinct_repairs(monkeypatch)
         })
     source(monkeypatch, [chain_new, board_new, third])
     result = run(db)
-    assert result["inserted"] == 0 and result["deleted_out_of_scope"] == 2
-    assert len(db["repairs"].docs) == 3
+    assert result["inserted"] == 0 and result["deleted_out_of_scope"] == 0
+    assert len(db["repairs"].docs) == 5
     assert {doc["ZGZMS"] for doc in db["repairs"].docs} == {"chain", "board", "third"}
     assert "repairs_archive" not in db.collections
     source(monkeypatch, [chain_new, board_new, third])
     repeated = run(db, "repeat")
     assert repeated["inserted"] == repeated["deleted_out_of_scope"] == 0
-    assert repeated["unchanged"] == 3 and len(db["repairs"].docs) == 3
+    assert repeated["unchanged"] == 3 and len(db["repairs"].docs) == 5
+
+
+@pytest.mark.parametrize("same_hash", [False, True])
+def test_untrusted_legacy_backfill_is_not_relabelled_as_in_scope(monkeypatch, same_hash):
+    db = seed_db(monkeypatch)
+    db["orders"].docs.append({"source": "KK", "data": {
+        "MANDT": "600", "AUFNR": "BAD", "VBELN": "SBAD", "PRODH": "00200",
+    }})
+    row = repair(AUFNR="", VBELN="")
+    db["repairs"].docs = [{
+        **row, "_id": "legacy", "_repair_id": sync.repair_identity(row),
+        "_source_view": sync.REPAIR_VIEW_ID, "_source_orders": {"AUFNR": "", "VBELN": ""},
+        "_source_hash": sync.hashlib.sha256(sync.BSON.encode(row)).hexdigest() if same_hash else "old",
+        "AUFNR": "BAD", "VBELN": "SBAD", "GSTRS": "2026-01-01",
+    }]
+    source(monkeypatch, [row])
+    run(db)
+    document = db["repairs"].docs[0]
+    assert document["_prodh_scope"] == "00100"
+    assert (document["AUFNR"], document["VBELN"], document["GSTRS"]) == ("PO-1", "SO-1", "")
+
+
+def test_old_pending_recovers_with_legacy_identity_after_leaving_window(monkeypatch):
+    from scripts.sync_runtime import save_scope_pending
+
+    db = seed_db(monkeypatch)
+    row = repair(ZDATE_WX="20260101", ZWXDT="20260101000000")
+    save_scope_pending(db, "repair_records", sync.repair_identity(row), row)
+    db["repairs"].docs = [{**row, "_id": "legacy", "_source_view": sync.REPAIR_VIEW_ID}]
+    source(monkeypatch, [])
+    result = run(db)
+    assert result["success"] and result["in_scope"] == 1
+    assert result["inserted"] == 0 and result["relinked"] == 1
+    assert [doc["_id"] for doc in db["repairs"].docs] == ["legacy"]
+    assert db["sync_scope_pending"].docs == []
+
+
+def test_order_in_sales_collection_is_admitted_even_if_prodh_differs(monkeypatch):
+    from scripts.sync_runtime import save_scope_pending
+
+    db = seed_db(monkeypatch)
+    row = repair(ZDATE_WX="20260101", ZWXDT="20260101000000")
+    db["orders"].docs[0]["data"]["PRODH"] = "00200"
+    save_scope_pending(db, "repair_records", sync.repair_identity(row), row)
+    source(monkeypatch, [])
+    result = run(db)
+    assert result["in_scope"] == 1
+    assert len(db["repairs"].docs) == 1
+    assert db["sync_scope_pending"].docs == []
+
+
+def test_current_compatible_v3_rows_merge_and_repeat_without_data_loss(monkeypatch):
+    db = seed_db(monkeypatch)
+    first = repair(T_FIND="2026-09-22 10:48:32", ZMCOD2="", ZGZMS="")
+    second = repair(T_FIND="2026-09-22 10:48:32", ZMCOD2="part", ZGZMS="fixed")
+    for run_id in ("run-1", "run-2"):
+        source(monkeypatch, [first, second])
+        result = run(db, run_id)
+        assert result["success"]
+        assert len(db["repairs"].docs) == 1
+        assert db["repairs"].docs[0]["ZMCOD2"] == "part"
+        assert db["repairs"].docs[0]["ZGZMS"] == "fixed"
+
+
+def test_current_v3_rows_with_conflicting_values_remain_separate(monkeypatch):
+    db = seed_db(monkeypatch)
+    first = repair(T_FIND="2026-09-22 10:48:32", ZMCOD2="", ZGZMS="first")
+    second = repair(T_FIND="2026-09-22 10:48:32", ZMCOD2="part", ZGZMS="second")
+    source(monkeypatch, [first, second])
+    result = run(db)
+    assert result["conflict_groups"] == 1
+    assert result["deleted_duplicates"] == 0
+    assert {row["ZGZMS"] for row in db["repairs"].docs} == {"first", "second"}
+
+
+def test_cleanup_key_uses_five_specified_fields_not_find_time():
+    row = repair(T_FIND='2026-09-22 10:48:32', ZMCOD1='part', ZRCOD1='removed', MATNR='material')
+    key = sync.repair_merge_key(row)
+    assert key == sync.repair_merge_key({**row, 'T_FIND': 'different'})
+    for field in ('PCODE', 'ZWXDT', 'ZMCOD1', 'ZRCOD1', 'MATNR'):
+        value = '20260922104833' if field == 'ZWXDT' else 'different'
+        assert key != sync.repair_merge_key({**row, field: value})
+    assert sync.repair_merge_key({**row, 'PCODE': ''}) is None
+    assert sync.repair_merge_key({**row, 'ZWXDT': 'invalid'}) is None
+
+
+def test_full_table_cleanup_previews_and_merges_without_run_marker(monkeypatch):
+    db = seed_db(monkeypatch)
+    row = repair(ZMCOD1='part', ZRCOD1='old', MATNR='M1', ZGZMS='')
+    db['repairs'].docs = [
+        {**row, '_id': 'one'},
+        {**row, '_id': 'two', 'ZGZMS': 'fixed'},
+        {**row, '_id': 'distinct', 'MATNR': 'M2'},
+    ]
+    preview = sync.cleanup_repair_duplicates(db['repairs'], {}, apply=False)
+    assert preview['deleted_duplicates'] == 1
+    assert len(db['repairs'].docs) == 3
+    actual = sync.cleanup_repair_duplicates(db['repairs'], {})
+    assert actual['deleted_duplicates'] == 1
+    assert len(db['repairs'].docs) == 2
+    assert any(doc.get('ZGZMS') == 'fixed' for doc in db['repairs'].docs)

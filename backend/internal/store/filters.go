@@ -64,9 +64,9 @@ func repairFilter(f Filters) bson.M {
 		conditions = append(conditions, bson.M{"$or": bson.A{bson.M{"ERROR_CODE": bson.M{"$regex": re, "$options": "i"}}, bson.M{"ERROR_MSG": bson.M{"$regex": re, "$options": "i"}}, bson.M{"ZGZMS": bson.M{"$regex": re, "$options": "i"}}, bson.M{"RPDESC": bson.M{"$regex": re, "$options": "i"}}, bson.M{"ZMCOD1": bson.M{"$regex": re, "$options": "i"}}, bson.M{"PCODE": bson.M{"$regex": re, "$options": "i"}}, bson.M{"VBELN": bson.M{"$regex": re, "$options": "i"}}, bson.M{"AUFNR": bson.M{"$regex": re, "$options": "i"}}}})
 	}
 	if len(conditions) == 0 {
-		return bson.M{}
+		return companyScopeFilter(nil)
 	}
-	return bson.M{"$and": conditions}
+	return companyScopeFilter(bson.M{"$and": conditions})
 }
 
 // repairTimeField defaults to repair time to preserve existing API callers.
@@ -199,11 +199,8 @@ func orderFilter(f OrderFilters) bson.M {
 	if f.ShipmentDateFrom != "" || f.ShipmentDateTo != "" {
 		conditions = append(conditions, shipmentDateRangeFilter(f.ShipmentDateFrom, f.ShipmentDateTo))
 	}
-	if f.Company5000 != "" {
-		conditions = append(conditions, anyOrderFieldEquals(
-			[]string{"is5000Company", "is_5000_company", "company5000", "IS_5000_COMPANY", "data.is5000Company", "data.is_5000_company", "data.company5000", "data.IS_5000_COMPANY"},
-			parseBoolFilter(f.Company5000),
-		))
+	if f.Company5000 != "" && !parseBoolFilter(f.Company5000) {
+		conditions = append(conditions, bson.M{"_id": bson.M{"$exists": false}})
 	}
 	if f.ShipmentOnly {
 		conditions = append(conditions, bson.M{"$and": bson.A{
@@ -219,6 +216,22 @@ func orderFilter(f OrderFilters) bson.M {
 		return bson.M{}
 	}
 	return bson.M{"$and": conditions}
+}
+
+// scopeFilter is the gateway boundary for the production dashboard. Records
+// without an explicit, verified 00100 scope are never visible to callers.
+func scopeFilter(filter bson.M) bson.M {
+	if len(filter) == 0 {
+		return bson.M{"_prodh_scope": "00100"}
+	}
+	filter["_prodh_scope"] = "00100"
+	return filter
+}
+
+func companyScopeFilter(filter bson.M) bson.M {
+	filter = scopeFilter(filter)
+	filter["_scope_rule_version"] = 2
+	return filter
 }
 
 func splitFilterValues(value string) []string {

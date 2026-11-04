@@ -16,6 +16,7 @@
 - 分页接口默认 `page=1`、`pageSize=20`；`pageSize` 超过 100 或小于 1 时按 20 处理
 - 页码从 1 开始，排序由后端固定，调用方不需要传排序参数
 - 关键字采用不区分大小写的正则匹配，后端会转义用户输入，不支持调用方注入正则表达式
+- 所有查询、详情、统计和导出接口固定只返回已验证 `_prodh_scope="00100"` 的数据；调用方不能通过参数扩大产品范围。
 
 ## 1.1 纯数据接口扩展与实现约束
 
@@ -74,7 +75,7 @@ GET /api/faults/by-orders?productionOrders=PO001,PO002
 
 ### BOM 过账原始数据 `GET /api/views/ZSGV_ZSD124`
 
-支持 `productionOrder`、`salesOrder`、`productModel`、`materialCode`、`dateFrom`、`dateTo`、`missingSalesOrder` 和分页参数，分别过滤 `AUFNR_1`、`VBELN_EX`、`MATNR`、`GSTRS`。`missingSalesOrder=true` 仅适用于 BOM 过账，匹配空白、`null` 或缺失的 `VBELN_EX`。其中 `productModel` 在该视图按 `MATNR` 匹配。返回原始 BOM 行，包含 `MBLNR`、`MJAHR`、`ZEILE`、`MATNR`、`WERKS`、`BWART`、`MENGE_A`、`AUFNR_1`、`VBELN_EX`、`GSTRS`、`BUDAT_MKPF`；由调用方决定 LRR 或复合机型关联规则。
+支持 `productionOrder`、`salesOrder`、`productModel`、`materialCode`、`cpx`、`dateFrom`、`dateTo`、`missingSalesOrder` 和分页参数，分别过滤 `AUFNR_1`、`VBELN_EX`、`MATNR`、`CPX`、`GSTRS`。`cpx` 按公司字段精确匹配；当前可选值由 `GET /api/views/ZSGV_ZSD124/options` 返回。`missingSalesOrder=true` 仅适用于 BOM 过账，匹配空白、`null` 或缺失的 `VBELN_EX`。其中 `productModel` 在该视图按 `MATNR` 匹配。返回原始 BOM 行，包含 `MBLNR`、`MJAHR`、`ZEILE`、`MATNR`、`WERKS`、`BWART`、`MENGE_A`、`AUFNR_1`、`VBELN_EX`、`GSTRS`、`BUDAT_MKPF`；由调用方决定 LRR 或复合机型关联规则。
 
 ### 详情与数据状态
 
@@ -86,7 +87,7 @@ GET /api/sync/status
 GET /api/data-status
 ```
 
-视图详情接口均保留源字段名并返回完整原始文档字段（不是看板摘要）。`/api/sync/status` 返回同步任务的运行状态和脚本摘要；`/api/data-status` 返回各集合的最新同步时间并带上当前任务的 `state`、`startedAt`、`finishedAt`：
+视图详情接口均保留源字段名并返回完整原始文档字段（不是看板摘要）。`/api/sync/status` 返回同步任务的运行状态和脚本摘要；`/api/data-status` 返回各集合的最新同步时间、固定产品范围的发布状态，以及当前任务的 `state`、`startedAt`、`finishedAt`：
 
 ```json
 {
@@ -97,9 +98,14 @@ GET /api/data-status
   "bomPostingsLastSyncedAt": "2026-09-02T01:05:00Z",
   "state": "success",
   "startedAt": "2026-09-02T01:00:00Z",
-  "finishedAt": "2026-09-02T01:05:00Z"
+  "finishedAt": "2026-09-02T01:05:00Z",
+  "publicationState": "ready",
+  "publicationRunId": "294963755d1e4933beedf8efdd15119b",
+  "publicationReady": true
 }
 ```
+
+`publicationReady=true` 表示销售订单、工位和维修三个核心数据集已完成同一轮 `00100` 范围的发布；扩展数据（BOM、序列号、SCS）失败时会保留核心发布，并通过 `publicationLastError` 报告错误。
 
 统一错误响应（除根路径重定向外）：
 

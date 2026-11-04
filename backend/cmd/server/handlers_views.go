@@ -19,6 +19,15 @@ func (s *server) viewList(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, result)
 }
 
+func (s *server) viewBOMOptions(w http.ResponseWriter, r *http.Request) {
+	result, err := s.store.ViewOptions(r.Context(), "ZSGV_ZSD124", "cpx")
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
 func (s *server) viewListAll(w http.ResponseWriter, r *http.Request) {
 	result, err := s.store.ViewListAll(r.Context(), r.PathValue("viewID"), viewFilters(r.URL.Query()))
 	if err != nil {

@@ -18,6 +18,26 @@
     { "name": "sync", "description": "同步任务和数据状态" }
   ],
   "paths": {
+    "/api/scs/doa/devices": {
+      "get": {
+        "tags": ["scs"],
+        "operationId": "listSCSDoaDevices",
+        "description": "仅返回已验证 00100 范围内的 DOA 关联设备。按产品条码聚合并保留各申报证据；日期冲突或缺失时不推断值。完整规则见 docs/SCS设备日期接口.md。",
+        "parameters": [
+          { "name": "page", "in": "query", "schema": { "type": "integer", "minimum": 1, "default": 1 } },
+          { "name": "pageSize", "in": "query", "schema": { "type": "integer", "minimum": 1, "maximum": 1000, "default": 100 } },
+          { "name": "company5000", "in": "query", "schema": { "type": "boolean" } },
+          { "name": "salesOrder", "in": "query", "schema": { "type": "string" } },
+          { "name": "serviceOrder", "in": "query", "schema": { "type": "string" } },
+          { "name": "sn", "in": "query", "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": { "description": "设备及完整申报关联证据的分页结果", "content": { "application/json": { "schema": { "type": "object", "required": ["items", "page", "pageSize", "total", "hasMore", "scope"], "properties": { "items": { "type": "array", "items": { "type": "object" } }, "page": { "type": "integer" }, "pageSize": { "type": "integer" }, "total": { "type": "integer" }, "hasMore": { "type": "boolean" }, "scope": { "const": "00100" } } } } } },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "500": { "$ref": "#/components/responses/ServerError" }
+        }
+      }
+    },
     "/api/exports/rows": {
       "post": {
         "tags": ["orders", "faults", "views"],
@@ -116,8 +136,11 @@
     "/api/orders/options": {
       "get": { "tags": ["orders"], "operationId": "listOrderOptions", "description": "返回 LRR 筛选候选。可通过 base 限定基地，结果按同步版本短时缓存，避免分页读取完整订单。", "parameters": [{ "$ref": "#/components/parameters/Base" }], "responses": { "200": { "description": "订单筛选候选", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/OrderOptions" } } } }, "500": { "$ref": "#/components/responses/ServerError" } } }
     },
+    "/api/views/ZSGV_ZSD124/options": {
+      "get": { "tags": ["views"], "operationId": "listBOMCompanyOptions", "summary": "查询订单 BOM 的公司候选", "responses": { "200": { "description": "CPX 公司候选", "content": { "application/json": { "schema": { "type": "object", "properties": { "items": { "type": "array", "items": { "type": "string" } } } } } } }, "500": { "$ref": "#/components/responses/ServerError" } } }
+    },
     "/api/views/{viewID}": {
-      "get": { "tags": ["views"], "operationId": "listViewRecords", "description": "允许的 viewID：ZSGV_ZSD124、ZSGV_ZPP_SERNOLIST、Z_V_ZMES_T_001、SCS_DOA、SCS_CHANGE。pageSize 越界时使用 20。SCS_DOA 和 SCS_CHANGE 分别对应 SCS DOA 申报与换上换下数据。", "parameters": [{ "$ref": "#/components/parameters/ViewID" }, { "$ref": "#/components/parameters/Page" }, { "$ref": "#/components/parameters/PageSize" }, { "$ref": "#/components/parameters/Keyword" }, { "$ref": "#/components/parameters/From" }, { "$ref": "#/components/parameters/To" }, { "$ref": "#/components/parameters/DateFrom" }, { "$ref": "#/components/parameters/DateTo" }, { "$ref": "#/components/parameters/StationCode" }, { "$ref": "#/components/parameters/SN" }, { "$ref": "#/components/parameters/ProductionOrder" }, { "$ref": "#/components/parameters/SalesOrder" }, { "$ref": "#/components/parameters/Base" }, { "$ref": "#/components/parameters/ProductModel" }, { "$ref": "#/components/parameters/HeadOrder" }, { "$ref": "#/components/parameters/ItemOrder" }, { "$ref": "#/components/parameters/HeadSN" }, { "$ref": "#/components/parameters/ItemSN" }, { "$ref": "#/components/parameters/MissingSalesOrder" }, { "$ref": "#/components/parameters/MaterialCode" }, { "$ref": "#/components/parameters/DOACode" }, { "$ref": "#/components/parameters/DOAType" }, { "$ref": "#/components/parameters/Status" }, { "$ref": "#/components/parameters/Judgment" }, { "$ref": "#/components/parameters/EnrichmentStatus" }, { "$ref": "#/components/parameters/AcceptedDateFrom" }, { "$ref": "#/components/parameters/AcceptedDateTo" }, { "$ref": "#/components/parameters/Customer" }, { "$ref": "#/components/parameters/ServiceOrder" }, { "$ref": "#/components/parameters/ChangeType" }, { "$ref": "#/components/parameters/PartNumber" }, { "$ref": "#/components/parameters/PartSN" }, { "$ref": "#/components/parameters/Operator" }, { "$ref": "#/components/parameters/NeedReturn" }, { "$ref": "#/components/parameters/Revoked" }, { "$ref": "#/components/parameters/Company5000" }], "responses": { "200": { "$ref": "#/components/responses/ViewPage" }, "400": { "$ref": "#/components/responses/BadRequest" }, "501": { "$ref": "#/components/responses/NotImplemented" } } }
+      "get": { "tags": ["views"], "operationId": "listViewRecords", "description": "允许的 viewID：ZSGV_ZSD124、ZSGV_ZPP_SERNOLIST、Z_V_ZMES_T_001、SCS_DOA、SCS_CHANGE。pageSize 越界时使用 20。SCS_DOA 和 SCS_CHANGE 分别对应 SCS DOA 申报与换上换下数据。", "parameters": [{ "$ref": "#/components/parameters/ViewID" }, { "$ref": "#/components/parameters/Page" }, { "$ref": "#/components/parameters/PageSize" }, { "$ref": "#/components/parameters/Keyword" }, { "$ref": "#/components/parameters/From" }, { "$ref": "#/components/parameters/To" }, { "$ref": "#/components/parameters/DateFrom" }, { "$ref": "#/components/parameters/DateTo" }, { "$ref": "#/components/parameters/StationCode" }, { "$ref": "#/components/parameters/SN" }, { "$ref": "#/components/parameters/ProductionOrder" }, { "$ref": "#/components/parameters/SalesOrder" }, { "$ref": "#/components/parameters/Base" }, { "$ref": "#/components/parameters/ProductModel" }, { "$ref": "#/components/parameters/HeadOrder" }, { "$ref": "#/components/parameters/ItemOrder" }, { "$ref": "#/components/parameters/HeadSN" }, { "$ref": "#/components/parameters/ItemSN" }, { "$ref": "#/components/parameters/MissingSalesOrder" }, { "$ref": "#/components/parameters/MaterialCode" }, { "$ref": "#/components/parameters/CPX" }, { "$ref": "#/components/parameters/DOACode" }, { "$ref": "#/components/parameters/DOAType" }, { "$ref": "#/components/parameters/Status" }, { "$ref": "#/components/parameters/Judgment" }, { "$ref": "#/components/parameters/EnrichmentStatus" }, { "$ref": "#/components/parameters/AcceptedDateFrom" }, { "$ref": "#/components/parameters/AcceptedDateTo" }, { "$ref": "#/components/parameters/Customer" }, { "$ref": "#/components/parameters/ServiceOrder" }, { "$ref": "#/components/parameters/ChangeType" }, { "$ref": "#/components/parameters/PartNumber" }, { "$ref": "#/components/parameters/PartSN" }, { "$ref": "#/components/parameters/Operator" }, { "$ref": "#/components/parameters/NeedReturn" }, { "$ref": "#/components/parameters/Revoked" }, { "$ref": "#/components/parameters/Company5000" }], "responses": { "200": { "$ref": "#/components/responses/ViewPage" }, "400": { "$ref": "#/components/responses/BadRequest" }, "501": { "$ref": "#/components/responses/NotImplemented" } } }
     },
     "/api/views/{viewID}/detail": {
       "get": { "tags": ["views"], "operationId": "getViewDetail", "parameters": [{ "$ref": "#/components/parameters/ViewID" }, { "$ref": "#/components/parameters/Id" }], "responses": { "200": { "description": "视图详情", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ViewDetail" } } } }, "400": { "$ref": "#/components/responses/BadRequest" }, "404": { "$ref": "#/components/responses/NotFound" }, "501": { "$ref": "#/components/responses/NotImplemented" } } }
@@ -231,6 +254,7 @@
       "HeadSN": { "name": "headSn", "in": "query", "schema": { "type": "string" } },
       "ItemSN": { "name": "itemSn", "in": "query", "schema": { "type": "string" } },
       "MaterialCode": { "name": "materialCode", "in": "query", "schema": { "type": "string" } },
+      "CPX": { "name": "cpx", "in": "query", "schema": { "type": "string" }, "description": "仅 BOM 过账视图有效；按 CPX 公司字段精确匹配。" },
       "MissingSalesOrder": { "name": "missingSalesOrder", "in": "query", "schema": { "type": "boolean" }, "description": "仅 BOM 过账视图有效；为 true 时仅返回销售订单字段为空、空白、null 或缺失的数据。" },
       "DOACode": { "name": "doaCode", "in": "query", "schema": { "type": "string" }, "description": "仅 SCS_DOA：DOA 申报单号精确匹配。" },
       "DOAType": { "name": "doaType", "in": "query", "schema": { "type": "string" }, "description": "仅 SCS_DOA：DOA 类型精确匹配。" },
@@ -286,7 +310,7 @@
       "ViewDetail": { "type": "object", "required": ["item", "fields"], "properties": { "item": { "type": "object", "additionalProperties": true }, "fields": { "type": "array", "items": { "$ref": "#/components/schemas/Field" } } } },
       "ViewStats": { "type": "object", "properties": { "total": { "type": "integer", "format": "int64" }, "salesOrders": { "type": "integer", "format": "int64", "description": "ZSGV_ZSD124 去重后的非空 VBELN_EX 数量，其他视图为 0" }, "productionOrders": { "type": "integer", "format": "int64", "description": "ZSGV_ZSD124 去重后的非空 AUFNR_1 数量，其他视图为 0" }, "missingSalesOrder": { "type": "integer", "format": "int64" }, "missingProductionOrder": { "type": "integer", "format": "int64" }, "missingProductionOrderDistinct": { "type": "integer", "format": "int64", "description": "ZSGV_ZSD124 中生产订单为空的 BOM 行按非空 VBELN_EX 去重后的数量，销售订单也为空时按 _source_key 计数" }, "dataStartDate": { "type": "string" }, "dataEndDate": { "type": "string" }, "latestSyncedAt": { "type": "string" } } },
       "SyncStatus": { "type": "object", "required": ["state"], "properties": { "state": { "type": "string", "enum": ["idle", "running", "success", "failed"] }, "startedAt": { "type": "string", "format": "date-time" }, "finishedAt": { "type": "string", "format": "date-time" }, "message": { "type": "string" }, "summary": { "type": "object", "additionalProperties": true } } },
-      "DataStatus": { "type": "object", "properties": { "salesOrdersLastSyncedAt": { "type": "string" }, "faultsLastSyncedAt": { "type": "string" }, "stationRecordsLastSyncedAt": { "type": "string" }, "serialBindingsLastSyncedAt": { "type": "string" }, "bomPostingsLastSyncedAt": { "type": "string" }, "state": { "type": "string" }, "startedAt": { "type": "string" }, "finishedAt": { "type": "string" } } }
+      "DataStatus": { "type": "object", "properties": { "salesOrdersLastSyncedAt": { "type": "string" }, "faultsLastSyncedAt": { "type": "string" }, "stationRecordsLastSyncedAt": { "type": "string" }, "serialBindingsLastSyncedAt": { "type": "string" }, "bomPostingsLastSyncedAt": { "type": "string" }, "scsDoaLastSyncedAt": { "type": "string" }, "scsChangeLastSyncedAt": { "type": "string" }, "scsDoaRecordCount": { "type": "integer" }, "scsChangeRecordCount": { "type": "integer" }, "publicationState": { "type": "string" }, "publicationRunId": { "type": "string" }, "publicationPublishedAt": { "type": "string" }, "publicationLastError": { "type": "string" }, "publicationReady": { "type": "boolean" }, "state": { "type": "string" }, "startedAt": { "type": "string" }, "finishedAt": { "type": "string" } } }
     }
   }
 }

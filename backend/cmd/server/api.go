@@ -31,12 +31,14 @@ type storeAPI interface {
 	OrderModels(context.Context, string) (store.OrderModelsResult, error)
 	OrderCustomerIDs(context.Context) (store.OrderCustomerIDsResult, error)
 	OrderOptions(context.Context, string) (store.OrderOptionsResult, error)
+	ViewOptions(context.Context, string, string) (store.ViewOptionsResult, error)
 	ViewList(context.Context, string, store.ViewFilters, int, int, bool, bool) (store.ViewListResult, error)
 	ViewListAll(context.Context, string, store.ViewFilters) (store.ViewListResult, error)
 	ViewBOMStream(context.Context, store.ViewFilters, io.Writer) error
 	ViewStationStream(context.Context, store.ViewFilters, io.Writer) error
 	PackagingCounts(context.Context, string) ([]store.PackagingCount, error)
 	ViewSCSStream(context.Context, string, store.ViewFilters, io.Writer) error
+	SCSDevices(context.Context, store.SCSDeviceFilters, int, int) (store.SCSDevicePage, error)
 	ViewDetail(context.Context, string, string) (store.ViewDetailResult, error)
 	ViewStats(context.Context, string, store.ViewFilters) (store.ViewStatsResult, error)
 }

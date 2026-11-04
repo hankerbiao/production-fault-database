@@ -83,6 +83,12 @@ def test_load_5000_service_orders():
 
 
 def test_sync_validates_all_pages_before_bounded_writes(monkeypatch):
+    from test_sync_admission import setup_scs
+    from test_sync_sales_orders import FakeDB
+    from scripts.sources import scs_change_sync as change
+    database = FakeDB()
+    args = setup_scs(monkeypatch, change, database)
+    args.page_size = 2
     rows = [
         {"so_code": "SH-1", "create_time": "2026-09-08 10:00:00"},
         {"so_code": "SH-2", "create_time": "2026-09-08 11:00:00"},
@@ -97,83 +103,23 @@ def test_sync_validates_all_pages_before_bounded_writes(monkeypatch):
         events.append("read")
         return pages[page]
 
-    class Result:
-        upserted_count = 1
-        modified_count = 0
+    database["doa"].docs = [{"service_uid": row["so_code"], "_prodh_scope": "00100"} for row in rows]
+    written_batches = []
+    original_write = database["changes"].bulk_write
 
-    class Collection:
-        def __init__(self):
-            self.writes = []
+    def write(operations, **kwargs):
+        written_batches.append(len(operations))
+        events.append("write")
+        return original_write(operations, **kwargs)
 
-        def create_index(self, *_args, **_kwargs):
-            return None
-
-        def bulk_write(self, operations, **_kwargs):
-            self.writes.append(list(operations))
-            events.append("write")
-            return Result()
-
-        def delete_many(self, *_args, **_kwargs):
-            return type("DeleteResult", (), {"deleted_count": 0})()
-
-        def find(self, *_args):
-            return iter([])
-
-        def count_documents(self, *_args):
-            return 0
-
-    class Checkpoints:
-        def __init__(self):
-            self.updates = []
-
-        def find_one(self, *_args, **_kwargs):
-            return {"status": "running", "mode": "full", "start_date": "2026-01-01",
-                    "page": 99, "page_row_index": 1, "watermark": "2026-08-01"}
-
-        def update_one(self, query, update, **_kwargs):
-            self.updates.append((query, update))
-
-    class Database:
-        def __init__(self):
-            self.collection = Collection()
-            self.checkpoints = Checkpoints()
-
-        def __getitem__(self, name):
-            return self.checkpoints if name == "sync_checkpoints" else self.collection
-
-    database = Database()
-
-    class Mongo:
-        def __getitem__(self, _name):
-            return database
-
-        def close(self):
-            pass
-
-    class HttpClient:
-        def __init__(self, **_kwargs):
-            pass
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *_args):
-            pass
-
-    monkeypatch.setattr("scripts.sources.scs_change_sync.httpx.Client", HttpClient)
-    monkeypatch.setattr("scripts.sources.scs_change_sync.MongoClient", lambda *_args, **_kwargs: Mongo())
-    monkeypatch.setattr("scripts.sources.scs_change_sync.mongo_uri", lambda: "mongodb://test")
-    monkeypatch.setattr("scripts.sources.scs_change_sync.login", lambda _client: None)
+    monkeypatch.setattr(database["changes"], "bulk_write", write)
     monkeypatch.setattr("scripts.sources.scs_change_sync.fetch_change_page", fake_fetch_page)
-    monkeypatch.setattr("scripts.sources.scs_change_sync.load_5000_service_orders", lambda *_args: set())
-    monkeypatch.setattr("scripts.sources.scs_change_sync.resource_lock", lambda *_args: nullcontext())
     monkeypatch.setenv("SCS_WRITE_BATCH_SIZE", "2")
 
-    result = sync(argparse.Namespace(full=True, start_date="2026-01-01", lookback_days=7, page_size=2, dry_run=False))
+    result = sync(args)
 
     assert requested_pages == [1, 2]
-    assert [len(write) for write in database.collection.writes] == [2, 1]
-    checkpoint_sets = [update[1]["$set"] for update in database.checkpoints.updates]
+    assert written_batches == [2, 1]
     assert events[:2] == ["read", "read"]
-    assert checkpoint_sets[-1]["status"] == "completed"
+    assert database["checkpoints"].docs[-1]["status"] == "completed"
     assert result["fetched"] == 3

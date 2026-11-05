@@ -30,8 +30,8 @@ const (
 	stationHANAViewID        = "Z_V_ZMES_T_001"
 	stationHANASelectList    = `"MANDT","HISTROYID","PCODE","OCODE","AUFNR","KDAUF","KDPOS","LGORT","MAKTX_TH","LEAD_CYCLE","AUFNR_CYCLE","CUSTOMIZE_CYCLE","OEMBZ","SPEC","OPERATION","SPEC_DESC","UNAME","LASTSPEC_TIME","SPEC_TIME","GSTRS","PLAN_END_TIME","ACTUAL_START_TIME","ACTUAL_END_TIME","HADE1","HADE2","HADE3","HADE4","HADE5","HADE6","HADE7","HADE8","STATU","MESS"`
 	stationHANAOrder         = `"ACTUAL_START_TIME" DESC, "HISTROYID" DESC, "SPEC_TIME" DESC, "PCODE" DESC, "SPEC" DESC, "OCODE" DESC`
-	stationHANAQueryAttempts = 2
-	stationHANAStreamBatch   = 10000
+	stationHANAQueryAttempts = 5
+	stationHANAStreamBatch   = 10
 )
 
 var stationHANAKeyFields = []string{"HISTROYID", "SPEC", "SPEC_TIME", "PCODE", "OCODE"}
@@ -283,26 +283,20 @@ func (s *Store) stationViewStationStream(ctx context.Context, f ViewFilters, out
 		s.stationCacheMu.Unlock()
 	}
 
-	count, err := h.count(ctx, where, args...)
-	if err != nil {
-		return err
-	}
-	if count > int64(MaxStationStreamRows) {
-		return fmt.Errorf("%w: 查询结果超过单次上限 %d 条，请缩小筛选范围", ErrStreamQueryTooLarge, MaxStationStreamRows)
-	}
-
 	var snapshot bytes.Buffer
 	w := bufio.NewWriterSize(io.MultiWriter(out, &snapshot), 1<<20)
 	if _, err := io.WriteString(w, strings.Join(stationStreamFields, "\t")+"\n"); err != nil {
 		return err
 	}
-	for offset := 0; offset < int(count); offset += stationHANAStreamBatch {
+	for offset := 0; offset < MaxStationStreamRows; offset += stationHANAStreamBatch {
 		batchLimit := stationHANAStreamBatch
-		if remaining := int(count) - offset; remaining < batchLimit {
+		if remaining := MaxStationStreamRows - offset; remaining < batchLimit {
 			batchLimit = remaining
 		}
+		rowsInBatch := 0
 		query := stationStreamQueryPage(where, batchLimit, offset)
 		err = h.queryEach(ctx, query, args, func(doc map[string]any) error {
+			rowsInBatch++
 			row := make([]string, 0, len(stationStreamFields))
 			row = append(row, csvValue(stationSourceKeyFromMap(doc)))
 			for _, field := range stationStreamFields[1:] {
@@ -320,6 +314,19 @@ func (s *Store) stationViewStationStream(ctx context.Context, f ViewFilters, out
 		})
 		if err != nil {
 			return err
+		}
+		if rowsInBatch < batchLimit {
+			break
+		}
+		if offset+batchLimit == MaxStationStreamRows {
+			probe, probeErr := h.query(ctx, stationStreamQueryPage(where, 1, MaxStationStreamRows), args...)
+			if probeErr != nil {
+				return probeErr
+			}
+			if len(probe) > 0 {
+				return fmt.Errorf("%w: 查询结果超过单次上限 %d 条，请缩小筛选范围", ErrStreamQueryTooLarge, MaxStationStreamRows)
+			}
+			break
 		}
 	}
 	if err := w.Flush(); err != nil {
@@ -730,5 +737,15 @@ func (h *stationHANA) queryEachOnce(ctx context.Context, query string, args []an
 }
 
 func retryStationHANAQuery(ctx context.Context, err error, attempt int) bool {
-	return attempt+1 < stationHANAQueryAttempts && ctx.Err() == nil && errors.Is(err, driver.ErrBadConn)
+	if attempt+1 >= stationHANAQueryAttempts || ctx.Err() != nil || !errors.Is(err, driver.ErrBadConn) {
+		return false
+	}
+	timer := time.NewTimer(time.Duration(attempt+1) * 100 * time.Millisecond)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
+	}
 }

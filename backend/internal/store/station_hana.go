@@ -283,12 +283,7 @@ func (s *Store) stationViewStationStream(ctx context.Context, f ViewFilters, out
 		s.stationCacheMu.Unlock()
 	}
 
-	countQuery := `SELECT COUNT(*) FROM (SELECT 1 AS x FROM ` + stationHANAView
-	if where != "" {
-		countQuery += " " + where
-	}
-	countQuery += fmt.Sprintf(` LIMIT %d) station_count`, MaxStationStreamRows+1)
-	count, err := h.queryInt64(ctx, countQuery, args...)
+	count, err := h.count(ctx, where, args...)
 	if err != nil {
 		return err
 	}

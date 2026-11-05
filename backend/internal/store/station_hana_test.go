@@ -118,6 +118,17 @@ func TestStationStreamQueryKeepsCompatibleProjectionAndOrdering(t *testing.T) {
 	}
 }
 
+func TestStationStreamCountUsesDirectViewCount(t *testing.T) {
+	where := `WHERE "GSTRS" >= ? AND "GSTRS" <= ?`
+	query := `SELECT COUNT(*) FROM ` + stationHANAView
+	if where != "" {
+		query += " " + where
+	}
+	if strings.Contains(query, "LIMIT") || !strings.Contains(query, "FROM "+stationHANAView) {
+		t.Fatalf("stream count query must use direct count: %s", query)
+	}
+}
+
 func TestStationSourceKeyMatchesExistingCompleteKey(t *testing.T) {
 	doc := bson.M{
 		"HISTROYID": "0009888000005393",

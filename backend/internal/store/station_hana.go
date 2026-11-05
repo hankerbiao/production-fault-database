@@ -31,6 +31,7 @@ const (
 	stationHANASelectList    = `"MANDT","HISTROYID","PCODE","OCODE","AUFNR","KDAUF","KDPOS","LGORT","MAKTX_TH","LEAD_CYCLE","AUFNR_CYCLE","CUSTOMIZE_CYCLE","OEMBZ","SPEC","OPERATION","SPEC_DESC","UNAME","LASTSPEC_TIME","SPEC_TIME","GSTRS","PLAN_END_TIME","ACTUAL_START_TIME","ACTUAL_END_TIME","HADE1","HADE2","HADE3","HADE4","HADE5","HADE6","HADE7","HADE8","STATU","MESS"`
 	stationHANAOrder         = `"ACTUAL_START_TIME" DESC, "HISTROYID" DESC, "SPEC_TIME" DESC, "PCODE" DESC, "SPEC" DESC, "OCODE" DESC`
 	stationHANAQueryAttempts = 2
+	stationHANAStreamBatch   = 10000
 )
 
 var stationHANAKeyFields = []string{"HISTROYID", "SPEC", "SPEC_TIME", "PCODE", "OCODE"}
@@ -295,30 +296,36 @@ func (s *Store) stationViewStationStream(ctx context.Context, f ViewFilters, out
 		return fmt.Errorf("%w: 查询结果超过单次上限 %d 条，请缩小筛选范围", ErrStreamQueryTooLarge, MaxStationStreamRows)
 	}
 
-	query := stationStreamQuery(where, MaxStationStreamRows)
 	var snapshot bytes.Buffer
 	w := bufio.NewWriterSize(io.MultiWriter(out, &snapshot), 1<<20)
 	if _, err := io.WriteString(w, strings.Join(stationStreamFields, "\t")+"\n"); err != nil {
 		return err
 	}
-	err = h.queryEach(ctx, query, args, func(doc map[string]any) error {
-		row := make([]string, 0, len(stationStreamFields))
-		row = append(row, csvValue(stationSourceKeyFromMap(doc)))
-		for _, field := range stationStreamFields[1:] {
-			value, ok := doc[field]
-			if !ok || field == "LINE_CODE" {
-				value = ""
+	for offset := 0; offset < int(count); offset += stationHANAStreamBatch {
+		batchLimit := stationHANAStreamBatch
+		if remaining := int(count) - offset; remaining < batchLimit {
+			batchLimit = remaining
+		}
+		query := stationStreamQueryPage(where, batchLimit, offset)
+		err = h.queryEach(ctx, query, args, func(doc map[string]any) error {
+			row := make([]string, 0, len(stationStreamFields))
+			row = append(row, csvValue(stationSourceKeyFromMap(doc)))
+			for _, field := range stationStreamFields[1:] {
+				value, ok := doc[field]
+				if !ok || field == "LINE_CODE" {
+					value = ""
+				}
+				row = append(row, csvValue(value))
 			}
-			row = append(row, csvValue(value))
+			for i := range row {
+				row[i] = tsvSanitizer.Replace(row[i])
+			}
+			_, err := io.WriteString(w, strings.Join(row, "\t")+"\n")
+			return err
+		})
+		if err != nil {
+			return err
 		}
-		for i := range row {
-			row[i] = tsvSanitizer.Replace(row[i])
-		}
-		_, err := io.WriteString(w, strings.Join(row, "\t")+"\n")
-		return err
-	})
-	if err != nil {
-		return err
 	}
 	if err := w.Flush(); err != nil {
 		return err
@@ -407,12 +414,19 @@ func stationSelectQuery(where, order string, limit, offset int) string {
 }
 
 func stationStreamQuery(where string, limit int) string {
+	return stationStreamQueryPage(where, limit, 0)
+}
+
+func stationStreamQueryPage(where string, limit, offset int) string {
 	columns := `"HISTROYID","PCODE","AUFNR","KDAUF","GSTRS","SPEC","SPEC_DESC","OPERATION","ACTUAL_START_TIME","ACTUAL_END_TIME","MAKTX_TH","LGORT","SPEC_TIME","OCODE"`
 	query := `SELECT ` + columns + ` FROM ` + stationHANAView
 	if where != "" {
 		query += " " + where
 	}
 	query += " ORDER BY " + stationHANAOrder + fmt.Sprintf(" LIMIT %d", limit)
+	if offset > 0 {
+		query += fmt.Sprintf(" OFFSET %d", offset)
+	}
 	return query
 }
 

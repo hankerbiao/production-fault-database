@@ -112,6 +112,10 @@ func TestStationStreamQueryKeepsCompatibleProjectionAndOrdering(t *testing.T) {
 			t.Fatalf("stream query misses %q: %s", fragment, query)
 		}
 	}
+	page := stationStreamQueryPage(`WHERE "GSTRS" >= ?`, stationHANAStreamBatch, stationHANAStreamBatch)
+	if !strings.Contains(page, "LIMIT 10000 OFFSET 10000") {
+		t.Fatalf("paged stream query does not bound batch: %s", page)
+	}
 }
 
 func TestStationSourceKeyMatchesExistingCompleteKey(t *testing.T) {

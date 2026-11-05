@@ -247,7 +247,7 @@ stop_service() {
   printf '停止%s (PID %s)...\n' "$service" "$pid"
   stop_pid_tree "$pid"
   local attempt
-  for ((attempt = 1; attempt <= 10; attempt++)); do
+  for ((attempt = 1; attempt <= 60; attempt++)); do
     pid_is_alive "$pid" || break
     sleep 0.5
   done

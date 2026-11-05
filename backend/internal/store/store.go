@@ -182,10 +182,11 @@ func (s *Store) SyncRuns(ctx context.Context, limit int) ([]SyncRun, error) {
 }
 
 func (s *Store) Close(ctx context.Context) error {
+	var stationErr error
 	if s.stationHANA != nil {
-		_ = s.stationHANA.close()
+		stationErr = s.stationHANA.close()
 	}
-	return s.client.Disconnect(ctx)
+	return errors.Join(stationErr, s.client.Disconnect(ctx))
 }
 func (s *Store) Ping(ctx context.Context) error { return s.client.Ping(ctx, nil) }
 

@@ -2,12 +2,15 @@ package main
 
 import (
 	"context"
+	"errors"
 	"log"
 	"net/http"
 	"net/url"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"production-fault-gateway/internal/store"
@@ -20,6 +23,13 @@ type server struct {
 }
 
 func main() {
+	if err := run(); err != nil {
+		log.Print(err)
+		os.Exit(1)
+	}
+}
+
+func run() error {
 	loadDotEnv()
 	uri := mongoURI()
 	database := getenv("MONGODB_DATABASE", "prod_line_fault_5000")
@@ -30,9 +40,13 @@ func main() {
 
 	s, err := store.New(ctx, uri, database, repairCollection, orderCollection)
 	if err != nil {
-		log.Fatalf("connect mongodb: %v", err)
+		return err
 	}
-	defer s.Close(context.Background())
+	defer func() {
+		if err := s.Close(context.Background()); err != nil {
+			log.Printf("close data sources: %v", err)
+		}
+	}()
 
 	h := &server{store: s, sync: newSyncManager(), config: newServiceConfig()}
 	mux := registerRoutes(h)
@@ -40,7 +54,30 @@ func main() {
 	// Keep the default aligned with the Vite development proxy and README.
 	addr := getenv("PORT", "18080")
 	log.Printf("fault gateway listening on :%s", addr)
-	log.Fatal(http.ListenAndServe(":"+addr, gzipJSON(cors(mux))))
+	server := &http.Server{Addr: ":" + addr, Handler: gzipJSON(cors(mux))}
+	signalCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	return serveUntilShutdown(signalCtx, server)
+}
+
+func serveUntilShutdown(ctx context.Context, server *http.Server) error {
+	done := make(chan error, 1)
+	go func() { done <- server.ListenAndServe() }()
+	select {
+	case err := <-done:
+		if errors.Is(err, http.ErrServerClosed) {
+			return nil
+		}
+		return err
+	case <-ctx.Done():
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		if err := server.Shutdown(shutdownCtx); err != nil {
+			_ = server.Close()
+			return err
+		}
+		return nil
+	}
 }
 
 func (s *server) root(w http.ResponseWriter, r *http.Request) {

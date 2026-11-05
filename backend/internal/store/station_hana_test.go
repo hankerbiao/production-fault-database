@@ -1,6 +1,7 @@
 package store
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"database/sql/driver"
@@ -96,6 +97,29 @@ func TestStationHANAQueryEachRecoversBeforeFirstRow(t *testing.T) {
 	}
 	if queries != 2 || len(values) != 1 || values[0] != "PC-1" {
 		t.Fatalf("queries=%d values=%v", queries, values)
+	}
+}
+
+func TestStationStreamCachesCompleteResults(t *testing.T) {
+	queries := 1 // the test driver returns a complete row on its second query
+	driverName := "station-stream-cache-test"
+	sql.Register(driverName, retryDriver{queries: &queries})
+	db, err := sql.Open(driverName, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	s := &Store{stationHANA: &stationHANA{db: db}, stationCache: make(map[string]bomStreamCacheEntry)}
+	filters := ViewFilters{DateFrom: "2026-10-30", DateTo: "2026-11-05"}
+	var first, second bytes.Buffer
+	if err := s.stationViewStationStream(context.Background(), filters, &first); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.stationViewStationStream(context.Background(), filters, &second); err != nil {
+		t.Fatal(err)
+	}
+	if queries != 2 || first.String() != second.String() || !strings.Contains(first.String(), "PC-1") {
+		t.Fatalf("queries=%d first=%q second=%q", queries, first.String(), second.String())
 	}
 }
 

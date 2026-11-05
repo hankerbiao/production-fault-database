@@ -7,6 +7,7 @@ import (
 
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
+	"golang.org/x/sync/singleflight"
 )
 
 type Store struct {
@@ -21,6 +22,7 @@ type Store struct {
 	bomCacheMu          sync.RWMutex
 	bomCache            map[string]bomStreamCacheEntry
 	stationCacheMu      sync.RWMutex
+	stationLoads        singleflight.Group
 	stationCache        map[string]bomStreamCacheEntry
 	stationWarmDone     chan struct{}
 	companyOrderCacheMu sync.Mutex

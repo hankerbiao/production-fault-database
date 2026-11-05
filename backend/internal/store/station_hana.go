@@ -263,6 +263,26 @@ func (s *Store) stationViewStationStream(ctx context.Context, f ViewFilters, out
 	if useDefaultFilters {
 		f = defaultStationStreamFilters()
 	}
+	result := s.stationLoads.DoChan(stationStreamCacheKey(f), func() (any, error) {
+		var body bytes.Buffer
+		if err := s.loadStationHANAStream(ctx, f, &body); err != nil {
+			return nil, err
+		}
+		return body.Bytes(), nil
+	})
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case loaded := <-result:
+		if loaded.Err != nil {
+			return loaded.Err
+		}
+		_, err := out.Write(loaded.Val.([]byte))
+		return err
+	}
+}
+
+func (s *Store) loadStationHANAStream(ctx context.Context, f ViewFilters, out io.Writer) error {
 	h, err := s.stationHANAReader()
 	if err != nil {
 		return err
@@ -288,50 +308,30 @@ func (s *Store) stationViewStationStream(ctx context.Context, f ViewFilters, out
 	if _, err := io.WriteString(w, strings.Join(stationStreamFields, "\t")+"\n"); err != nil {
 		return err
 	}
-	var cursor map[string]any
-	for rowsRead := 0; rowsRead < MaxStationStreamRows; rowsRead += stationHANAStreamBatch {
-		batchLimit := stationHANAStreamBatch
-		if remaining := MaxStationStreamRows - rowsRead; remaining < batchLimit {
-			batchLimit = remaining
+	rowsRead := 0
+	query := stationStreamQuery(where, MaxStationStreamRows+1)
+	err = h.queryEach(ctx, query, args, func(doc map[string]any) error {
+		rowsRead++
+		if rowsRead > MaxStationStreamRows {
+			return fmt.Errorf("%w: 查询结果超过单次上限 %d 条，请缩小筛选范围", ErrStreamQueryTooLarge, MaxStationStreamRows)
 		}
-		rowsInBatch := 0
-		batchWhere, batchArgs := stationStreamCursorWhere(where, args, cursor)
-		query := stationStreamQueryPage(batchWhere, batchLimit, 0)
-		err = h.queryEach(ctx, query, batchArgs, func(doc map[string]any) error {
-			rowsInBatch++
-			cursor = doc
-			row := make([]string, 0, len(stationStreamFields))
-			row = append(row, csvValue(stationSourceKeyFromMap(doc)))
-			for _, field := range stationStreamFields[1:] {
-				value, ok := doc[field]
-				if !ok || field == "LINE_CODE" {
-					value = ""
-				}
-				row = append(row, csvValue(value))
+		row := make([]string, 0, len(stationStreamFields))
+		row = append(row, csvValue(stationSourceKeyFromMap(doc)))
+		for _, field := range stationStreamFields[1:] {
+			value, ok := doc[field]
+			if !ok || field == "LINE_CODE" {
+				value = ""
 			}
-			for i := range row {
-				row[i] = tsvSanitizer.Replace(row[i])
-			}
-			_, err := io.WriteString(w, strings.Join(row, "\t")+"\n")
-			return err
-		})
-		if err != nil {
-			return err
+			row = append(row, csvValue(value))
 		}
-		if rowsInBatch < batchLimit {
-			break
+		for i := range row {
+			row[i] = tsvSanitizer.Replace(row[i])
 		}
-		if rowsRead+batchLimit == MaxStationStreamRows {
-			probeWhere, probeArgs := stationStreamCursorWhere(where, args, cursor)
-			probe, probeErr := h.query(ctx, stationStreamQueryPage(probeWhere, 1, 0), probeArgs...)
-			if probeErr != nil {
-				return probeErr
-			}
-			if len(probe) > 0 {
-				return fmt.Errorf("%w: 查询结果超过单次上限 %d 条，请缩小筛选范围", ErrStreamQueryTooLarge, MaxStationStreamRows)
-			}
-			break
-		}
+		_, err := io.WriteString(w, strings.Join(row, "\t")+"\n")
+		return err
+	})
+	if err != nil {
+		return err
 	}
 	if err := w.Flush(); err != nil {
 		return err

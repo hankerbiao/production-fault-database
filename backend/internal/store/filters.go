@@ -218,8 +218,7 @@ func orderFilter(f OrderFilters) bson.M {
 	return bson.M{"$and": conditions}
 }
 
-// scopeFilter is the gateway boundary for the production dashboard. Records
-// without an explicit, verified 00100 scope are never visible to callers.
+// scopeFilter restricts datasets that require a verified 00100 scope.
 func scopeFilter(filter bson.M) bson.M {
 	if len(filter) == 0 {
 		return bson.M{"_prodh_scope": "00100"}
@@ -232,6 +231,17 @@ func companyScopeFilter(filter bson.M) bson.M {
 	filter = scopeFilter(filter)
 	filter["_scope_rule_version"] = 2
 	return filter
+}
+
+func viewScopeFilter(viewID string, filter bson.M) bson.M {
+	switch viewID {
+	case "Z_V_ZMES_T_001":
+		return filter
+	case "SCS_DOA", "SCS_CHANGE":
+		return scopeFilter(filter)
+	default:
+		return companyScopeFilter(filter)
+	}
 }
 
 func splitFilterValues(value string) []string {

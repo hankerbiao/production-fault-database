@@ -12,6 +12,7 @@ from scripts.table_pipeline import build_table_parser, print_result, run_hana_ta
 
 def main() -> int:
     parser = build_table_parser("同步工位记录明细，并补全及清理订单字段")
+    parser.set_defaults(lookback_days=5)
     args = parser.parse_args()
     try:
         return print_result(run_hana_table("Z_V_ZMES_T_001", "station", args))

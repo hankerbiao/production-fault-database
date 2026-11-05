@@ -105,7 +105,7 @@ GET /api/data-status
 }
 ```
 
-`publicationReady=true` 表示销售订单、工位和维修三个核心数据集已完成同一轮 `00100` 范围的发布；扩展数据（BOM、序列号、SCS）失败时会保留核心发布，并通过 `publicationLastError` 报告错误。
+`publicationReady=true` 表示销售订单、工位和维修三个核心数据集已完成同一轮发布；工位记录不限产品范围。扩展数据（BOM、序列号、SCS）失败时会保留核心发布，并通过 `publicationLastError` 报告错误。
 
 统一错误响应（除根路径重定向外）：
 

@@ -145,7 +145,7 @@ func (s *Store) PackagingCounts(ctx context.Context, input string) ([]PackagingC
 }
 
 func packagingCountPipeline(values []string) mongo.Pipeline {
-	filter := companyScopeFilter(bson.M{"AUFNR": bson.M{"$in": values}})
+	filter := bson.M{"AUFNR": bson.M{"$in": values}}
 	barcode := bson.M{"$trim": bson.M{"input": bson.M{"$convert": bson.M{
 		"input": "$PCODE", "to": "string", "onError": "", "onNull": "",
 	}}}}

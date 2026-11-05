@@ -10,6 +10,7 @@ def test_documented_view_specs_are_registered():
     assert sync.VIEW_SPECS["ZSGV_ZSD124"].collection == "order_bom_postings_sap"
     assert sync.VIEW_SPECS["ZSGV_ZPP_SERNOLIST"].watermark_fields == ()
     assert sync.VIEW_SPECS["Z_V_ZMES_T_001"].start_date_field == "ACTUAL_START_TIME"
+    assert sync.VIEW_SPECS["Z_V_ZMES_T_001"].watermark_fields == ("SPEC_TIME",)
     station_columns = sync.VIEW_SPECS["Z_V_ZMES_T_001"].columns
     assert station_columns[-4:] == ("HADE7", "HADE8", "STATU", "MESS")
 

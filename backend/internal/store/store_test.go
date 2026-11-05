@@ -126,8 +126,14 @@ func TestGatewayFiltersKeepScopeForOtherDatasets(t *testing.T) {
 	if got := repairFilter(Filters{}); got["_prodh_scope"] != "00100" {
 		t.Fatalf("repair filter=%v", got)
 	}
-	if got := viewFilter("Z_V_ZMES_T_001", ViewFilters{}, nil, ""); got["_prodh_scope"] != "00100" {
-		t.Fatalf("view filter=%v", got)
+	if got := viewFilter("Z_V_ZMES_T_001", ViewFilters{}, nil, ""); len(got) != 0 {
+		t.Fatalf("station view must not require scope markers: %v", got)
+	}
+	if got := viewScopeFilter("Z_V_ZMES_T_001", bson.M{"_id": "row"}); len(got) != 1 {
+		t.Fatalf("station detail must not require scope markers: %v", got)
+	}
+	if got := viewFilter("ZSGV_ZSD124", ViewFilters{}, nil, ""); got["_prodh_scope"] != "00100" || got["_scope_rule_version"] != 2 {
+		t.Fatalf("BOM view filter=%v", got)
 	}
 	if got := orderOptionFilter("", "data.VBELN"); got["_prodh_scope"] != nil {
 		t.Fatalf("order option filter must not require a scope marker: %v", got)
@@ -353,6 +359,9 @@ func TestPackagingCountPipelineFiltersExactStationsAndDeduplicatesHostBarcodes(t
 		if strings.Contains(string(encoded), code) {
 			t.Fatalf("aggregation unexpectedly includes %q: %s", code, encoded)
 		}
+	}
+	if strings.Contains(string(encoded), "_prodh_scope") || strings.Contains(string(encoded), "_scope_rule_version") {
+		t.Fatalf("station aggregation must not require scope markers: %s", encoded)
 	}
 }
 

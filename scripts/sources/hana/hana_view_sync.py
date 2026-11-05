@@ -131,7 +131,7 @@ VIEW_SPECS: dict[str, ViewSpec] = {
         collection="station_records_sap",
         key_fields=("HISTROYID", "SPEC", "SPEC_TIME", "PCODE", "OCODE"),
         order_by=("HISTROYID", "SPEC_TIME", "PCODE", "SPEC"),
-        watermark_fields=("ACTUAL_START_TIME",),
+        watermark_fields=("SPEC_TIME",),
         index_fields=("PCODE", "ACTUAL_START_TIME", "AUFNR", "SPEC"),
         start_date_field="ACTUAL_START_TIME",
         fallback_to_full_row=True,
@@ -332,8 +332,13 @@ def build_query(spec: ViewSpec, checkpoint: Mapping[str, Any] | None, mode: str,
     watermark = checkpoint.get("watermark") if checkpoint else None
     if mode == "incremental" and watermark is not None and spec.watermark_fields:
         field = spec.watermark_fields[0]
-        conditions.append(f'"{field}" >= ?')
-        params.append(date_overlap(watermark, lookback_days))
+        lower_bound = date_overlap(watermark, lookback_days)
+        if spec.view_id == "Z_V_ZMES_T_001":
+            conditions.append('( "SPEC_TIME" >= ? OR (("SPEC_TIME" IS NULL OR "SPEC_TIME" = \'\') AND "ACTUAL_START_TIME" >= ?) )')
+            params.extend([lower_bound, lower_bound])
+        else:
+            conditions.append(f'"{field}" >= ?')
+            params.append(lower_bound)
     if start_date and spec.start_date_field:
         value = start_date
         if spec.start_date_field == "ACTUAL_START_TIME":
@@ -344,8 +349,14 @@ def build_query(spec: ViewSpec, checkpoint: Mapping[str, Any] | None, mode: str,
         value = end_date.replace("-", "")
         if spec.start_date_field == "ACTUAL_START_TIME":
             value = f"{end_date.replace('-', '')[:4]}-{end_date.replace('-', '')[4:6]}-{end_date.replace('-', '')[6:8]} 23:59:59"
-        conditions.append(f'"{spec.start_date_field}" <= ?')
-        params.append(value)
+        if spec.view_id == "Z_V_ZMES_T_001" and mode == "incremental":
+            next_day = datetime.strptime(end_date.replace("-", ""), "%Y%m%d") + timedelta(days=1)
+            exclusive_end = next_day.strftime("%Y-%m-%d 00:00:00")
+            conditions.append('( "SPEC_TIME" < ? OR (("SPEC_TIME" IS NULL OR "SPEC_TIME" = \'\') AND "ACTUAL_START_TIME" < ?) )')
+            params.extend([exclusive_end, exclusive_end])
+        else:
+            conditions.append(f'"{spec.start_date_field}" <= ?')
+            params.append(value)
     selected = ", ".join(f'"{field}"' for field in spec.columns)
     order = ", ".join(f'"{field}"' for field in spec.order_by)
     where = f" WHERE {' AND '.join(conditions)}" if conditions else ""
@@ -379,6 +390,8 @@ def configured_spec(view_id: str) -> ViewSpec:
 
 
 def view_checkpoint_id(spec: ViewSpec) -> str:
+    if spec.view_id == "Z_V_ZMES_T_001":
+        return CHECKPOINT_PREFIX + spec.view_id + ":spec_time:v1"
     return CHECKPOINT_PREFIX + spec.view_id
 
 
@@ -444,12 +457,26 @@ def sync_view(
         collection = database[spec.collection]
         checkpoints = database[env("SYNC_CHECKPOINT_COLLECTION", "sync_checkpoints")]
         checkpoint = checkpoints.find_one({"_id": view_checkpoint_id(spec)})
+        station_unscoped = spec.view_id == "Z_V_ZMES_T_001"
+        if station_unscoped and not (checkpoint or {}).get("watermark"):
+            legacy = checkpoints.find_one({"_id": CHECKPOINT_PREFIX + spec.view_id})
+            if (legacy or {}).get("watermark"):
+                checkpoint = legacy
+                stats["checkpoint_seed"] = "legacy_actual_start_time"
         if spec.view_id in bounded_views and mode == "incremental" and not start_date and not (checkpoint or {}).get("watermark"):
             raise RuntimeError(f"{bounded_views[spec.view_id]}缺少同步检查点，请指定 --start-date，拒绝无时间下限的增量读取")
-        stats.update(in_scope=0, out_of_scope=0, scope_pending=0, scope_rule_version=2)
+        stats.update(in_scope=0, out_of_scope=0, scope_pending=0,
+                     scope_rule_version=None if station_unscoped else 2)
+        if station_unscoped:
+            stats["scope_mode"] = "all_products"
+            stats["watermark_field"] = "SPEC_TIME"
         stats.update(coverage_verified=False, cleanup="disabled_unverified_coverage")
         sql, params = build_query(spec, checkpoint, mode, start_date, lookback_days, end_date)
         watermark = None
+        watermark_end = None
+        if station_unscoped and end_date:
+            next_day = datetime.strptime(end_date.replace("-", ""), "%Y%m%d") + timedelta(days=1)
+            watermark_end = next_day.strftime("%Y-%m-%d 00:00:00")
         with Snapshot() as snapshot, Snapshot() as raw:
             with hana_connection() as connection:
                 cursor = connection.cursor()
@@ -459,7 +486,9 @@ def sync_view(
                         check_leases()
                         for values in rows:
                             row = dict(zip(spec.columns, values, strict=True))
-                            watermark = max_watermark(spec, watermark, row)
+                            candidate = normalize_watermark(spec, row.get("SPEC_TIME")) if watermark_end else None
+                            if not candidate or not watermark_end or candidate < watermark_end:
+                                watermark = max_watermark(spec, watermark, row)
                             raw.add(source_key(row, spec), {field: bson_value(value) for field, value in row.items()})
                             stats["source_rows"] += 1
                         stats["batches"] += 1
@@ -468,18 +497,19 @@ def sync_view(
                 finally:
                     cursor.close()
             dataset = f"hana:{spec.view_id}"
-            refs = SalesReferences.load(database[env("TARGET_COLLECTION", "sales_orders_sap")])
-            if not refs.rows:
+            refs = None if station_unscoped else SalesReferences.load(database[env("TARGET_COLLECTION", "sales_orders_sap")])
+            if not station_unscoped and not refs.rows:
                 raise RuntimeError("销售订单表为空，无法判断公司归属")
             for document in database["sync_scope_pending"].find({"dataset": dataset}):
                 if not raw.contains(document["key"]):
                     raw.add(document["key"], document["payload"])
             pending_operations = []
             for key, row in raw:
-                scope = refs.company_scope(row)
+                scope = "in_scope" if station_unscoped else refs.company_scope(row)
                 stats["scope_pending" if scope == "pending" else scope] += 1
                 if scope == "in_scope":
-                    snapshot.add(key, {**row, "_prodh_scope": "00100", "_scope_rule_version": 2})
+                    document = row if station_unscoped else {**row, "_prodh_scope": "00100", "_scope_rule_version": 2}
+                    snapshot.add(key, document)
                 elif scope == "pending" and not dry_run:
                     if spec.view_id == "ZSGV_ZPP_SERNOLIST":
                         pending_operations.append(UpdateOne(
@@ -495,6 +525,8 @@ def sync_view(
                         save_scope_pending(database, dataset, key, row)
             if pending_operations:
                 verified_bulk_write(database["sync_scope_pending"], pending_operations)
+            if station_unscoped and watermark is None and mode == "incremental":
+                watermark = normalize_watermark(spec, (checkpoint or {}).get("watermark"))
             stats.update(watermark=watermark, unique_rows=snapshot.count,
                          duplicate_source_keys=raw.duplicates, snapshot_complete=True)
             if dry_run and preview_snapshot is not None:
@@ -523,7 +555,7 @@ def sync_view(
                         stats["modified"] += result.modified_count
                         operations.clear()
 
-                pending_keys = (key for key, row in raw if refs.company_scope(row) == "pending")
+                pending_keys = (key for key, row in raw if not station_unscoped and refs.company_scope(row) == "pending")
                 for keys in batches(pending_keys, batch_size):
                     check_leases(verify=True)
                     collection.update_many({"_source_key": {"$in": keys}}, {"$unset": {
@@ -538,7 +570,7 @@ def sync_view(
                         flush()
                 flush()
                 clear_scope_pending(database, dataset, (
-                    key for key, row in raw if refs.company_scope(row) == "in_scope"
+                    key for key, row in raw if station_unscoped or refs.company_scope(row) == "in_scope"
                 ))
         stats["success"] = True
         progress_log(f"[{spec.view_id}] 同步完成：rows={stats['source_rows']:,} batches={stats['batches']:,}")
@@ -568,19 +600,20 @@ def finalize_view_run(spec: ViewSpec, sync_result: Mapping[str, Any]) -> dict[st
         # The reference snapshot cannot prove that absent source rows were deleted.
         check_leases(verify=True)
         now = datetime.now(timezone.utc)
-        checkpoints = database[env("SYNC_CHECKPOINT_COLLECTION", "sync_checkpoints")]
-        checkpoint_key = view_checkpoint_id(spec)
-        previous = checkpoints.find_one({"_id": checkpoint_key}) or {}
-        candidates = [value for value in (normalize_watermark(spec, previous.get("watermark")),
-                                          normalize_watermark(spec, sync_result.get("watermark"))) if value]
-        watermark = max(candidates) if candidates else None
-        checkpoint_fields = {
-            "view_id": spec.view_id, "collection": spec.collection,
-            "watermark": watermark, "run_id": run_id, "updated_at": now,
-        }
-        checkpoints.update_one(
-            {"_id": checkpoint_key}, {"$set": checkpoint_fields}, upsert=True,
-        )
+        if spec.view_id != "Z_V_ZMES_T_001" or sync_result.get("mode") != "full":
+            checkpoints = database[env("SYNC_CHECKPOINT_COLLECTION", "sync_checkpoints")]
+            checkpoint_key = view_checkpoint_id(spec)
+            previous = checkpoints.find_one({"_id": checkpoint_key}) or {}
+            candidates = [value for value in (normalize_watermark(spec, previous.get("watermark")),
+                                              normalize_watermark(spec, sync_result.get("watermark"))) if value]
+            watermark = max(candidates) if candidates else None
+            checkpoint_fields = {
+                "view_id": spec.view_id, "collection": spec.collection,
+                "watermark": watermark, "run_id": run_id, "updated_at": now,
+            }
+            checkpoints.update_one(
+                {"_id": checkpoint_key}, {"$set": checkpoint_fields}, upsert=True,
+            )
         database[env("SYNC_RUN_COLLECTION", "sync_runs")].update_one(
             {"_id": f"{run_id}:{spec.view_id}"},
             {"$set": {"status": "success", "finished_at": now, "stats": dict(sync_result)}},

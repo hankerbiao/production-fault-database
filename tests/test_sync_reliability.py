@@ -21,7 +21,7 @@ def test_station_lookback_applies_to_timestamp():
 def test_station_watermark_compares_mixed_iso_separators():
     spec = hana.VIEW_SPECS["Z_V_ZMES_T_001"]
     assert hana.max_watermark(spec, "2026-10-14T09:00:00",
-                              {"ACTUAL_START_TIME": "2026-10-14 10:00:00"}) == "2026-10-14 10:00:00"
+                              {"SPEC_TIME": "2026-10-14 10:00:00"}) == "2026-10-14 10:00:00"
 
 
 def test_sales_nested_transient_error_is_retryable():

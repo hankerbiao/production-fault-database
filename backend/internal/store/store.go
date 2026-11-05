@@ -191,7 +191,7 @@ func (s *Store) DataStatus(ctx context.Context) (DataStatus, error) {
 		go func(index int, item source) {
 			defer wg.Done()
 			filter := scope
-			if index == 0 {
+			if index == 0 || index == 2 {
 				filter = bson.M{}
 			} else if index < 5 {
 				filter = companyScopeFilter(nil)
@@ -206,7 +206,9 @@ func (s *Store) DataStatus(ctx context.Context) (DataStatus, error) {
 				return
 			}
 			values[index] = timeText(doc[item.field])
-			counts[index], _ = item.collection.CountDocuments(ctx, filter)
+			if index >= 5 {
+				counts[index], _ = item.collection.CountDocuments(ctx, filter)
+			}
 		}(index, item)
 	}
 	wg.Wait()
@@ -412,14 +414,11 @@ func viewFilter(viewID string, f ViewFilters, searchFields []string, dateField s
 	if f.ItemSN != "" {
 		addExactCompat("ZCODE_ITEM", f.ItemSN, false)
 	}
-	var filter bson.M
+	filter := bson.M{}
 	if len(conditions) > 0 {
 		filter = bson.M{"$and": conditions}
 	}
-	if viewID == "SCS_DOA" || viewID == "SCS_CHANGE" {
-		return scopeFilter(filter)
-	}
-	return companyScopeFilter(filter)
+	return viewScopeFilter(viewID, filter)
 }
 
 func parseBoolFilter(value string) bool {

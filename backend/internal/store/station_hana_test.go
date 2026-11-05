@@ -1,11 +1,118 @@
 package store
 
 import (
+	"context"
+	"database/sql"
+	"database/sql/driver"
+	"errors"
+	"io"
+	"net/url"
 	"strings"
 	"testing"
 
 	"go.mongodb.org/mongo-driver/bson"
 )
+
+func TestStationHANADSNEnablesIdleConnectionHealthChecks(t *testing.T) {
+	dsn := stationHANADSN("10.17.150.235", "30015", "report user", "p@ss", 120, 30)
+	parsed, err := url.Parse(dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if parsed.Query().Get("timeout") != "120" || parsed.Query().Get("pingInterval") != "30" {
+		t.Fatalf("dsn query=%v", parsed.Query())
+	}
+	if parsed.User.Username() != "report user" {
+		t.Fatalf("dsn user=%q", parsed.User.Username())
+	}
+}
+
+func TestRetryStationHANAQueryOnlyRetriesBadConnections(t *testing.T) {
+	if !retryStationHANAQuery(context.Background(), errors.Join(driver.ErrBadConn, errors.New("reset")), 0) {
+		t.Fatal("bad connection should be retried")
+	}
+	if retryStationHANAQuery(context.Background(), errors.New("syntax error"), 0) {
+		t.Fatal("query errors must not be retried")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if retryStationHANAQuery(ctx, driver.ErrBadConn, 0) {
+		t.Fatal("canceled query must not be retried")
+	}
+	if retryStationHANAQuery(context.Background(), driver.ErrBadConn, stationHANAQueryAttempts-1) {
+		t.Fatal("retry limit must be one replay")
+	}
+}
+
+type retryDriver struct{ queries *int }
+
+func (d retryDriver) Open(string) (driver.Conn, error) { return retryConn{queries: d.queries}, nil }
+
+type retryConn struct{ queries *int }
+
+func (retryConn) Prepare(string) (driver.Stmt, error) { return nil, driver.ErrSkip }
+func (retryConn) Close() error                        { return nil }
+func (retryConn) Begin() (driver.Tx, error)           { return nil, driver.ErrSkip }
+func (c retryConn) QueryContext(context.Context, string, []driver.NamedValue) (driver.Rows, error) {
+	*c.queries++
+	return &retryRows{bad: *c.queries == 1}, nil
+}
+
+type retryRows struct {
+	bad, returned bool
+}
+
+func (*retryRows) Columns() []string { return []string{"PCODE"} }
+func (*retryRows) Close() error      { return nil }
+func (r *retryRows) Next(dest []driver.Value) error {
+	if r.bad {
+		r.bad = false
+		return driver.ErrBadConn
+	}
+	if r.returned {
+		return io.EOF
+	}
+	r.returned = true
+	dest[0] = "PC-1"
+	return nil
+}
+
+func TestStationHANAQueryEachRecoversBeforeFirstRow(t *testing.T) {
+	queries := 0
+	driverName := "station-retry-test"
+	sql.Register(driverName, retryDriver{queries: &queries})
+	db, err := sql.Open(driverName, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	h := &stationHANA{db: db}
+	var values []string
+	if err := h.queryEach(context.Background(), "SELECT PCODE", nil, func(doc map[string]any) error {
+		values = append(values, stringValue(doc["PCODE"]))
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if queries != 2 || len(values) != 1 || values[0] != "PC-1" {
+		t.Fatalf("queries=%d values=%v", queries, values)
+	}
+}
+
+func TestStationStreamQueryKeepsCompatibleProjectionAndOrdering(t *testing.T) {
+	query := stationStreamQuery(`WHERE "GSTRS" >= ?`, 123)
+	for _, fragment := range []string{
+		`SELECT "HISTROYID","PCODE","AUFNR","KDAUF","GSTRS","SPEC","SPEC_DESC","OPERATION","ACTUAL_START_TIME","ACTUAL_END_TIME","MAKTX_TH","LGORT","SPEC_TIME","OCODE"`,
+		`FROM ` + stationHANAView,
+		`WHERE "GSTRS" >= ?`,
+		`ORDER BY ` + stationHANAOrder,
+		`LIMIT 123`,
+	} {
+		if !strings.Contains(query, fragment) {
+			t.Fatalf("stream query misses %q: %s", fragment, query)
+		}
+	}
+}
 
 func TestStationSourceKeyMatchesExistingCompleteKey(t *testing.T) {
 	doc := bson.M{

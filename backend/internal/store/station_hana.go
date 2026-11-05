@@ -6,8 +6,10 @@ import (
 	"context"
 	"crypto/sha256"
 	"database/sql"
+	"database/sql/driver"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -24,10 +26,11 @@ import (
 )
 
 const (
-	stationHANAView       = `"_SYS_BIC"."BW_LOCAL.ZTRRI/Z_V_ZMES_T_001"`
-	stationHANAViewID     = "Z_V_ZMES_T_001"
-	stationHANASelectList = `"MANDT","HISTROYID","PCODE","OCODE","AUFNR","KDAUF","KDPOS","LGORT","MAKTX_TH","LEAD_CYCLE","AUFNR_CYCLE","CUSTOMIZE_CYCLE","OEMBZ","SPEC","OPERATION","SPEC_DESC","UNAME","LASTSPEC_TIME","SPEC_TIME","GSTRS","PLAN_END_TIME","ACTUAL_START_TIME","ACTUAL_END_TIME","HADE1","HADE2","HADE3","HADE4","HADE5","HADE6","HADE7","HADE8","STATU","MESS"`
-	stationHANAOrder      = `"ACTUAL_START_TIME" DESC, "HISTROYID" DESC, "SPEC_TIME" DESC, "PCODE" DESC, "SPEC" DESC, "OCODE" DESC`
+	stationHANAView          = `"_SYS_BIC"."BW_LOCAL.ZTRRI/Z_V_ZMES_T_001"`
+	stationHANAViewID        = "Z_V_ZMES_T_001"
+	stationHANASelectList    = `"MANDT","HISTROYID","PCODE","OCODE","AUFNR","KDAUF","KDPOS","LGORT","MAKTX_TH","LEAD_CYCLE","AUFNR_CYCLE","CUSTOMIZE_CYCLE","OEMBZ","SPEC","OPERATION","SPEC_DESC","UNAME","LASTSPEC_TIME","SPEC_TIME","GSTRS","PLAN_END_TIME","ACTUAL_START_TIME","ACTUAL_END_TIME","HADE1","HADE2","HADE3","HADE4","HADE5","HADE6","HADE7","HADE8","STATU","MESS"`
+	stationHANAOrder         = `"ACTUAL_START_TIME" DESC, "HISTROYID" DESC, "SPEC_TIME" DESC, "PCODE" DESC, "SPEC" DESC, "OCODE" DESC`
+	stationHANAQueryAttempts = 2
 )
 
 var stationHANAKeyFields = []string{"HISTROYID", "SPEC", "SPEC_TIME", "PCODE", "OCODE"}
@@ -38,6 +41,21 @@ var stationHANAKeywordFields = []string{
 
 type stationHANA struct {
 	db *sql.DB
+}
+
+func stationHANADSN(address, port, user, password string, timeout, pingInterval int) string {
+	dsn := &url.URL{
+		Scheme: "hdb",
+		User:   url.UserPassword(user, password),
+		Host:   net.JoinHostPort(address, port),
+	}
+	query := dsn.Query()
+	query.Set("timeout", strconv.Itoa(timeout))
+	if pingInterval > 0 {
+		query.Set("pingInterval", strconv.Itoa(pingInterval))
+	}
+	dsn.RawQuery = query.Encode()
+	return dsn.String()
 }
 
 func newStationHANAFromEnv() (*stationHANA, error) {
@@ -52,22 +70,18 @@ func newStationHANAFromEnv() (*stationHANA, error) {
 		port = "30015"
 	}
 	timeout := envSeconds("HANA_CONNECT_TIMEOUT", 120)
-	dsn := &url.URL{
-		Scheme: "hdb",
-		User:   url.UserPassword(user, password),
-		Host:   net.JoinHostPort(address, port),
-	}
-	query := dsn.Query()
-	query.Set("timeout", strconv.Itoa(timeout))
-	dsn.RawQuery = query.Encode()
-
-	db, err := sql.Open("hdb", dsn.String())
+	// HANA or an intermediate proxy can close idle TCP sessions. Ask go-hdb to
+	// validate an idle pooled session before handing it to a query so database/sql
+	// can discard it and transparently establish a fresh connection.
+	pingInterval := envSeconds("HANA_PING_INTERVAL", 30)
+	db, err := sql.Open("hdb", stationHANADSN(address, port, user, password, timeout, pingInterval))
 	if err != nil {
 		return nil, err
 	}
 	db.SetMaxOpenConns(12)
 	db.SetMaxIdleConns(4)
-	db.SetConnMaxLifetime(30 * time.Minute)
+	db.SetConnMaxLifetime(25 * time.Minute)
+	db.SetConnMaxIdleTime(5 * time.Minute)
 	return &stationHANA{db: db}, nil
 }
 
@@ -273,8 +287,8 @@ func (s *Store) stationViewStationStream(ctx context.Context, f ViewFilters, out
 		countQuery += " " + where
 	}
 	countQuery += fmt.Sprintf(` LIMIT %d) station_count`, MaxStationStreamRows+1)
-	var count int64
-	if err := h.db.QueryRowContext(ctx, countQuery, args...).Scan(&count); err != nil {
+	count, err := h.queryInt64(ctx, countQuery, args...)
+	if err != nil {
 		return err
 	}
 	if count > int64(MaxStationStreamRows) {
@@ -620,11 +634,21 @@ func (h *stationHANA) count(ctx context.Context, where string, args ...any) (int
 	if where != "" {
 		query += " " + where
 	}
+	return h.queryInt64(ctx, query, args...)
+}
+
+func (h *stationHANA) queryInt64(ctx context.Context, query string, args ...any) (int64, error) {
 	var total int64
-	if err := h.db.QueryRowContext(ctx, query, args...).Scan(&total); err != nil {
-		return 0, err
+	for attempt := 0; attempt < stationHANAQueryAttempts; attempt++ {
+		err := h.db.QueryRowContext(ctx, query, args...).Scan(&total)
+		if err == nil {
+			return total, nil
+		}
+		if !retryStationHANAQuery(ctx, err, attempt) {
+			return 0, err
+		}
 	}
-	return total, nil
+	return 0, fmt.Errorf("HANA 查询重试失败")
 }
 
 func (h *stationHANA) query(ctx context.Context, query string, args ...any) ([]bson.M, error) {
@@ -644,6 +668,25 @@ func (h *stationHANA) query(ctx context.Context, query string, args ...any) ([]b
 }
 
 func (h *stationHANA) queryEach(ctx context.Context, query string, args []any, visit func(map[string]any) error) error {
+	for attempt := 0; attempt < stationHANAQueryAttempts; attempt++ {
+		visited := false
+		err := h.queryEachOnce(ctx, query, args, func(doc map[string]any) error {
+			visited = true
+			return visit(doc)
+		})
+		if err == nil {
+			return nil
+		}
+		// Once a row has reached the caller, retrying would duplicate stream
+		// output. A bad connection before the first row is safe to replay.
+		if visited || !retryStationHANAQuery(ctx, err, attempt) {
+			return err
+		}
+	}
+	return fmt.Errorf("HANA 查询重试失败")
+}
+
+func (h *stationHANA) queryEachOnce(ctx context.Context, query string, args []any, visit func(map[string]any) error) error {
 	rows, err := h.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return err
@@ -675,4 +718,8 @@ func (h *stationHANA) queryEach(ctx context.Context, query string, args []any, v
 		}
 	}
 	return rows.Err()
+}
+
+func retryStationHANAQuery(ctx context.Context, err error, attempt int) bool {
+	return attempt+1 < stationHANAQueryAttempts && ctx.Err() == nil && errors.Is(err, driver.ErrBadConn)
 }

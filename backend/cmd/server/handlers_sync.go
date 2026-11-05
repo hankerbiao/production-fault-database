@@ -226,7 +226,13 @@ func (s *server) dataStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	status := s.sync.statusSnapshot()
 	if run, runErr := s.store.LatestSyncRun(r.Context()); runErr == nil {
-		status = syncStatusFromRun(run)
+		runStatus := syncStatusFromRun(run)
+		// station_records was removed from the managed sync set. Keep the
+		// historical run available through /api/sync/runs, but do not let an
+		// old failed run permanently report the current data gateway as failed.
+		if runStatus.State == "running" {
+			status = runStatus
+		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"salesOrdersLastSyncedAt": result.SalesOrdersLastSyncedAt, "faultsLastSyncedAt": result.FaultsLastSyncedAt, "stationRecordsLastSyncedAt": result.StationRecordsLastSyncedAt, "serialBindingsLastSyncedAt": result.SerialBindingsLastSyncedAt, "bomPostingsLastSyncedAt": result.BOMPostingsLastSyncedAt, "scsDoaLastSyncedAt": result.SCSDoaLastSyncedAt, "scsChangeLastSyncedAt": result.SCSChangeLastSyncedAt, "scsDoaRecordCount": result.SCSDoaRecordCount, "scsChangeRecordCount": result.SCSChangeRecordCount, "state": status.State, "startedAt": status.StartedAt, "finishedAt": status.FinishedAt})
 }

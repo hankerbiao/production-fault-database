@@ -284,7 +284,7 @@ func (s *Store) stationViewStationStream(ctx context.Context, f ViewFilters, out
 	}
 
 	var snapshot bytes.Buffer
-	w := bufio.NewWriterSize(io.MultiWriter(out, &snapshot), 1<<20)
+	w := bufio.NewWriterSize(&snapshot, 1<<20)
 	if _, err := io.WriteString(w, strings.Join(stationStreamFields, "\t")+"\n"); err != nil {
 		return err
 	}
@@ -318,9 +318,6 @@ func (s *Store) stationViewStationStream(ctx context.Context, f ViewFilters, out
 		if err != nil {
 			return err
 		}
-		if err := w.Flush(); err != nil {
-			return err
-		}
 		if rowsInBatch < batchLimit {
 			break
 		}
@@ -337,6 +334,9 @@ func (s *Store) stationViewStationStream(ctx context.Context, f ViewFilters, out
 		}
 	}
 	if err := w.Flush(); err != nil {
+		return err
+	}
+	if _, err := out.Write(snapshot.Bytes()); err != nil {
 		return err
 	}
 	if snapshot.Len() <= stationStreamCacheMaxBytes {

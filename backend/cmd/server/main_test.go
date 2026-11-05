@@ -527,6 +527,12 @@ func TestViewAndDataStatusRoutes(t *testing.T) {
 	if r.Code != http.StatusOK {
 		t.Fatalf("data status=%d", r.Code)
 	}
+	f.err = errors.New("hana unavailable")
+	r = httptest.NewRecorder()
+	newTestServer(f).viewStationStream(r, httptest.NewRequest(http.MethodGet, "/api/views/Z_V_ZMES_T_001/stream", nil))
+	if r.Code != http.StatusBadRequest || strings.Contains(r.Header().Get("Content-Type"), "text/tab-separated-values") {
+		t.Fatalf("station stream error leaked successful response: status=%d content-type=%q body=%s", r.Code, r.Header().Get("Content-Type"), r.Body.String())
+	}
 }
 
 func TestViewOptionsRoute(t *testing.T) {

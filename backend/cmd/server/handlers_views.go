@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"errors"
 	"net/http"
 	"strings"
@@ -64,10 +65,13 @@ func (s *server) viewStream(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) viewStationStream(w http.ResponseWriter, r *http.Request) {
-	streamTSV(w, "station.tsv")
-	if err := s.store.ViewStationStream(r.Context(), viewFilters(r.URL.Query()), w); err != nil {
+	var body bytes.Buffer
+	if err := s.store.ViewStationStream(r.Context(), viewFilters(r.URL.Query()), &body); err != nil {
 		writeStreamError(w, err)
+		return
 	}
+	streamTSV(w, "station.tsv")
+	_, _ = w.Write(body.Bytes())
 }
 
 func (s *server) packagingCounts(w http.ResponseWriter, r *http.Request) {

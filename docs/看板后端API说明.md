@@ -1,6 +1,6 @@
 # 看板后端 API 说明
 
-本文档描述产线故障数据库后端网关为看板提供的 HTTP API。接口只查询 MongoDB，不会在查询时访问 SAP 或 HANA；数据由同步任务写入 MongoDB 后供看板读取。
+本文档描述产线故障数据库后端网关为看板提供的 HTTP API。维修、订单、BOM 和 SCS 接口查询 MongoDB；工位过站视图 `Z_V_ZMES_T_001` 默认直读 SAP HANA，不再读取本地 `station_records_sap`。设置 `STATION_VIEW_SOURCE=mongo` 可临时回退到原 MongoDB 链路。
 
 机器可读的 OpenAPI 3.1 契约见 [`docs/openapi.json`](openapi.json)，可直接导入 Swagger UI、Postman、Insomnia 或代码生成器。本 Markdown 版本用于补充业务语义、数据来源和调用约束；两者应保持同步。
 
@@ -19,12 +19,12 @@
 
 ## 1.1 纯数据接口扩展与实现约束
 
-以下接口面向 LRR、复合机型、质量分析等上层服务，职责是稳定地返回 MongoDB 中的原始数据，**不**在网关中计算投入数量、故障数量、RTY、过站数量、直通率或复合机型故障结论。
+以下接口面向 LRR、复合机型、质量分析等上层服务，职责是稳定地返回 MongoDB 或工位 HANA 视图中的原始数据，**不**在网关中计算投入数量、故障数量、RTY、过站数量、直通率或复合机型故障结论。
 
 - 分页列表接口最大 `pageSize=100`；缺省或越界时使用 `20`。`/api/orders?all=true` 和 `/api/orders/all` 是例外，复用筛选条件并同步返回最多 `10,000` 条订单。
 
 销售订单支持全量筛选查询：`GET /api/orders/all`，或在既有接口追加 `all=true`。它使用与 `/api/orders` 完全相同的筛选和排序，但忽略看板分页，仅返回前 `10,000` 条匹配记录；超过上限时响应仍只包含前 `10,000` 条，调用方应使用日期分段查询。可通过 `total` 判断是否被截断。
-- `id` 是稳定查询键：维修和 HANA 视图优先为 `_source_key`，销售订单为 `{source}:{AUFNR}`。详情接口接受该值并返回完整 MongoDB 文档/源字段。
+- `id` 是稳定查询键：维修和 HANA 视图优先为 `_source_key`，销售订单为 `{source}:{AUFNR}`。工位直读 HANA 时，`id` 为 `["HISTROYID","SPEC","SPEC_TIME","PCODE","OCODE"]`；缺失字段用空字符串表示，保证详情接口可直接按自然键查询。详情接口接受该值并返回完整文档/源字段。
 - 逗号分隔参数（也接受中文逗号）表示批量精确查询。`salesOrder`、`productionOrder` 及对应批量参数支持 SAP 前导零兼容，例如 `123` 可命中 `0000000123`。
 - `/api/faults`、`/api/orders` 的 `items[]` 同时返回稳定摘要字段和 `raw`。`raw` 是当前 MongoDB 源文档的可扩展快照，不承诺字段集合稳定；需要逐字段兼容时应锁定同步版本或使用详情接口。五个 `/api/views/{viewID}` 列表返回完整视图文档，并补充稳定 `id`。
 - MongoDB 索引应与同步脚本的 `index_fields` 对齐，并补充复合索引：维修 `ZMCOD1 + ZDATE_WX`、`AUFNR + ZDATE_WX`、`VBELN + ZDATE_WX`；订单 `source + aufnr`、`data.VBELN`、`data.GSTRS`；工位 `PCODE + ACTUAL_START_TIME`、`AUFNR + ACTUAL_START_TIME`、`KDAUF + ACTUAL_START_TIME`；BOM `AUFNR_1 + GSTRS`、`VBELN_EX + GSTRS`。索引创建应由迁移/运维任务执行，不在查询路径即时创建。
@@ -66,7 +66,9 @@ GET /api/faults/by-orders?productionOrders=PO001,PO002
 
 ### 工位过站原始数据 `GET /api/views/Z_V_ZMES_T_001`
 
-支持 `page`、`pageSize`、`dateFrom`、`dateTo`、`stationCode`、`sn`、`productionOrder`、`salesOrder`、`base`、`productModel`。原始字段包括 `HISTROYID`、`PCODE`、`OCODE`、`AUFNR`、`SPEC`、`OPERATION`、`GSTRS`、`ACTUAL_START_TIME`、`ACTUAL_END_TIME`。响应附加 `stationCode`：优先取 `LINE_CODE`，否则使用 `SPEC`，再否则 `OPERATION`；原始工位字段始终保留。该接口不计算过站数量或工位直通率。
+该接口默认直读 HANA 视图 `"_SYS_BIC"."BW_LOCAL.ZTRRI/Z_V_ZMES_T_001"`，不再读取本地 `station_records_sap`；设置 `STATION_VIEW_SOURCE=mongo` 可临时回退。支持 `page`、`pageSize`、`dateFrom`、`dateTo`、`stationCode`、`sn`、`productionOrder`、`salesOrder`、`base`、`productModel`，以及 `/all`、`/stream`、`/detail`、`/stats`、`/packaging-counts`。原始字段包括 `HISTROYID`、`PCODE`、`OCODE`、`AUFNR`、`SPEC`、`OPERATION`、`GSTRS`、`ACTUAL_START_TIME`、`ACTUAL_END_TIME` 等。响应附加 `stationCode`：优先取 `LINE_CODE`，否则使用 `SPEC`，再否则 `OPERATION`；HANA 视图不提供 `LINE_CODE`，因此直读模式下通常取 `SPEC`。原始工位字段始终保留。该接口不计算过站数量或工位直通率。
+
+直读 HANA 时，`id` / `_source_key` 统一为 `["HISTROYID","SPEC","SPEC_TIME","PCODE","OCODE"]` 的 JSON 字符串，空字段以 `""` 表示；`_synced_at` 和统计接口的 `latestSyncedAt` 表示本次读取时间，而非 MongoDB 同步时间。`_id` 仍为该键的 SHA-256，便于与旧链路保持同样的标识形式。旧 Mongo 链路在字段缺失时使用 `full_row:<sha256>`，直读 HANA 后统一改为可查询的自然键；如果下游持久化了旧 `id`，切换后需要按列表返回的新 `id` 刷新。HANA 视图没有 `WERKS` 字段，`base` 在该模式下只匹配 `LGORT`。
 
 ### 序列号绑定原始数据 `GET /api/views/ZSGV_ZPP_SERNOLIST`
 
@@ -116,7 +118,7 @@ GET /api/data-status
 1. 维修故障记录：`ZSGV_ZZT_WLJL` -> `repair_records_sap`
 2. 订单 BOM 过账：`ZSGV_ZSD124` -> `order_bom_postings_sap`
 3. 序列号绑定：`ZSGV_ZPP_SERNOLIST` -> `serial_bindings_sap`
-4. 工位记录：`Z_V_ZMES_T_001` -> `station_records_sap`
+4. 工位记录：`Z_V_ZMES_T_001` -> 直读 HANA 视图（回退时读取 `station_records_sap`）
 5. SCS DOA 申报：`SCS_DOA` -> `scs_doa_records`
 6. SCS 换上换下：`SCS_CHANGE` -> `scs_change_records`
 
@@ -217,7 +219,7 @@ GET /api/views/{viewID}/detail?id={id}
 |---|---|---|---|
 | `ZSGV_ZSD124` | `order_bom_postings_sap` | `GSTRS` | `MBLNR`, `MJAHR`, `ZEILE`, `MATNR`, `WERKS`, `BWART`, `MENGE_A`, `AUFNR_1`, `VBELN_EX`, `GSTRS`, `BUDAT_MKPF` |
 | `ZSGV_ZPP_SERNOLIST` | `serial_bindings_sap` | 无 | `ZCODE_HEAD`, `ZCODE_ITEM`, `AUFNR_HEAD`, `AUFNR_ITEM`, `PRODH` |
-| `Z_V_ZMES_T_001` | `station_records_sap` | `GSTRS` | `HISTROYID`, `PCODE`, `OCODE`, `AUFNR`, `SPEC`, `OPERATION`, `GSTRS`, `ACTUAL_START_TIME`, `ACTUAL_END_TIME` |
+| `Z_V_ZMES_T_001` | HANA `"_SYS_BIC"."BW_LOCAL.ZTRRI/Z_V_ZMES_T_001"`（默认）；回退为 `station_records_sap` | `GSTRS` | `HISTROYID`, `PCODE`, `OCODE`, `AUFNR`, `SPEC`, `OPERATION`, `GSTRS`, `ACTUAL_START_TIME`, `ACTUAL_END_TIME` |
 | `SCS_DOA` | `scs_doa_records` | `declare_time` | `doa_code`, `doa_type`, `service_uid`, `status`, `doa_judge`, `customer_uid`, `sugon_sn`, `spare_part_sn`, `product_name`, `sales_order`, `is_5000_company` |
 | `SCS_CHANGE` | `scs_change_records` | `create_time` | `so_code`, `customer_name`, `device_sn`, `change_type`, `part_number`, `part_sn`, `part_name`, `operator`, `create_time`, `is_revoked`, `is_5000_company` |
 
@@ -246,7 +248,7 @@ GET /api/views/{viewID}/detail?id={id}
 | `needReturn` / `revoked` | string | 仅 `SCS_CHANGE`：按是否归还、是否撤销精确匹配 |
 | `company5000` | string | SCS 视图：传 `true`、`1`、`yes`、`是` 筛选 `is_5000_company=true`，其他值筛选 false |
 
-日期行为：`ZSGV_ZSD124` 与 `Z_V_ZMES_T_001` 都按计划开始时间 `GSTRS` 筛选，同时兼容 `YYYY-MM-DD` 和 `YYYYMMDD` 存量格式。上下限均为包含关系。
+日期行为：`ZSGV_ZSD124` 与 `Z_V_ZMES_T_001` 都按计划开始时间 `GSTRS` 筛选，同时兼容 `YYYY-MM-DD` 和 `YYYYMMDD` 存量格式。上下限均为包含关系。工位直读 HANA 时，后端会把日期统一转换为 `YYYYMMDD` 后与 `GSTRS` 比较。
 
 响应示例：
 

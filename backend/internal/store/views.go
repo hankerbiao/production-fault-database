@@ -11,6 +11,9 @@ import (
 )
 
 func (s *Store) ViewList(ctx context.Context, viewID string, f ViewFilters, page, pageSize int, preview, includeTotal bool) (ViewListResult, error) {
+	if viewID == stationHANAViewID && s.stationRequested {
+		return s.stationViewList(ctx, f, page, pageSize, preview, includeTotal)
+	}
 	config, ok := documentedViews[viewID]
 	if !ok {
 		return ViewListResult{}, fmt.Errorf("unknown view: %s", viewID)
@@ -91,6 +94,9 @@ func (s *Store) ViewList(ctx context.Context, viewID string, f ViewFilters, page
 // a narrow projection and a hard row bound instead of forcing thousands of
 // small HTTP pages across the gateway boundary.
 func (s *Store) ViewListAll(ctx context.Context, viewID string, f ViewFilters) (ViewListResult, error) {
+	if viewID == stationHANAViewID && s.stationRequested {
+		return s.stationViewListAll(ctx, f)
+	}
 	config, ok := documentedViews[viewID]
 	if !ok {
 		return ViewListResult{}, fmt.Errorf("unknown view: %s", viewID)
@@ -126,6 +132,9 @@ func (s *Store) ViewListAll(ctx context.Context, viewID string, f ViewFilters) (
 }
 
 func (s *Store) ViewDetail(ctx context.Context, viewID, id string) (ViewDetailResult, error) {
+	if viewID == stationHANAViewID && s.stationRequested {
+		return s.stationViewDetail(ctx, id)
+	}
 	if _, ok := documentedViews[viewID]; !ok {
 		return ViewDetailResult{}, fmt.Errorf("unknown view: %s", viewID)
 	}
@@ -139,6 +148,9 @@ func (s *Store) ViewDetail(ctx context.Context, viewID, id string) (ViewDetailRe
 }
 
 func (s *Store) ViewStats(ctx context.Context, viewID string, f ViewFilters) (ViewStatsResult, error) {
+	if viewID == stationHANAViewID && s.stationRequested {
+		return s.stationViewStats(ctx, f)
+	}
 	config, ok := documentedViews[viewID]
 	if !ok {
 		return ViewStatsResult{}, fmt.Errorf("unknown view: %s", viewID)

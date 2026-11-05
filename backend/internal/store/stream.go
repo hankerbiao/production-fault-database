@@ -106,6 +106,9 @@ func (s *Store) viewBOMStream(ctx context.Context, f ViewFilters, out io.Writer)
 // It avoids JSON map reflection while preserving every matching station row;
 // callers are responsible for applying selective model/base/SN filters.
 func (s *Store) ViewStationStream(ctx context.Context, f ViewFilters, out io.Writer) error {
+	if s.stationRequested {
+		return s.stationViewStationStream(ctx, f, out)
+	}
 	useDefaultFilters := f == (ViewFilters{})
 	if useDefaultFilters {
 		f = defaultStationStreamFilters()
@@ -123,6 +126,9 @@ func (s *Store) ViewStationStream(ctx context.Context, f ViewFilters, out io.Wri
 // PackagingCounts returns only the distinct host-barcode counts needed by
 // exports, instead of streaming every historical station row across HTTP.
 func (s *Store) PackagingCounts(ctx context.Context, input string) ([]PackagingCount, error) {
+	if s.stationRequested {
+		return s.stationPackagingCounts(ctx, input)
+	}
 	items := make([]any, 0)
 	for _, value := range strings.Split(input, ",") {
 		items = append(items, value)

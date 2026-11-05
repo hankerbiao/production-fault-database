@@ -61,10 +61,29 @@ func New(ctx context.Context, uri, database, repairCollection, orderCollection s
 		stationCache: make(map[string]bomStreamCacheEntry), stationWarmDone: make(chan struct{}),
 		viewOptionsCache: make(map[string]ViewOptionsResult),
 	}
-	// Station prewarming is limited to the recent 30-day window. BOM data is
-	// never prewarmed because an unbounded snapshot would scan the source
-	// collection and compete with production traffic.
-	go result.prewarmStationStream()
+	if source := stationViewSource(); source == "hana" {
+		result.stationRequested = true
+		station, err := newStationHANAFromEnv()
+		if err != nil {
+			result.stationErr = err
+			log.Printf("station hana configuration failed: %v", err)
+		} else {
+			result.stationHANA = station
+			go func() {
+				pingCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+				defer cancel()
+				if err := station.db.PingContext(pingCtx); err != nil {
+					log.Printf("station hana ping failed: %v", err)
+				}
+			}()
+		}
+		result.stationWarmDone = nil
+	} else {
+		// Station prewarming is limited to the recent 30-day window. BOM data is
+		// never prewarmed because an unbounded snapshot would scan the source
+		// collection and compete with production traffic.
+		go result.prewarmStationStream()
+	}
 	return result, nil
 }
 
@@ -162,8 +181,13 @@ func (s *Store) SyncRuns(ctx context.Context, limit int) ([]SyncRun, error) {
 	return runs, nil
 }
 
-func (s *Store) Close(ctx context.Context) error { return s.client.Disconnect(ctx) }
-func (s *Store) Ping(ctx context.Context) error  { return s.client.Ping(ctx, nil) }
+func (s *Store) Close(ctx context.Context) error {
+	if s.stationHANA != nil {
+		_ = s.stationHANA.close()
+	}
+	return s.client.Disconnect(ctx)
+}
+func (s *Store) Ping(ctx context.Context) error { return s.client.Ping(ctx, nil) }
 
 func (s *Store) DataStatus(ctx context.Context) (DataStatus, error) {
 	s.dataStatusCacheMu.Lock()

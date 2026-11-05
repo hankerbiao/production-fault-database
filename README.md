@@ -1,6 +1,6 @@
 # 产线故障数据库
 
-MongoDB 数据库网关 + Vite/React 查询工作台。后端直接读取项目根目录 `.env`，MongoDB 是唯一数据源。
+MongoDB 数据库网关 + Vite/React 查询工作台。后端直接读取项目根目录 `.env`；维修、订单、BOM 和 SCS 数据来自 MongoDB，工位过站视图默认直读 SAP HANA。
 
 ## 初始化开发环境
 
@@ -12,7 +12,7 @@ MongoDB 数据库网关 + Vite/React 查询工作台。后端直接读取项目�
 
 脚本会幂等地创建 `.venv`、安装 Python 依赖、下载 Go 模块、执行前端 `npm ci`，并在根目录不存在 `.env` 时从 `backend/.env.example` 生成初始配置。已有 `.env` 不会被覆盖；生成后请按实际 MongoDB 和 SAP 环境补充凭据。
 
-如果当前机器只运行前后端查询、不执行 HANA 同步，可跳过 SAP HANA 驱动：
+如果当前机器只运行前后端查询、不执行 Python HANA 同步，可跳过 `hdbcli`。工位看板直读 HANA 使用 Go 内置驱动，不依赖 `hdbcli`：
 
 ```bash
 ./scripts/prepare_env.sh --skip-hdbcli
@@ -346,12 +346,12 @@ MongoDB 租约锁防止并发运行。`SYNC_PYTHON` 指定 Python 解释器，`S
   和销售订单两个看板，同步期间按钮显示“同步中”，重复点击会收到 HTTP `409`。
 
 前端同时提供 HANA 和 SCS 视图看板：**订单过账**对应 `ZSGV_ZSD124`、**序列号绑定**对应
-`ZSGV_ZPP_SERNOLIST`、**工位记录**对应 `Z_V_ZMES_T_001`。每个看板从对应 MongoDB
-集合读取数据，支持关键字搜索、分页、记录详情和（有日期字段的视图）起止日期筛选；
+`ZSGV_ZPP_SERNOLIST`、**工位记录**对应 `Z_V_ZMES_T_001`。工位记录默认直读 HANA 视图，
+其余看板从对应 MongoDB 集合读取数据；均支持关键字搜索、分页、记录详情和（有日期字段的视图）起止日期筛选；
 页面显示数据来源、数据时间区间和最新同步时间。后端接口分别为
 `GET /api/views/{viewID}`、`GET /api/views/{viewID}/stats` 与
-`GET /api/views/{viewID}/detail?id=...`，允许 docs 中登记的 HANA 和 SCS 视图 ID，刷新只访问
-MongoDB，不会重新访问 HANA。
+`GET /api/views/{viewID}/detail?id=...`，允许 docs 中登记的 HANA 和 SCS 视图 ID。工位看板刷新会直读 HANA；
+设置 `STATION_VIEW_SOURCE=mongo` 可临时回退到原有 MongoDB 读取路径。
 
 订单 BOM 过账看板提供“导出销售订单为空”按钮。该导出保留当前的生产订单、物料和日期筛选，且只导出
 `VBELN_EX` 为空、空白、`null` 或缺失的 BOM 行。

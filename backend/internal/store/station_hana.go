@@ -288,15 +288,18 @@ func (s *Store) stationViewStationStream(ctx context.Context, f ViewFilters, out
 	if _, err := io.WriteString(w, strings.Join(stationStreamFields, "\t")+"\n"); err != nil {
 		return err
 	}
-	for offset := 0; offset < MaxStationStreamRows; offset += stationHANAStreamBatch {
+	var cursor map[string]any
+	for rowsRead := 0; rowsRead < MaxStationStreamRows; rowsRead += stationHANAStreamBatch {
 		batchLimit := stationHANAStreamBatch
-		if remaining := MaxStationStreamRows - offset; remaining < batchLimit {
+		if remaining := MaxStationStreamRows - rowsRead; remaining < batchLimit {
 			batchLimit = remaining
 		}
 		rowsInBatch := 0
-		query := stationStreamQueryPage(where, batchLimit, offset)
-		err = h.queryEach(ctx, query, args, func(doc map[string]any) error {
+		batchWhere, batchArgs := stationStreamCursorWhere(where, args, cursor)
+		query := stationStreamQueryPage(batchWhere, batchLimit, 0)
+		err = h.queryEach(ctx, query, batchArgs, func(doc map[string]any) error {
 			rowsInBatch++
+			cursor = doc
 			row := make([]string, 0, len(stationStreamFields))
 			row = append(row, csvValue(stationSourceKeyFromMap(doc)))
 			for _, field := range stationStreamFields[1:] {
@@ -315,11 +318,15 @@ func (s *Store) stationViewStationStream(ctx context.Context, f ViewFilters, out
 		if err != nil {
 			return err
 		}
+		if err := w.Flush(); err != nil {
+			return err
+		}
 		if rowsInBatch < batchLimit {
 			break
 		}
-		if offset+batchLimit == MaxStationStreamRows {
-			probe, probeErr := h.query(ctx, stationStreamQueryPage(where, 1, MaxStationStreamRows), args...)
+		if rowsRead+batchLimit == MaxStationStreamRows {
+			probeWhere, probeArgs := stationStreamCursorWhere(where, args, cursor)
+			probe, probeErr := h.query(ctx, stationStreamQueryPage(probeWhere, 1, 0), probeArgs...)
 			if probeErr != nil {
 				return probeErr
 			}
@@ -338,6 +345,30 @@ func (s *Store) stationViewStationStream(ctx context.Context, f ViewFilters, out
 		s.stationCacheMu.Unlock()
 	}
 	return nil
+}
+
+func stationStreamCursorWhere(where string, args []any, cursor map[string]any) (string, []any) {
+	if len(cursor) == 0 {
+		return where, args
+	}
+	fields := []string{"ACTUAL_START_TIME", "HISTROYID", "SPEC_TIME", "PCODE", "SPEC", "OCODE"}
+	parts := make([]string, 0, len(fields))
+	values := make([]any, 0, len(fields)*2)
+	for index, field := range fields {
+		prefix := make([]string, 0, index)
+		for previous := 0; previous < index; previous++ {
+			name := fields[previous]
+			prefix = append(prefix, fmt.Sprintf(`"%s" = ?`, name))
+			values = append(values, cursor[name])
+		}
+		parts = append(parts, "("+strings.Join(append(prefix, fmt.Sprintf(`"%s" < ?`, field)), " AND ")+")")
+		values = append(values, cursor[field])
+	}
+	clause := "(" + strings.Join(parts, " OR ") + ")"
+	if where == "" {
+		return "WHERE " + clause, values
+	}
+	return where + " AND " + clause, append(args, values...)
 }
 
 func (s *Store) stationPackagingCounts(ctx context.Context, input string) ([]PackagingCount, error) {

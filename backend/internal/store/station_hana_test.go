@@ -129,6 +129,16 @@ func TestStationStreamCountUsesDirectViewCount(t *testing.T) {
 	}
 }
 
+func TestStationStreamCursorKeepsStableDescendingOrder(t *testing.T) {
+	where, args := stationStreamCursorWhere(`WHERE "GSTRS" >= ?`, []any{"20261030"}, map[string]any{
+		"ACTUAL_START_TIME": "2026-11-01 10:00:00", "HISTROYID": "H2", "SPEC_TIME": "2026-11-01 09:00:00",
+		"PCODE": "P2", "SPEC": "S2", "OCODE": "O2",
+	})
+	if !strings.Contains(where, `"GSTRS" >= ? AND`) || !strings.Contains(where, `"ACTUAL_START_TIME" < ?`) || len(args) != 22 {
+		t.Fatalf("where=%q args=%v", where, args)
+	}
+}
+
 func TestStationSourceKeyMatchesExistingCompleteKey(t *testing.T) {
 	doc := bson.M{
 		"HISTROYID": "0009888000005393",

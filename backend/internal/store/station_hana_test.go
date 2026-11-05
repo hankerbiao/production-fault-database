@@ -217,7 +217,7 @@ func TestStationWhereTranslatesDocumentedFilters(t *testing.T) {
 		`"GSTRS" <= ?`,
 		`"MAKTX_TH" = ?`,
 		`LOWER(COALESCE("HISTROYID", '')) LIKE ? ESCAPE '\'`,
-		`UPPER("AUFNR") = UPPER(?)`,
+		`UPPER("AUFNR") IN (UPPER(?))`,
 		`LTRIM("AUFNR", '0')`,
 		`("PCODE" = ? OR "SPEC" = ? OR "OPERATION" = ?)`,
 		`"LGORT" = ?`,
@@ -231,6 +231,19 @@ func TestStationWhereTranslatesDocumentedFilters(t *testing.T) {
 		if !containsAny(args, value) {
 			t.Fatalf("args miss %q: %v", value, args)
 		}
+	}
+}
+
+func TestStationProductionOrderBatchUsesSingleLTRIMINPredicate(t *testing.T) {
+	where, args := stationProductionOrderBatch("000123,123,B02")
+	if !strings.Contains(where, `UPPER("AUFNR") IN (UPPER(?),UPPER(?),UPPER(?))`) || !strings.Contains(where, `LTRIM("AUFNR", '0')`) {
+		t.Fatalf("where=%q", where)
+	}
+	if len(args) != 6 || args[0] != "000123" || args[3] != "123" {
+		t.Fatalf("args=%v", args)
+	}
+	if where, args := stationProductionOrderBatch(""); where != "" || args != nil {
+		t.Fatalf("empty batch where=%q args=%v", where, args)
 	}
 }
 

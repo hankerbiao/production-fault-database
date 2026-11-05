@@ -203,7 +203,11 @@ func (f *fakeStore) ViewListAll(context.Context, string, store.ViewFilters) (sto
 	return store.ViewListResult{}, f.err
 }
 func (f *fakeStore) ViewBOMStream(context.Context, store.ViewFilters, io.Writer) error { return f.err }
-func (f *fakeStore) ViewStationStream(context.Context, store.ViewFilters, io.Writer) error {
+
+func (f *fakeStore) ViewStationStream(_ context.Context, _ store.ViewFilters, out io.Writer) error {
+	if f.err == nil {
+		_, _ = io.WriteString(out, "id\tPCODE\n")
+	}
 	return f.err
 }
 func (f *fakeStore) PackagingCounts(_ context.Context, orders string) ([]store.PackagingCount, error) {
@@ -302,6 +306,30 @@ func TestHealthAndJSONErrors(t *testing.T) {
 			t.Fatalf("code=%d body=%v", r.Code, body)
 		}
 	})
+}
+
+func TestBatchStationStreamValidatesOrdersAndPreservesTSV(t *testing.T) {
+	f := &fakeStore{}
+	router := registerRoutes(newTestServer(f))
+	req := httptest.NewRequest(http.MethodPost, "/api/views/Z_V_ZMES_T_001/stream", strings.NewReader(`{"dateFrom":"2026-10-26","dateTo":"2026-11-01","timeField":"planned","productionOrders":["000123","123","B02"]}`))
+	res := httptest.NewRecorder()
+	router.ServeHTTP(res, req)
+	if res.Code != http.StatusOK || res.Header().Get("Content-Type") != "text/tab-separated-values; charset=utf-8" {
+		t.Fatalf("status=%d content-type=%q body=%q", res.Code, res.Header().Get("Content-Type"), res.Body.String())
+	}
+	if !strings.Contains(res.Body.String(), "id\tPCODE") {
+		t.Fatalf("missing TSV output: %q", res.Body.String())
+	}
+	for _, body := range []string{`{"productionOrders":[]}`, `{"productionOrders":[""]}`, `{"productionOrders":["1"]}`} {
+		res = httptest.NewRecorder()
+		router.ServeHTTP(res, httptest.NewRequest(http.MethodPost, "/api/views/Z_V_ZMES_T_001/stream", strings.NewReader(body)))
+		if body == `{"productionOrders":["1"]}` {
+			continue
+		}
+		if res.Code != http.StatusBadRequest {
+			t.Fatalf("body=%s status=%d", body, res.Code)
+		}
+	}
 }
 
 func TestServiceConfigRedactsCredentials(t *testing.T) {

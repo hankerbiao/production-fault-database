@@ -30,6 +30,7 @@ func registerRoutes(h *server) *http.ServeMux {
 	mux.HandleFunc("GET /api/views/{viewID}", h.viewList)
 	mux.HandleFunc("GET /api/views/{viewID}/all", h.viewListAll)
 	mux.HandleFunc("GET /api/views/{viewID}/stream", h.viewStream)
+	mux.HandleFunc("POST /api/views/{viewID}/stream", h.viewStreamBatch)
 	mux.HandleFunc("GET /api/views/ZSGV_ZSD124/options", h.viewBOMOptions)
 	mux.HandleFunc("GET /api/views/Z_V_ZMES_T_001/packaging-counts", h.packagingCounts)
 	mux.HandleFunc("GET /api/views/{viewID}/detail", h.viewDetail)

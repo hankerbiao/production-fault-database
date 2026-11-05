@@ -502,7 +502,7 @@ func stationWhere(f ViewFilters) (string, []any) {
 		}
 	}
 	if strings.TrimSpace(f.ProductionOrder) != "" {
-		clause, values := stationExactBatch("AUFNR", f.ProductionOrder, true)
+		clause, values := stationProductionOrderBatch(f.ProductionOrder)
 		if clause != "" {
 			conditions = append(conditions, clause)
 			args = append(args, values...)
@@ -527,6 +527,27 @@ func stationWhere(f ViewFilters) (string, []any) {
 		return "", nil
 	}
 	return "WHERE " + strings.Join(conditions, " AND "), args
+}
+
+func stationProductionOrderBatch(input string) (string, []any) {
+	values := splitValues(input)
+	if len(values) == 0 {
+		return "", nil
+	}
+	exact := make([]string, 0, len(values))
+	trimmed := make([]string, 0, len(values))
+	for range values {
+		exact = append(exact, "UPPER(?)")
+		trimmed = append(trimmed, "UPPER(?)")
+	}
+	args := make([]any, 0, len(values)*2)
+	for _, value := range values {
+		args = append(args, value)
+	}
+	for _, value := range values {
+		args = append(args, normalizeOrderNumber(value))
+	}
+	return fmt.Sprintf(`(UPPER("AUFNR") IN (%s) OR UPPER(COALESCE(NULLIF(LTRIM("AUFNR", '0'), ''), '0')) IN (%s))`, strings.Join(exact, ","), strings.Join(trimmed, ",")), args
 }
 
 func stationExactBatch(field, input string, leadingZeroCompatible bool) (string, []any) {

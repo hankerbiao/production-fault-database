@@ -68,6 +68,8 @@ GET /api/faults/by-orders?productionOrders=PO001,PO002
 
 该接口默认直读 HANA 视图 `"_SYS_BIC"."BW_LOCAL.ZTRRI/Z_V_ZMES_T_001"`，不再读取本地 `station_records_sap`；设置 `STATION_VIEW_SOURCE=mongo` 可临时回退。支持 `page`、`pageSize`、`dateFrom`、`dateTo`、`stationCode`、`sn`、`productionOrder`、`salesOrder`、`base`、`productModel`，以及 `/all`、`/stream`、`/detail`、`/stats`、`/packaging-counts`。原始字段包括 `HISTROYID`、`PCODE`、`OCODE`、`AUFNR`、`SPEC`、`OPERATION`、`GSTRS`、`ACTUAL_START_TIME`、`ACTUAL_END_TIME` 等。响应附加 `stationCode`：优先取 `LINE_CODE`，否则使用 `SPEC`，再否则 `OPERATION`；HANA 视图不提供 `LINE_CODE`，因此直读模式下通常取 `SPEC`。原始工位字段始终保留。该接口不计算过站数量或工位直通率。
 
+质量服务批量查询可使用 `POST /api/views/Z_V_ZMES_T_001/stream`，请求体为 `{ "dateFrom": "2026-10-26", "dateTo": "2026-11-01", "timeField": "planned", "productionOrders": ["000123", "B02"] }`。订单数组必须包含 1 至 500 个非空订单，服务按单条 HANA 批量条件匹配订单原值及去除数值前导零后的值；空集合不会触发全量查询。成功响应仍为原 `station.tsv` 表头和字段。
+
 直读 HANA 时，`id` / `_source_key` 统一为 `["HISTROYID","SPEC","SPEC_TIME","PCODE","OCODE"]` 的 JSON 字符串，空字段以 `""` 表示；`_synced_at` 和统计接口的 `latestSyncedAt` 表示本次读取时间，而非 MongoDB 同步时间。`_id` 仍为该键的 SHA-256，便于与旧链路保持同样的标识形式。旧 Mongo 链路在字段缺失时使用 `full_row:<sha256>`，直读 HANA 后统一改为可查询的自然键；如果下游持久化了旧 `id`，切换后需要按列表返回的新 `id` 刷新。HANA 视图没有 `WERKS` 字段，`base` 在该模式下只匹配 `LGORT`。
 
 ### 序列号绑定原始数据 `GET /api/views/ZSGV_ZPP_SERNOLIST`

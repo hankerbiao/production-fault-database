@@ -11,7 +11,7 @@ from scripts.sync.syncctl import SyncError, is_retryable, json_result, resolve_t
 def test_skip_scs_keeps_all_other_tasks_in_stable_order():
     tasks = resolve_tasks(None, skip_scs=True)
     assert [task.id for task in tasks] == [
-        "sales_orders", "station_records", "repair_records",
+        "sales_orders", "repair_records",
         "order_bom_postings", "order_bom_planned_start", "serial_bindings",
     ]
     assert {"scs_doa", "scs_change"} <= {task.id for task in resolve_tasks(None)}
@@ -20,7 +20,7 @@ def test_skip_scs_keeps_all_other_tasks_in_stable_order():
 def test_skip_scs_with_explicit_tasks_preserves_other_dependencies():
     tasks = resolve_tasks(["scs_change", "repair_records"], skip_scs=True)
     assert [task.id for task in tasks] == [
-        "sales_orders", "station_records", "repair_records",
+        "sales_orders", "repair_records",
     ]
 
 
@@ -42,7 +42,7 @@ def test_skip_scs_is_applied_during_request_validation(mode, start):
         mode, ["scs_change", "repair_records"], start, "2026-10-15", skip_scs=True,
     )
     assert [task.id for task in tasks] == [
-        "sales_orders", "station_records", "repair_records",
+        "sales_orders", "repair_records",
     ]
     assert actual_start == start
     assert end == "2026-10-15"
@@ -61,7 +61,7 @@ def test_orchestrator_skip_scs_executes_and_records_only_remaining_tasks(monkeyp
     result = runner.execute(mode="incremental", source="cron", skip_scs=True)
 
     expected = [
-        "sales_orders", "station_records", "repair_records",
+        "sales_orders", "repair_records",
         "order_bom_postings", "order_bom_planned_start", "serial_bindings",
     ]
     assert result["state"] == "success"
@@ -96,7 +96,7 @@ def test_cli_forwards_skip_scs_to_orchestrator(monkeypatch, capsys):
 def test_resolve_tasks_adds_dependencies_in_stable_order():
     tasks = resolve_tasks(["scs_change", "repair_records"])
     assert [task.id for task in tasks] == [
-        "sales_orders", "station_records", "repair_records",
+        "sales_orders", "repair_records",
         "scs_doa", "scs_change",
     ]
 
@@ -136,3 +136,9 @@ def test_script_result_uses_last_json_line_and_preserves_contract():
     assert result == {"success": True, "run_id": "child", "taskId": "sales_orders", "mode": "incremental"}
     assert is_retryable({"error": "connection timed out"}, 1)
     assert not is_retryable({"error": {"retryable": False}}, 1)
+
+
+def test_station_records_are_not_scheduled():
+    assert "station_records" not in [task.id for task in resolve_tasks(None)]
+    with pytest.raises(SyncError, match="未知同步任务"):
+        resolve_tasks(["station_records"])

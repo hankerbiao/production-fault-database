@@ -289,7 +289,7 @@ def test_scs_change_failed_page_does_not_write_or_finish_checkpoint(monkeypatch)
 
 
 def test_tasks_manifest_is_unique_valid_and_complete():
-    assert len(syncctl.TASKS) == len(syncctl.TASK_BY_ID) == 8
+    assert len(syncctl.TASKS) == len(syncctl.TASK_BY_ID) == 7
     for task in syncctl.TASKS:
         assert (syncctl.ROOT / task.script).is_file()
         assert all(syncctl.TASK_BY_ID[name].priority < task.priority for name in task.dependencies)
@@ -314,10 +314,10 @@ def test_orchestrator_unexpected_error_finishes_skips_and_releases(monkeypatch):
     monkeypatch.setattr(syncctl, "Lease", lambda *_args: lease)
     runner = syncctl.Orchestrator(object())
     monkeypatch.setattr(runner, "_execute_task", Mock(side_effect=RuntimeError("unexpected failure")))
-    result = runner.execute(mode="incremental", requested=["station_records"], run_id="test")
+    result = runner.execute(mode="incremental", requested=["repair_records"], run_id="test")
     assert result["state"] == "failed"
     store.finish.assert_called_once_with("test", "failed", "unexpected failure")
-    assert any(call.kwargs.get("state") == "skipped" and call.args[1] == "station_records"
+    assert any(call.kwargs.get("state") == "skipped" and call.args[1] == "repair_records"
                for call in store.stage.call_args_list)
     lease.close.assert_called_once()
 

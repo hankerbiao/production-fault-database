@@ -15,7 +15,7 @@
 
 ## 执行顺序
 
-`syncctl.py run --mode incremental` 按注册表串行运行销售订单、工位、维修、BOM、BOM 计划开始时间回填、序列号、SCS DOA 和 SCS 换上换下；会自动补齐选中任务的依赖。Python 与 Go 共用 `backend/internal/syncmanifest/tasks.json`，修改任务时只维护这一份目录。维修任务在该入口下完整刷新当月及前两个月，其他任务继续使用各自的增量机制。运行状态、阶段摘要和失败原因存入 MongoDB 的 `sync_orchestrator_runs`。维修清洗使用销售订单和工位参考数据；SCS DOA 直接按自身销售订单号是否以 `XNC` 开头判定 5000 公司，不读取交付明细或销售订单参考表。换上换下继续依赖 DOA，以服务单号继承公司归属。
+`syncctl.py run --mode incremental` 按注册表串行运行销售订单、维修、BOM、BOM 计划开始时间回填、序列号、SCS DOA 和 SCS 换上换下；会自动补齐选中任务的依赖。Python 与 Go 共用 `backend/internal/syncmanifest/tasks.json`，修改任务时只维护这一份目录。维修任务在该入口下完整刷新当月及前两个月，其他任务继续使用各自的增量机制。运行状态、阶段摘要和失败原因存入 MongoDB 的 `sync_orchestrator_runs`。工位过站数据不再由调度器同步；维修清洗仍使用已有的销售订单和工位参考数据，工位参考数据不会自动更新；SCS DOA 直接按自身销售订单号是否以 `XNC` 开头判定 5000 公司，不读取交付明细或销售订单参考表。换上换下继续依赖 DOA，以服务单号继承公司归属。
 
 ```bash
 .venv/bin/python scripts/sync/syncctl.py run --mode incremental

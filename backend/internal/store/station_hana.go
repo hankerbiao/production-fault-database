@@ -420,8 +420,7 @@ func stationStreamQuery(where string, limit int) string {
 }
 
 func stationStreamQueryPage(where string, limit, offset int) string {
-	columns := `"HISTROYID","PCODE","AUFNR","KDAUF","GSTRS","SPEC","SPEC_DESC","OPERATION","ACTUAL_START_TIME","ACTUAL_END_TIME","MAKTX_TH","LGORT","SPEC_TIME","OCODE"`
-	query := `SELECT ` + columns + ` FROM ` + stationHANAView
+	query := `SELECT ` + stationHANASelectList + ` FROM ` + stationHANAView
 	if where != "" {
 		query += " " + where
 	}

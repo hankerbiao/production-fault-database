@@ -102,7 +102,7 @@ func TestStationHANAQueryEachRecoversBeforeFirstRow(t *testing.T) {
 func TestStationStreamQueryKeepsCompatibleProjectionAndOrdering(t *testing.T) {
 	query := stationStreamQuery(`WHERE "GSTRS" >= ?`, 123)
 	for _, fragment := range []string{
-		`SELECT "HISTROYID","PCODE","AUFNR","KDAUF","GSTRS","SPEC","SPEC_DESC","OPERATION","ACTUAL_START_TIME","ACTUAL_END_TIME","MAKTX_TH","LGORT","SPEC_TIME","OCODE"`,
+		`SELECT ` + stationHANASelectList,
 		`FROM ` + stationHANAView,
 		`WHERE "GSTRS" >= ?`,
 		`ORDER BY ` + stationHANAOrder,

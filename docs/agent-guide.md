@@ -80,7 +80,7 @@ GET /api/views/ZSGV_ZPP_SERNOLIST?headSn=HEAD001
 GET /api/views/ZSGV_ZPP_SERNOLIST?itemSn=ITEM001
 ```
 
-`Z_V_ZMES_T_001` 用于工位过程记录，`dateFrom` / `dateTo` 按计划开始时间 `GSTRS` 筛选，兼容 `YYYY-MM-DD` 和 `YYYYMMDD`。`ZSGV_ZSD124` 用于 BOM 过账，`ZSGV_ZPP_SERNOLIST` 用于机头/部件序列号映射。BOM、工位和 SCS 视图支持 `GET /api/views/{viewID}/stream` 的 TSV 流式输出，适用于服务端批量计算，不适用于浏览器端无边界加载。
+`Z_V_ZMES_T_001` 用于工位过程记录，默认直读 HANA 视图，`dateFrom` / `dateTo` 按计划开始时间 `GSTRS` 筛选，兼容 `YYYY-MM-DD` 和 `YYYYMMDD`；设置 `STATION_VIEW_SOURCE=mongo` 可回退到 MongoDB。`ZSGV_ZSD124` 用于 BOM 过账，`ZSGV_ZPP_SERNOLIST` 用于机头/部件序列号映射。BOM、工位和 SCS 视图支持 `GET /api/views/{viewID}/stream` 的 TSV 流式输出，适用于服务端批量计算，不适用于浏览器端无边界加载。
 
 ### SCS 数据
 

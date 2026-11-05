@@ -15,6 +15,9 @@ type Store struct {
 	repairs             *mongo.Collection
 	orders              *mongo.Collection
 	views               map[string]*mongo.Collection
+	stationHANA         *stationHANA
+	stationErr          error
+	stationRequested    bool
 	bomCacheMu          sync.RWMutex
 	bomCache            map[string]bomStreamCacheEntry
 	stationCacheMu      sync.RWMutex

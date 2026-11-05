@@ -113,7 +113,7 @@ func TestStationStreamQueryKeepsCompatibleProjectionAndOrdering(t *testing.T) {
 		}
 	}
 	page := stationStreamQueryPage(`WHERE "GSTRS" >= ?`, stationHANAStreamBatch, stationHANAStreamBatch)
-	if !strings.Contains(page, "LIMIT 1000 OFFSET 1000") {
+	if !strings.Contains(page, "LIMIT 20 OFFSET 20") {
 		t.Fatalf("paged stream query does not bound batch: %s", page)
 	}
 }

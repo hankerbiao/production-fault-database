@@ -6,12 +6,33 @@ from scripts.sources.hana import hana_view_sync as sync
 
 
 def test_documented_view_specs_are_registered():
-    assert set(sync.VIEW_SPECS) == {"ZSGV_ZSD124", "ZSGV_ZPP_SERNOLIST", "Z_V_ZMES_T_001"}
+    assert set(sync.VIEW_SPECS) == {"ZSGV_ZSD124", "ZSGV_ZPP_SERNOLIST", "Z_V_ZMES_T_001", "Z_V_ZMES_T_001_SALES_ORDERS"}
     assert sync.VIEW_SPECS["ZSGV_ZSD124"].collection == "order_bom_postings_sap"
     assert sync.VIEW_SPECS["ZSGV_ZPP_SERNOLIST"].watermark_fields == ()
     assert sync.VIEW_SPECS["Z_V_ZMES_T_001"].start_date_field == "ACTUAL_START_TIME"
     station_columns = sync.VIEW_SPECS["Z_V_ZMES_T_001"].columns
     assert station_columns[-4:] == ("HADE7", "HADE8", "STATU", "MESS")
+
+
+def test_sales_order_station_query_filters_production_orders():
+    spec = sync.VIEW_SPECS["Z_V_ZMES_T_001_SALES_ORDERS"]
+    sql, params = sync.build_query(spec, None, "full", None, 0, "20261231", ["000123", "000456"])
+    assert '"AUFNR" IN (?, ?)' in sql
+    assert params == ["2026-12-31 23:59:59", "000123", "000456"]
+
+
+def test_sales_order_station_query_with_no_orders_is_always_empty():
+    spec = sync.VIEW_SPECS["Z_V_ZMES_T_001_SALES_ORDERS"]
+    sql, params = sync.build_query(spec, None, "incremental", None, 0, None, [])
+    assert "1 = 0" in sql
+    assert params == []
+
+
+def test_sales_order_station_query_limits_planned_start_years():
+    spec = sync.VIEW_SPECS["Z_V_ZMES_T_001_SALES_ORDERS"]
+    sql, params = sync.build_query(spec, None, "full", None, 0, None, ["000123"], "20250101", "20261231")
+    assert '"GSTRS" >= ?' in sql and '"GSTRS" <= ?' in sql
+    assert params == ["000123", "20250101", "20261231"]
 
 
 def test_queries_use_documented_watermarks():

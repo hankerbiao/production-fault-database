@@ -71,7 +71,7 @@ func newServiceConfig() serviceConfig {
 		Collections: []collectionConfig{
 			{Label: "维修故障", Name: repairCollection},
 			{Label: "销售订单", Name: orderCollection},
-			{Label: "工位记录", Name: "station_records_sap"},
+			{Label: "工位记录", Name: "station_records_sales_orders_sap"},
 			{Label: "序列号绑定", Name: "serial_bindings_sap"},
 			{Label: "订单 BOM 过账", Name: "order_bom_postings_sap"},
 			{Label: "SCS DOA", Name: "scs_doa_records"},

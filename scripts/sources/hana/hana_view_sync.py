@@ -134,6 +134,23 @@ VIEW_SPECS: dict[str, ViewSpec] = {
         start_date_field="ACTUAL_START_TIME",
         fallback_to_full_row=True,
     ),
+    "Z_V_ZMES_T_001_SALES_ORDERS": ViewSpec(
+        view_id="Z_V_ZMES_T_001_SALES_ORDERS",
+        qualified_name='"_SYS_BIC"."BW_LOCAL.ZTRRI/Z_V_ZMES_T_001"',
+        columns=fields(
+            "MANDT HISTROYID PCODE OCODE AUFNR KDAUF KDPOS LGORT MAKTX_TH LEAD_CYCLE AUFNR_CYCLE "
+            "CUSTOMIZE_CYCLE OEMBZ SPEC OPERATION SPEC_DESC UNAME LASTSPEC_TIME SPEC_TIME GSTRS "
+            "PLAN_END_TIME ACTUAL_START_TIME ACTUAL_END_TIME HADE1 HADE2 HADE3 HADE4 HADE5 HADE6 "
+            "HADE7 HADE8 STATU MESS"
+        ),
+        collection="station_records_sales_orders_sap",
+        key_fields=("HISTROYID", "SPEC", "SPEC_TIME", "PCODE", "OCODE"),
+        order_by=("HISTROYID", "SPEC_TIME", "PCODE", "SPEC"),
+        watermark_fields=("ACTUAL_START_TIME",),
+        index_fields=("PCODE", "ACTUAL_START_TIME", "AUFNR", "SPEC"),
+        start_date_field="ACTUAL_START_TIME",
+        fallback_to_full_row=True,
+    ),
 }
 
 
@@ -324,7 +341,7 @@ def date_overlap(value: Any, days: int) -> Any:
     return value
 
 
-def build_query(spec: ViewSpec, checkpoint: Mapping[str, Any] | None, mode: str, start_date: str | None, lookback_days: int, end_date: str | None = None) -> tuple[str, list[Any]]:
+def build_query(spec: ViewSpec, checkpoint: Mapping[str, Any] | None, mode: str, start_date: str | None, lookback_days: int, end_date: str | None = None, production_orders: Sequence[str] | None = None, planned_start_from: str | None = None, planned_start_to: str | None = None) -> tuple[str, list[Any]]:
     conditions: list[str] = []
     params: list[Any] = []
     watermark = checkpoint.get("watermark") if checkpoint else None
@@ -344,6 +361,18 @@ def build_query(spec: ViewSpec, checkpoint: Mapping[str, Any] | None, mode: str,
             value = f"{end_date.replace('-', '')[:4]}-{end_date.replace('-', '')[4:6]}-{end_date.replace('-', '')[6:8]} 23:59:59"
         conditions.append(f'"{spec.start_date_field}" <= ?')
         params.append(value)
+    if production_orders is not None:
+        if not production_orders:
+            conditions.append("1 = 0")
+        else:
+            conditions.append('"AUFNR" IN (' + ", ".join("?" for _ in production_orders) + ")")
+            params.extend(production_orders)
+    if planned_start_from:
+        conditions.append('"GSTRS" >= ?')
+        params.append(planned_start_from)
+    if planned_start_to:
+        conditions.append('"GSTRS" <= ?')
+        params.append(planned_start_to)
     selected = ", ".join(f'"{field}"' for field in spec.columns)
     order = ", ".join(f'"{field}"' for field in spec.order_by)
     where = f" WHERE {' AND '.join(conditions)}" if conditions else ""
@@ -372,6 +401,7 @@ def configured_spec(view_id: str) -> ViewSpec:
     collection_env = {
         "ZSGV_ZSD124": "BOM_COLLECTION", "Z_V_ZMES_T_001": "STATION_COLLECTION",
         "ZSGV_ZPP_SERNOLIST": "SERIAL_COLLECTION",
+        "Z_V_ZMES_T_001_SALES_ORDERS": "STATION_SALES_ORDER_COLLECTION",
     }
     return replace(spec, collection=env(collection_env[view_id], spec.collection))
 
@@ -403,6 +433,9 @@ def sync_view(
     end_date: str | None = None,
     preview_snapshot: Snapshot | None = None,
     allow_large_cleanup: bool = False,
+    production_orders: Sequence[str] | None = None,
+    planned_start_from: str | None = None,
+    planned_start_to: str | None = None,
 ) -> dict[str, Any]:
     if batch_size < 1 or lookback_days < 0:
         raise ValueError("batch-size 必须大于 0，lookback-days 不能为负数")
@@ -437,7 +470,7 @@ def sync_view(
         collection = database[spec.collection]
         checkpoints = database[env("SYNC_CHECKPOINT_COLLECTION", "sync_checkpoints")]
         checkpoint = checkpoints.find_one({"_id": CHECKPOINT_PREFIX + spec.view_id})
-        sql, params = build_query(spec, checkpoint, mode, start_date, lookback_days, end_date)
+        sql, params = build_query(spec, checkpoint, mode, start_date, lookback_days, end_date, production_orders, planned_start_from, planned_start_to)
         watermark = None
         with Snapshot() as snapshot:
             with hana_connection() as connection:

@@ -346,7 +346,7 @@ MongoDB 租约锁防止并发运行。`SYNC_PYTHON` 指定 Python 解释器，`S
   和销售订单两个看板，同步期间按钮显示“同步中”，重复点击会收到 HTTP `409`。
 
 前端同时提供 HANA 和 SCS 视图看板：**订单过账**对应 `ZSGV_ZSD124`、**序列号绑定**对应
-`ZSGV_ZPP_SERNOLIST`、**工位记录**对应 `Z_V_ZMES_T_001`。工位记录默认直读 HANA 视图，
+`ZSGV_ZPP_SERNOLIST`、**工位记录**对应 `Z_V_ZMES_T_001`。工位记录默认读取按销售订单生产订单筛选后的 MongoDB 表 `station_records_sales_orders_sap`，
 其余看板从对应 MongoDB 集合读取数据；均支持关键字搜索、分页、记录详情和（有日期字段的视图）起止日期筛选；
 页面显示数据来源、数据时间区间和最新同步时间。后端接口分别为
 `GET /api/views/{viewID}`、`GET /api/views/{viewID}/stats` 与

@@ -6,6 +6,7 @@
 |---|---|---|
 | `sync_sales_orders.py` | 销售订单 `sales_orders_sap` | `python scripts/sync/sync_sales_orders.py` |
 | `station_records.py` | 工位记录 `station_records_sap` | `python scripts/sync/station_records.py --mode incremental --apply` |
+| `station_records_sales_orders.py` | 销售订单生产订单范围内的工位记录 `station_records_sales_orders_sap` | `python scripts/sync/station_records_sales_orders.py --mode incremental --apply` |
 | `增量同步和清洗维修故障记录.py` | 维修记录 `repair_records_sap` | `python scripts/sync/增量同步和清洗维修故障记录.py --apply` |
 | `order_bom_postings.py` | BOM 过账 `order_bom_postings_sap` | `python scripts/sync/order_bom_postings.py --mode incremental --apply` |
 | `../maintenance/backfill_order_bom_planned_start.py` | BOM 计划开始时间 | `python scripts/maintenance/backfill_order_bom_planned_start.py --apply` |

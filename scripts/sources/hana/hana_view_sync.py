@@ -265,7 +265,7 @@ def hana_connection() -> Iterator[Any]:
         port=int(env("HANA_PORT", "30015")),
         user=env("HANA_USER"),
         password=env("HANA_PASSWORD"),
-        communicationTimeout=int(env("HANA_CONNECT_TIMEOUT", "120")) * 1000,
+        communicationTimeout=int(env("HANA_CONNECT_TIMEOUT", "300")) * 1000,
     )
     try:
         yield connection
@@ -286,6 +286,16 @@ def process_lock(path: str) -> Iterator[None]:
             yield
         finally:
             fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
+def normalized_station_order(value: Any) -> str | None:
+    """Normalize numeric SAP orders without changing nonnumeric identifiers."""
+    if not isinstance(value, str):
+        return None
+    value = value.strip()
+    if not value or not value.isascii() or not value.isdigit():
+        return None
+    return value.lstrip("0") or "0"
 
 
 def normalize_value(value: Any) -> str | None:
@@ -522,6 +532,8 @@ def sync_view(
                         operations.clear()
 
                 for key, document in snapshot:
+                    if spec.view_id == "Z_V_ZMES_T_001_SALES_ORDERS":
+                        document["AUFNR_NORMALIZED"] = normalized_station_order(document.get("AUFNR"))
                     document.update({"_source_view": spec.view_id, "_source_key": key,
                                      "_sync_run_id": run_id, "_synced_at": datetime.now(timezone.utc)})
                     operations.append(UpdateOne({"_source_key": key}, {"$set": document,

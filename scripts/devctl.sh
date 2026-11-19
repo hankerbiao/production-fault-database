@@ -4,7 +4,7 @@
 
 set -Eeuo pipefail
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT_DIR="${DEVCTL_PROJECT_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 RUNTIME_DIR="${RUNTIME_DIR:-${ROOT_DIR}/.run}"
 ENV_FILE="${ENV_FILE:-${ROOT_DIR}/.env}"
 BACKEND_PID_FILE="${RUNTIME_DIR}/backend.pid"
@@ -204,11 +204,18 @@ start_frontend() {
   command_or_die curl
   local vite_bin="${ROOT_DIR}/frontend/node_modules/vite/bin/vite.js"
   [[ -f "$vite_bin" ]] || die "前端依赖不存在，请先执行 ./scripts/prepare_env.sh"
+  local frontend_root="$ROOT_DIR/frontend"
+  local frontend_command=(node "$vite_bin")
+  if [[ "${FRONTEND_PRODUCTION:-0}" == 1 ]]; then
+    [[ -f "${DEPLOY_RELEASE_DIR:-$ROOT_DIR}/frontend/dist/index.html" ]] || die "前端发布文件不存在"
+    frontend_root="${DEPLOY_RELEASE_DIR:-$ROOT_DIR}/frontend"
+    frontend_command+=(preview)
+  fi
 
   printf '启动前端 (端口 %s)...\n' "$FRONTEND_PORT"
   (
-    cd "$ROOT_DIR/frontend"
-    exec env VITE_API_TARGET="$VITE_API_TARGET" nohup node "$vite_bin" \
+    cd "$frontend_root"
+    exec env VITE_API_TARGET="$VITE_API_TARGET" nohup "${frontend_command[@]}" \
       --host "$FRONTEND_HOST" --port "$FRONTEND_PORT"
   ) >>"$FRONTEND_LOG" 2>&1 < /dev/null &
   local pid=$!

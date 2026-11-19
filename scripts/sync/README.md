@@ -14,9 +14,13 @@
 | `../sources/scs_doa_sync.py` | SCS DOA | `python scripts/sources/scs_doa_sync.py` |
 | `../sources/scs_change_sync.py` | SCS 换上换下 | `python scripts/sources/scs_change_sync.py` |
 
+销售订单工位记录使用 `HISTROYID + SPEC + SPEC_TIME + PCODE + AUFNR` 游标和业务键。首次运行以新表中 `SPEC_TIME` 最新记录为起点，在 HANA 中确认起点后，只同步后续属于销售订单看板的生产订单；同步成功后保存最后一条已同步记录的游标。没有匹配记录时游标不推进。读取或写入失败不推进游标，重跑按五字段匹配已有记录；不迁移历史业务键、不生成快照、不清理旧数据。默认只读预览，需加 `--apply` 写入；此入口仅支持增量，也由编排器在销售订单之后运行；全量编排默认跳过该任务。
+
+HANA 尚未证实这五个字段的排序与新增顺序一致：后到但排序不大于游标的记录、延迟可见的记录及历史更新可能永久遗漏。此风险不能通过重跑消除，需源系统提供可靠递增变更序号才能消除。`--start-date`、`--end-date` 和 `--lookback-days` 不控制此游标任务。
+
 ## 执行顺序
 
-`syncctl.py run --mode incremental` 按注册表串行运行销售订单、维修、BOM、BOM 计划开始时间回填、序列号、SCS DOA 和 SCS 换上换下；会自动补齐选中任务的依赖。Python 与 Go 共用 `backend/internal/syncmanifest/tasks.json`，修改任务时只维护这一份目录。维修任务在该入口下完整刷新当月及前两个月，其他任务继续使用各自的增量机制。运行状态、阶段摘要和失败原因存入 MongoDB 的 `sync_orchestrator_runs`。工位过站数据不再由调度器同步；维修清洗仍使用已有的销售订单和工位参考数据，工位参考数据不会自动更新；SCS DOA 直接按自身销售订单号是否以 `XNC` 开头判定 5000 公司，不读取交付明细或销售订单参考表。换上换下继续依赖 DOA，以服务单号继承公司归属。
+`syncctl.py run --mode incremental` 按注册表串行运行销售订单、销售订单工位过站、维修、BOM、BOM 计划开始时间回填、SCS DOA 和 SCS 换上换下；会自动补齐选中任务的依赖。Python 与 Go 共用 `backend/internal/syncmanifest/tasks.json`，修改任务时只维护这一份目录。序列号绑定和原工位表不由调度器同步；维修任务在该入口下完整刷新当月及前两个月，其他任务继续使用各自的增量机制。运行状态、阶段摘要和失败原因存入 MongoDB 的 `sync_orchestrator_runs`。维修清洗使用销售订单及新工位记录表作为参考数据；SCS DOA 直接按自身销售订单号是否以 `XNC` 开头判定 5000 公司，不读取交付明细或销售订单参考表。换上换下继续依赖 DOA，以服务单号继承公司归属。
 
 ```bash
 .venv/bin/python scripts/sync/syncctl.py run --mode incremental
@@ -102,12 +106,14 @@ SCS 不按页码或行偏移跳过旧记录；重跑从窗口第一页读取，�
 
 首次验证建议先对每个脚本使用 `--dry-run`。销售订单脚本的 `--dry-run` 只读；其余三个 HANA 视图脚本使用 `--mode incremental --dry-run`。维修数据仅重跑回填时使用 `--apply --skip-hana-sync`。
 
+## 数据源一致性比对
+
+同步管理页提供工位过站 HANA 与 `station_records_sales_orders_sap` 的只读比对。启用后，后端按上海时区的配置时间每天运行一次；默认关闭，默认时间为 03:00。比对范围为运行时刻向前滚动 3 个日历月，HANA 与 MongoDB 使用相同的 `SPEC_TIME` 起止窗口，并按销售订单集合中的生产订单筛选源数据。报告 MongoDB 缺失、多余、重复及字段不一致记录，不修改业务集合或同步 checkpoint。运行记录和最多 100 条差异样例保存在 MongoDB `data_check_runs`。
+
+发现差异后，脚本使用 `GQUAN_APP_URL`、`GQUAN_APP_TOKEN` 和 `GQUAN_APP_TO` 发送光圈通知。令牌只配置在服务端环境中，不要提交到代码库。若通知失败，比对仍保留结果，运行历史会显示通知错误。每日调度由后端服务轮询执行，因此需保持后端服务运行；MongoDB 中以 `daily-YYYY-MM-DD` 运行 ID 避免同日重复启动。
+
 ## Crontab
 
-建议在 SAP 数据落库完成后的低峰时段运行一次完整串行任务。下例每天 02:15 运行，使用绝对路径、独立日志和 `flock` 防止 cron 重入。将 `/opt/production-fault-db` 和 Python 路径替换为实际部署值，并预先创建 `/var/log/production-fault-db`。
+后端服务在上海时区每个整点触发一次同步：08:00、12:00、18:00、22:00 执行销售订单、工位过站、维修、BOM 和 SCS 看板任务；其余整点只执行销售订单及工位过站任务。若已有同步编排运行，该时段会跳过；MongoDB 唯一时段记录防止多实例重复调度。保持后端服务运行即可，不要再配置重叠的整套同步 cron。
 
-```cron
-15 2 * * * /usr/bin/flock -n /tmp/production-fault-sync.cron.lock /bin/sh -lc 'cd /opt/production-fault-db && /opt/production-fault-db/.venv/bin/python scripts/sync/syncctl.py run --mode incremental --source cron' >> /var/log/production-fault-db/sync.log 2>&1
-```
-
-前端“立即同步”使用相同顺序。不要让 cron 与前端同步同时运行；各脚本同时持有本地锁和 MongoDB 租约锁，发生冲突时任务会失败且不会推进当前阶段水位线。
+前端“立即同步”仍可手动启动任务。各脚本同时使用 MongoDB 租约锁，发生冲突时任务会失败且不会推进当前阶段水位线。

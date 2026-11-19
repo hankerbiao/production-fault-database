@@ -227,7 +227,13 @@ func orderDetailFields(doc bson.M) []Field {
 	fields := make([]Field, 0, len(orderDocumentLabels)+len(orderDataFieldLabels))
 	for _, key := range []string{"_id", "source", "source_aufnr", "aufnr", "record_count", "order_quantity", "storage_quantity", "gstrs_date", "first_seen_at", "last_synced_at", "sync_count"} {
 		if value, ok := doc[key]; ok && value != nil {
-			fields = append(fields, Field{Key: key, Label: orderDocumentLabels[key], Value: fmt.Sprint(value)})
+			text := fmt.Sprint(value)
+			if key == "first_seen_at" || key == "last_synced_at" {
+				if instant := parseTime(doc, key); !instant.IsZero() {
+					text = instant.In(time.FixedZone("CST", 8*60*60)).Format("2006-01-02 15:04:05")
+				}
+			}
+			fields = append(fields, Field{Key: key, Label: orderDocumentLabels[key], Value: text})
 		}
 	}
 	data, _ := doc["data"].(bson.M)

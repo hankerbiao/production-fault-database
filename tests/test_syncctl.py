@@ -11,8 +11,8 @@ from scripts.sync.syncctl import SyncError, is_retryable, json_result, resolve_t
 def test_skip_scs_keeps_all_other_tasks_in_stable_order():
     tasks = resolve_tasks(None, skip_scs=True)
     assert [task.id for task in tasks] == [
-        "sales_orders", "repair_records",
-        "order_bom_postings", "order_bom_planned_start", "serial_bindings",
+        "sales_orders", "station_records_sales_orders", "repair_records",
+        "order_bom_postings", "order_bom_planned_start",
     ]
     assert {"scs_doa", "scs_change"} <= {task.id for task in resolve_tasks(None)}
 
@@ -61,8 +61,8 @@ def test_orchestrator_skip_scs_executes_and_records_only_remaining_tasks(monkeyp
     result = runner.execute(mode="incremental", source="cron", skip_scs=True)
 
     expected = [
-        "sales_orders", "repair_records",
-        "order_bom_postings", "order_bom_planned_start", "serial_bindings",
+        "sales_orders", "station_records_sales_orders", "repair_records",
+        "order_bom_postings", "order_bom_planned_start",
     ]
     assert result["state"] == "success"
     assert [call.args[1].id for call in execute_task.call_args_list] == expected
@@ -142,3 +142,14 @@ def test_station_records_are_not_scheduled():
     assert "station_records" not in [task.id for task in resolve_tasks(None)]
     with pytest.raises(SyncError, match="未知同步任务"):
         resolve_tasks(["station_records"])
+
+
+def test_station_sales_orders_is_incremental_only_and_depends_on_sales_orders():
+    tasks = resolve_tasks(["station_records_sales_orders"])
+    assert [task.id for task in tasks] == ["sales_orders", "station_records_sales_orders"]
+    command = tasks[-1].command("python", "incremental", None, "2026-10-15")
+    assert command[-3:] == ["--mode", "incremental", "--apply"]
+    with pytest.raises(SyncError, match="不支持全量"):
+        validate_request("full", ["station_records_sales_orders"], "2026-01-01", None)
+    full_tasks, _, _ = validate_request("full", None, "2026-01-01", None)
+    assert "station_records_sales_orders" not in [task.id for task in full_tasks]

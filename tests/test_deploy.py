@@ -4,127 +4,70 @@ from pathlib import Path
 
 import pytest
 
-
-SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "deploy.sh"
+REMOTE = Path(__file__).resolve().parents[1] / "scripts" / "deploy-remote.sh"
 
 
 @pytest.fixture
 def deployment(tmp_path):
     root = tmp_path / "server"
+    stage = tmp_path / "stage"
     tools = tmp_path / "tools"
-    tools.mkdir()
-    for directory in ("scripts", "backend", "frontend/node_modules/vite/bin", ".venv/bin"):
-        (root / directory).mkdir(parents=True, exist_ok=True)
+    for path in (root / ".run", root / "scripts", root / "frontend/dist", stage / "scripts", stage / "frontend/dist", stage / ".deploy-meta", tools):
+        path.mkdir(parents=True, exist_ok=True)
     (root / ".env").write_text("PORT=18080\n")
-    (root / "frontend/node_modules/vite/bin/vite.js").touch()
-    log = tmp_path / "commands.log"
-    stub = tools / "tool"
-    stub.write_text(
-        r"""#!/usr/bin/env bash
-set -eu
-tool="$(basename "$0")"
-printf '%s proxy=%s %s\n' "$tool" "${http_proxy:-none}" "$*" >> "$TEST_LOG"
-case "$tool" in
-  git)
-    case "$1" in
-      branch) printf 'main\n' ;;
-      rev-parse) printf 'abc123\n' ;;
-      pull) [[ "${TEST_FAILURE:-}" != pull ]] ;;
-    esac
-    ;;
-  pgrep)
-    if [[ "${TEST_FAILURE:-}" == sync ]]; then
-      printf '123 python scripts/sync/syncctl.py run\n'
-      exit 0
-    fi
-    exit 1
-    ;;
-  node) [[ "$1" != --version ]] || printf 'v22.23.3\n' ;;
-  go)
-    if [[ "$1" == build ]]; then
-      [[ "${TEST_FAILURE:-}" != build ]] || exit 1
-      printf '#!/bin/sh\nexit 0\n' > "$3"
-      chmod +x "$3"
-    fi
-    ;;
-  python)
-    if [[ "${2:-}" == *json.load* ]]; then
-      cat >/dev/null
-      printf '9\n'
-    fi
-    ;;
-  curl)
-    [[ "${TEST_FAILURE:-}" != health ]] || exit 22
-    printf '{"status":"ok","items":[]}\n'
-    ;;
-esac
-"""
-    )
-    stub.chmod(0o755)
-    for name in ("git", "go", "npm", "node", "python3", "curl", "flock", "pgrep"):
-        (tools / name).symlink_to(stub)
-    (root / ".venv/bin/python").symlink_to(stub)
-    (root / "scripts/devctl.sh").write_text(
-        r"""#!/usr/bin/env bash
-set -eu
-printf 'devctl proxy=%s skip_build=%s %s\n' "${http_proxy:-none}" "${BACKEND_SKIP_BUILD:-0}" "$*" >> "$TEST_LOG"
-if [[ "$1" == start ]]; then
-  if (: <&9) 2>/dev/null; then
-    printf 'deployment lock inherited\n' >> "$TEST_LOG"
-    exit 1
-  fi
-  [[ -x "$RUNTIME_DIR/fault-gateway" ]]
-fi
-"""
-    )
-    environment = {
-        **os.environ,
-        "PATH": f"{tools}:{os.environ['PATH']}",
-        "TEST_LOG": str(log),
-        "http_proxy": "http://unrelated-proxy:8080",
-    }
+    (root / "scripts/example.py").write_text("old\n")
+    (root / "scripts/obsolete.py").write_text("obsolete\n")
+    (root / "frontend/dist/index.html").write_text("old frontend")
+    (root / ".run/fault-gateway").write_text("old binary")
+    (root / ".run/fault-gateway").chmod(0o755)
+    (stage / "scripts/example.py").write_text("new\n")
+    (stage / "scripts/new.py").write_text("new file\n")
+    (stage / "frontend/dist/index.html").write_text("new frontend")
+    (stage / "fault-gateway").write_text("new binary")
+    (stage / "fault-gateway").chmod(0o755)
+    (stage / ".deploy-meta/deleted-files").write_bytes(b"scripts/obsolete.py\0")
+    devctl = '''#!/usr/bin/env bash
+printf '%s\\n' "$1" >> "$TEST_LOG"
+if [[ "$1" == start && ${FAIL_START:-0} == 1 && $(cat "$RUNTIME_DIR/fault-gateway") == 'new binary' ]]; then exit 1; fi
+'''
+    for path in (root / "scripts/devctl.sh", stage / "scripts/devctl.sh"):
+        path.write_text(devctl)
+    flock = tools / "flock"
+    flock.write_text("#!/usr/bin/env bash\nexit 0\n")
+    flock.chmod(0o755)
+    curl = tools / "curl"
+    curl.write_text('#!/usr/bin/env bash\nexit "${FAIL_HEALTH:-0}"\n')
+    curl.chmod(0o755)
+    archive = tmp_path / "package.tar"
+    subprocess.run(["tar", "-cf", str(archive), "-C", str(stage), "."], check=True)
+    env = {**os.environ, "PATH": f"{tools}:{os.environ['PATH']}", "TEST_LOG": str(tmp_path / "log")}
 
-    def run(failure=""):
-        result = subprocess.run(
-            [
-                "bash", str(SCRIPT), "--remote", str(root), "main", "abc123",
-                "origin", "http://10.2.51.151:7897",
-                "socks5://10.2.51.151:7897", "22.23.3",
-            ],
-            env={**environment, "TEST_FAILURE": failure},
-            text=True,
-            capture_output=True,
-            timeout=10,
-        )
-        return result, log.read_text() if log.exists() else "", root
-
-    return run
+    def run(**extra):
+        return subprocess.run(["bash", str(REMOTE), str(root), str(archive), "test123"], env={**env, **extra}, capture_output=True, text=True)
+    return run, root
 
 
-def test_pull_uses_proxy_and_build_precedes_restart(deployment):
-    result, commands, root = deployment()
+def test_deploys_into_existing_directory(deployment):
+    run, root = deployment
+    result = run()
     assert result.returncode == 0, result.stderr
-    assert "git proxy=http://10.2.51.151:7897 pull --ff-only origin main" in commands
-    assert commands.index("go proxy=http://10.2.51.151:7897 build") < commands.index("devctl")
-    assert "devctl proxy=none skip_build=1 start" in commands
-    assert "deployment lock inherited" not in commands
-    assert "revision=abc123 tasks=9" in result.stdout
-    assert (root / ".run/fault-gateway").is_file()
-    assert not list((root / ".run").glob("deploy-build.*"))
+    assert (root / "scripts/example.py").read_text() == "new\n"
+    assert (root / "frontend/dist/index.html").read_text() == "new frontend"
+    assert (root / ".run/fault-gateway").read_text() == "new binary"
+    assert (root / ".env").read_text() == "PORT=18080\n"
+    assert not (root / "scripts/obsolete.py").exists()
+    assert not (root / ".run/current").exists()
+    assert (root / ".run/deploy-backups/test123/files/scripts/example.py").read_text() == "old\n"
+    assert (root / ".run/deploy-backups/test123/files/scripts/obsolete.py").read_text() == "obsolete\n"
 
 
-@pytest.mark.parametrize("failure", ["pull", "build", "sync"])
-def test_failure_before_restart_keeps_services_running(deployment, failure):
-    result, commands, root = deployment(failure)
+@pytest.mark.parametrize("failure", ["FAIL_START", "FAIL_HEALTH"])
+def test_failure_restores_previous_files(deployment, failure):
+    run, root = deployment
+    result = run(**{failure: "1"})
     assert result.returncode != 0
-    assert "devctl" not in commands
-    assert not list((root / ".run").glob("deploy-build.*"))
-    if failure == "sync":
-        assert " pull " not in commands
-
-
-def test_health_failure_is_not_reported_as_success(deployment):
-    result, commands, _root = deployment("health")
-    assert result.returncode != 0
-    assert "devctl proxy=none skip_build=1 start" in commands
-    assert "Deployment complete:" not in result.stdout
+    assert (root / "scripts/example.py").read_text() == "old\n"
+    assert (root / "frontend/dist/index.html").read_text() == "old frontend"
+    assert (root / ".run/fault-gateway").read_text() == "old binary"
+    assert (root / "scripts/obsolete.py").read_text() == "obsolete\n"
+    assert not (root / "scripts/new.py").exists()

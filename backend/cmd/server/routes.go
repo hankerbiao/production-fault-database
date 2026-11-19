@@ -8,6 +8,7 @@ func registerRoutes(h *server) *http.ServeMux {
 	mux.HandleFunc("GET /api/openapi.json", h.apiDocument)
 	mux.HandleFunc("GET /api/agent-guide.md", h.apiDocument)
 	mux.HandleFunc("GET /api/health", h.health)
+	mux.HandleFunc("GET /api/hana/material-vendor", h.materialVendor)
 	mux.HandleFunc("POST /api/sap/query", h.querySAP)
 	mux.HandleFunc("GET /api/config", h.serviceConfig)
 	mux.HandleFunc("POST /api/exports/rows", h.exportRows)
@@ -30,18 +31,29 @@ func registerRoutes(h *server) *http.ServeMux {
 	mux.HandleFunc("GET /api/views/{viewID}", h.viewList)
 	mux.HandleFunc("GET /api/views/{viewID}/all", h.viewListAll)
 	mux.HandleFunc("GET /api/views/{viewID}/stream", h.viewStream)
-	mux.HandleFunc("POST /api/views/{viewID}/stream", h.viewStreamBatch)
 	mux.HandleFunc("GET /api/views/ZSGV_ZSD124/options", h.viewBOMOptions)
-	mux.HandleFunc("GET /api/views/Z_V_ZMES_T_001/packaging-counts", h.packagingCounts)
 	mux.HandleFunc("GET /api/views/{viewID}/detail", h.viewDetail)
 	mux.HandleFunc("GET /api/views/{viewID}/stats", h.viewStats)
-	mux.HandleFunc("POST /api/sync/incremental", h.startIncrementalSync)
+	if getenv("SYNC_LEGACY_API_ENABLED", "true") == "false" {
+		disabled := func(w http.ResponseWriter, _ *http.Request) {
+			writeJSON(w, http.StatusGone, map[string]string{"error": "同步入口已迁移至 " + getenv("SYNC_SERVICE_URL", "http://10.17.150.235:18081/")})
+		}
+		mux.HandleFunc("POST /api/sync/incremental", disabled)
+		mux.HandleFunc("POST /api/sync/runs", disabled)
+		mux.HandleFunc("POST /api/sync/runs/{id}/retry", disabled)
+	} else {
+		mux.HandleFunc("POST /api/sync/incremental", h.startIncrementalSync)
+		mux.HandleFunc("POST /api/sync/runs", h.startSyncRun)
+		mux.HandleFunc("POST /api/sync/runs/{id}/retry", h.retrySyncRun)
+	}
 	mux.HandleFunc("GET /api/sync/status", h.syncStatus)
 	mux.HandleFunc("GET /api/sync/tasks", h.syncTasks)
-	mux.HandleFunc("POST /api/sync/runs", h.startSyncRun)
 	mux.HandleFunc("GET /api/sync/runs", h.syncRuns)
 	mux.HandleFunc("GET /api/sync/runs/{id}", h.syncRun)
-	mux.HandleFunc("POST /api/sync/runs/{id}/retry", h.retrySyncRun)
+	mux.HandleFunc("GET /api/data-check/config", h.dataCheckConfig)
+	mux.HandleFunc("PUT /api/data-check/config", h.saveDataCheckConfig)
+	mux.HandleFunc("POST /api/data-check/run", h.startDataCheck)
+	mux.HandleFunc("GET /api/data-check/runs", h.dataCheckRuns)
 	mux.HandleFunc("GET /api/data-status", h.dataStatus)
 	return mux
 }

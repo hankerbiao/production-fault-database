@@ -38,8 +38,6 @@ type fakeStore struct {
 	gotPreview           bool
 	gotViewID            string
 	gotViewFilters       store.ViewFilters
-	packagingCounts      []store.PackagingCount
-	packagingOrders      string
 	exportResource       string
 	exportKeys           []string
 	exportItems          []bson.M
@@ -188,6 +186,9 @@ func (f *fakeStore) SyncRun(context.Context, string) (store.SyncRun, error) {
 func (f *fakeStore) LatestSyncRun(context.Context) (store.SyncRun, error) {
 	return nil, mongo.ErrNoDocuments
 }
+func (f *fakeStore) LatestTaskSyncRun(context.Context, string, bool) (store.SyncRun, error) {
+	return nil, mongo.ErrNoDocuments
+}
 func (f *fakeStore) SyncRuns(context.Context, int) ([]store.SyncRun, error) { return nil, f.err }
 func (f *fakeStore) FaultSNs(context.Context, store.Filters) ([]store.FaultSN, error) {
 	return nil, f.err
@@ -204,16 +205,6 @@ func (f *fakeStore) ViewListAll(context.Context, string, store.ViewFilters) (sto
 }
 func (f *fakeStore) ViewBOMStream(context.Context, store.ViewFilters, io.Writer) error { return f.err }
 
-func (f *fakeStore) ViewStationStream(_ context.Context, _ store.ViewFilters, out io.Writer) error {
-	if f.err == nil {
-		_, _ = io.WriteString(out, "id\tPCODE\n")
-	}
-	return f.err
-}
-func (f *fakeStore) PackagingCounts(_ context.Context, orders string) ([]store.PackagingCount, error) {
-	f.packagingOrders = orders
-	return f.packagingCounts, f.err
-}
 func (f *fakeStore) ViewSCSStream(_ context.Context, viewID string, filters store.ViewFilters, out io.Writer) error {
 	f.gotViewID, f.gotViewFilters = viewID, filters
 	if f.err == nil {
@@ -306,30 +297,6 @@ func TestHealthAndJSONErrors(t *testing.T) {
 			t.Fatalf("code=%d body=%v", r.Code, body)
 		}
 	})
-}
-
-func TestBatchStationStreamValidatesOrdersAndPreservesTSV(t *testing.T) {
-	f := &fakeStore{}
-	router := registerRoutes(newTestServer(f))
-	req := httptest.NewRequest(http.MethodPost, "/api/views/Z_V_ZMES_T_001/stream", strings.NewReader(`{"dateFrom":"2026-10-26","dateTo":"2026-11-01","timeField":"planned","productionOrders":["000123","123","B02"]}`))
-	res := httptest.NewRecorder()
-	router.ServeHTTP(res, req)
-	if res.Code != http.StatusOK || res.Header().Get("Content-Type") != "text/tab-separated-values; charset=utf-8" {
-		t.Fatalf("status=%d content-type=%q body=%q", res.Code, res.Header().Get("Content-Type"), res.Body.String())
-	}
-	if !strings.Contains(res.Body.String(), "id\tPCODE") {
-		t.Fatalf("missing TSV output: %q", res.Body.String())
-	}
-	for _, body := range []string{`{"productionOrders":[]}`, `{"productionOrders":[""]}`, `{"productionOrders":["1"]}`} {
-		res = httptest.NewRecorder()
-		router.ServeHTTP(res, httptest.NewRequest(http.MethodPost, "/api/views/Z_V_ZMES_T_001/stream", strings.NewReader(body)))
-		if body == `{"productionOrders":["1"]}` {
-			continue
-		}
-		if res.Code != http.StatusBadRequest {
-			t.Fatalf("body=%s status=%d", body, res.Code)
-		}
-	}
 }
 
 func TestServiceConfigRedactsCredentials(t *testing.T) {
@@ -555,11 +522,20 @@ func TestViewAndDataStatusRoutes(t *testing.T) {
 	if r.Code != http.StatusOK {
 		t.Fatalf("data status=%d", r.Code)
 	}
-	f.err = errors.New("hana unavailable")
-	r = httptest.NewRecorder()
-	newTestServer(f).viewStationStream(r, httptest.NewRequest(http.MethodGet, "/api/views/Z_V_ZMES_T_001/stream", nil))
-	if r.Code != http.StatusBadRequest || strings.Contains(r.Header().Get("Content-Type"), "text/tab-separated-values") {
-		t.Fatalf("station stream error leaked successful response: status=%d content-type=%q body=%s", r.Code, r.Header().Get("Content-Type"), r.Body.String())
+}
+
+func TestStationPassThroughEndpointsAreRemoved(t *testing.T) {
+	router := registerRoutes(newTestServer(&fakeStore{}))
+	for _, request := range []*http.Request{
+		httptest.NewRequest(http.MethodGet, "/api/views/Z_V_ZMES_T_001/stream", nil),
+		httptest.NewRequest(http.MethodPost, "/api/views/Z_V_ZMES_T_001/stream", strings.NewReader(`{"productionOrders":["1"]}`)),
+		httptest.NewRequest(http.MethodGet, "/api/views/Z_V_ZMES_T_001/packaging-counts?productionOrders=1", nil),
+	} {
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, request)
+		if response.Code < http.StatusBadRequest {
+			t.Fatalf("station pass-through still available: method=%s path=%s status=%d", request.Method, request.URL.Path, response.Code)
+		}
 	}
 }
 
@@ -637,21 +613,6 @@ func TestBOMStreamRouteRejectsUnboundedQuery(t *testing.T) {
 	}
 	if !strings.Contains(r.Body.String(), "未限定范围的查询已禁用") {
 		t.Fatalf("body=%q", r.Body.String())
-	}
-}
-
-func TestPackagingCountsRouteValidatesAndReturnsCounts(t *testing.T) {
-	f := &fakeStore{packagingCounts: []store.PackagingCount{{ProductionOrder: "1", Quantity: 4}}}
-	router := registerRoutes(newTestServer(f))
-	response := httptest.NewRecorder()
-	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/views/Z_V_ZMES_T_001/packaging-counts?productionOrders=1,000000000001", nil))
-	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"quantity":4`) || f.packagingOrders != "1,000000000001" {
-		t.Fatalf("status=%d body=%s orders=%q", response.Code, response.Body.String(), f.packagingOrders)
-	}
-	response = httptest.NewRecorder()
-	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/views/Z_V_ZMES_T_001/packaging-counts", nil))
-	if response.Code != http.StatusBadRequest {
-		t.Fatalf("missing orders status=%d", response.Code)
 	}
 }
 

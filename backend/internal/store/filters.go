@@ -54,7 +54,7 @@ func repairFilter(f Filters) bson.M {
 		conditions = append(conditions, bson.M{"ZNGGZ": f.Station})
 	}
 	if f.ProductModel != "" {
-		conditions = append(conditions, bson.M{"$or": bson.A{bson.M{"ZJXMC": f.ProductModel}, bson.M{"MAKTX": f.ProductModel}, bson.M{"MATNR": f.ProductModel}}})
+		conditions = append(conditions, exactAnyField([]string{"ZJXMC", "MAKTX", "MATNR"}, f.ProductModel))
 	}
 	if f.DefectResponsibility != "" {
 		conditions = append(conditions, bson.M{"ZZRFL": f.DefectResponsibility})
@@ -160,7 +160,7 @@ func orderFilter(f OrderFilters) bson.M {
 		conditions = append(conditions, bson.M{"source": f.OrderScope})
 	}
 	if f.Overseas {
-		conditions = append(conditions, bson.M{"data.MAKTX": bson.M{"$regex": "WW", "$options": "i"}})
+		conditions = append(conditions, bson.M{"is_overseas": true})
 	}
 	if f.SalesOrder != "" {
 		conditions = append(conditions, exactBatch("data.VBELN", f.SalesOrder, true))
@@ -169,11 +169,10 @@ func orderFilter(f OrderFilters) bson.M {
 		conditions = append(conditions, exactBatch("aufnr", f.ProductionOrder, true))
 	}
 	if f.SerialNumber != "" {
-		re := regexp.QuoteMeta(strings.TrimSpace(f.SerialNumber))
-		conditions = append(conditions, bson.M{"$or": bson.A{bson.M{"data.ZCODE": bson.M{"$regex": re, "$options": "i"}}, bson.M{"data.ZCODE_HEAD": bson.M{"$regex": re, "$options": "i"}}, bson.M{"data.ZCODE_ITEM": bson.M{"$regex": re, "$options": "i"}}, bson.M{"records.ZCODE": bson.M{"$regex": re, "$options": "i"}}}})
+		conditions = append(conditions, exactAnyField([]string{"data.ZCODE", "data.ZCODE_HEAD", "data.ZCODE_ITEM", "records.ZCODE"}, f.SerialNumber))
 	}
 	if f.ProductModel != "" {
-		conditions = append(conditions, bson.M{"$or": bson.A{bson.M{"data.MAKTX_TH": f.ProductModel}, bson.M{"data.CPXH": f.ProductModel}, bson.M{"data.MAKTX": f.ProductModel}}})
+		conditions = append(conditions, exactAnyField([]string{"data.MAKTX_TH", "data.CPXH", "data.MAKTX"}, f.ProductModel))
 	}
 	if f.Customer != "" {
 		customerIDs := splitFilterValues(f.Customer)
@@ -184,7 +183,7 @@ func orderFilter(f OrderFilters) bson.M {
 		}
 	}
 	if f.Base != "" {
-		conditions = append(conditions, bson.M{"$or": bson.A{bson.M{"data.LGORT": f.Base}, bson.M{"data.WERKS": f.Base}}})
+		conditions = append(conditions, exactAnyField([]string{"data.LGORT", "data.WERKS"}, f.Base))
 	}
 	dateFrom, dateTo := f.DateFrom, f.DateTo
 	if dateFrom == "" {
@@ -318,26 +317,51 @@ func exactBatch(field, input string, leadingZeroCompatible bool) bson.M {
 	if len(values) == 0 {
 		return bson.M{}
 	}
-	patterns := bson.A{}
-	for _, value := range values {
-		if leadingZeroCompatible && isNumericOrder(value) {
-			trimmed := normalizeOrderNumber(value)
-			if trimmed == "" {
-				trimmed = "0"
-			}
-			patterns = append(patterns, "^0*"+regexp.QuoteMeta(trimmed)+"$")
-		} else {
-			patterns = append(patterns, "^"+regexp.QuoteMeta(value)+"$")
+	candidates := make([]string, 0, len(values)*2)
+	if leadingZeroCompatible {
+		width := orderFieldWidth(field)
+		for _, value := range values {
+			candidates = append(candidates, orderCandidates(value, width)...)
 		}
+	} else {
+		candidates = append(candidates, values...)
 	}
-	if len(patterns) == 1 {
-		return bson.M{field: bson.M{"$regex": patterns[0], "$options": "i"}}
+	return exactValues(field, candidates)
+}
+
+func exactAnyField(fields []string, input string) bson.M {
+	values := splitValues(input)
+	branches := make(bson.A, 0, len(fields))
+	for _, field := range fields {
+		branches = append(branches, exactValues(field, values))
 	}
-	or := bson.A{}
-	for _, pattern := range patterns {
-		or = append(or, bson.M{field: bson.M{"$regex": pattern, "$options": "i"}})
+	if len(branches) == 1 {
+		return branches[0].(bson.M)
 	}
-	return bson.M{"$or": or}
+	return bson.M{"$or": branches}
+}
+
+func exactValues(field string, values []string) bson.M {
+	unique := make([]string, 0, len(values))
+	seen := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		unique = append(unique, value)
+	}
+	if len(unique) == 1 {
+		return bson.M{field: unique[0]}
+	}
+	return bson.M{field: bson.M{"$in": unique}}
+}
+
+func orderFieldWidth(field string) int {
+	if strings.Contains(strings.ToUpper(field), "VBELN") {
+		return salesOrderWidth
+	}
+	return productionOrderWidth
 }
 
 func splitValues(input string) []string {

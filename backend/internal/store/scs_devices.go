@@ -255,24 +255,109 @@ func scsDeviceProjection() bson.M {
 	return projection
 }
 
+func scsDeviceFilter(f SCSDeviceFilters) bson.M {
+	conditions := bson.A{}
+	if strings.TrimSpace(f.Company5000) != "" {
+		conditions = append(conditions, bson.M{"is_5000_company": parseBoolFilter(f.Company5000)})
+	}
+	if value := strings.TrimSpace(f.SalesOrder); value != "" {
+		conditions = append(conditions, bson.M{"$or": bson.A{
+			bson.M{"sales_order": value},
+			bson.M{"details.equipment.product_fields.销售订单": value},
+		}})
+	}
+	if value := strings.TrimSpace(f.ServiceOrder); value != "" {
+		conditions = append(conditions, bson.M{"$or": bson.A{
+			bson.M{"service_uid": value},
+			bson.M{"details.service_fields.服务单号": value},
+			bson.M{"details.service_fields.服务订单号": value},
+			bson.M{"details.service_fields.服务单": value},
+		}})
+	}
+	if value := strings.TrimSpace(f.SN); value != "" {
+		conditions = append(conditions, bson.M{"$or": bson.A{
+			bson.M{"details.equipment.product_fields.产品条码": value},
+			bson.M{"details.equipment.material_sn": value},
+			bson.M{"details.equipment.mtr_sn": value},
+		}})
+	}
+	if len(conditions) == 0 {
+		return bson.M{}
+	}
+	return bson.M{"$and": conditions}
+}
+
 func (s *Store) SCSDevices(ctx context.Context, f SCSDeviceFilters, page, pageSize int) (SCSDevicePage, error) {
 	result := SCSDevicePage{Items: []SCSDevice{}, Page: page, PageSize: pageSize, Scope: "all"}
 	col := s.views["SCS_DOA"]
-	cur, err := col.Find(ctx, bson.M{}, options.Find().SetProjection(scsDeviceProjection()).SetBatchSize(500))
+	read := func(filter bson.M) ([]bson.M, error) {
+		cur, err := col.Find(ctx, filter, options.Find().SetProjection(scsDeviceProjection()).SetBatchSize(500))
+		if err != nil {
+			return nil, err
+		}
+		defer cur.Close(ctx)
+		docs := []bson.M{}
+		for cur.Next(ctx) {
+			var doc bson.M
+			if err := cur.Decode(&doc); err != nil {
+				return nil, err
+			}
+			docs = append(docs, doc)
+		}
+		if err := cur.Err(); err != nil {
+			return nil, err
+		}
+		return docs, nil
+	}
+	docs, err := read(scsDeviceFilter(f))
 	if err != nil {
 		return result, err
 	}
-	defer cur.Close(ctx)
-	docs := []bson.M{}
-	for cur.Next(ctx) {
-		var doc bson.M
-		if err = cur.Decode(&doc); err != nil {
-			return result, err
+	if len(docs) > 0 && (f.Company5000 != "" || f.SalesOrder != "" || f.ServiceOrder != "" || f.SN != "") {
+		selected := groupSCSDevices(docs, f)
+		identities := map[string]map[string]struct{}{
+			"product": {}, "context": {}, "material": {},
 		}
-		docs = append(docs, doc)
-	}
-	if err = cur.Err(); err != nil {
-		return result, err
+		for _, device := range selected {
+			kind, value, ok := strings.Cut(device.DeviceKey, ":")
+			if !ok || identities[kind] == nil {
+				continue
+			}
+			identities[kind][value] = struct{}{}
+		}
+		seen := make(map[string]struct{}, len(docs))
+		for _, doc := range docs {
+			seen[fmt.Sprint(doc["_id"])] = struct{}{}
+		}
+		paths := map[string][]string{
+			"product":  {"details.equipment.product_fields.产品条码"},
+			"context":  {"details.equipment.context_value", "details.equipment._context_value"},
+			"material": {"details.equipment.material_sn", "details.equipment.mtr_sn"},
+		}
+		const identityBatchSize = 500
+		for kind, values := range identities {
+			batch := make([]string, 0, len(values))
+			for value := range values {
+				batch = append(batch, value)
+			}
+			for start := 0; start < len(batch); start += identityBatchSize {
+				end := min(start+identityBatchSize, len(batch))
+				for _, path := range paths[kind] {
+					related, err := read(bson.M{path: bson.M{"$in": batch[start:end]}})
+					if err != nil {
+						return result, err
+					}
+					for _, doc := range related {
+						id := fmt.Sprint(doc["_id"])
+						if _, ok := seen[id]; ok {
+							continue
+						}
+						seen[id] = struct{}{}
+						docs = append(docs, doc)
+					}
+				}
+			}
+		}
 	}
 	devices := groupSCSDevices(docs, f)
 	result.Total = len(devices)

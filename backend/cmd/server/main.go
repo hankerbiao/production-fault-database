@@ -17,9 +17,10 @@ import (
 )
 
 type server struct {
-	store  storeAPI
-	sync   *syncManager
-	config serviceConfig
+	store     storeAPI
+	sync      *syncManager
+	dataCheck *dataCheckManager
+	config    serviceConfig
 }
 
 func main() {
@@ -48,7 +49,7 @@ func run() error {
 		}
 	}()
 
-	h := &server{store: s, sync: newSyncManager(), config: newServiceConfig()}
+	h := &server{store: s, sync: newSyncManager(), dataCheck: newDataCheckManager(s), config: newServiceConfig()}
 	mux := registerRoutes(h)
 
 	// Keep the default aligned with the Vite development proxy and README.
@@ -57,6 +58,10 @@ func run() error {
 	server := &http.Server{Addr: ":" + addr, Handler: gzipJSON(cors(mux))}
 	signalCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	go h.dataCheck.schedule(signalCtx)
+	if getenv("SYNC_SCHEDULER_ENABLED", "true") != "false" {
+		go h.schedulePeriodicSync(signalCtx)
+	}
 	return serveUntilShutdown(signalCtx, server)
 }
 

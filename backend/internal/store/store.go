@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"os"
 	"regexp"
 	"strings"
 	"sync"
@@ -57,32 +58,8 @@ func New(ctx context.Context, uri, database, repairCollection, orderCollection s
 	}
 	result := &Store{
 		client: client, db: db, repairs: db.Collection(repairCollection), orders: db.Collection(orderCollection), views: views,
-		bomCache:     make(map[string]bomStreamCacheEntry),
-		stationCache: make(map[string]bomStreamCacheEntry), stationWarmDone: make(chan struct{}),
+		bomCache:         make(map[string]bomStreamCacheEntry),
 		viewOptionsCache: make(map[string]ViewOptionsResult),
-	}
-	if source := stationViewSource(); source == "hana" {
-		result.stationRequested = true
-		station, err := newStationHANAFromEnv()
-		if err != nil {
-			result.stationErr = err
-			log.Printf("station hana configuration failed: %v", err)
-		} else {
-			result.stationHANA = station
-			go func() {
-				pingCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-				defer cancel()
-				if err := station.db.PingContext(pingCtx); err != nil {
-					log.Printf("station hana ping failed: %v", err)
-				}
-			}()
-		}
-		result.stationWarmDone = nil
-	} else {
-		// Station prewarming is limited to the recent 30-day window. BOM data is
-		// never prewarmed because an unbounded snapshot would scan the source
-		// collection and compete with production traffic.
-		go result.prewarmStationStream()
 	}
 	return result, nil
 }
@@ -90,8 +67,17 @@ func New(ctx context.Context, uri, database, repairCollection, orderCollection s
 func ensureCoreIndexes(ctx context.Context, db *mongo.Database, repairCollection, orderCollection string) error {
 	var errs []error
 	create := func(collection, label string, models []mongo.IndexModel) {
-		if _, err := db.Collection(collection).Indexes().CreateMany(ctx, models); err != nil {
-			errs = append(errs, fmt.Errorf("%s: %w", label, err))
+		indexes := db.Collection(collection).Indexes()
+		for _, model := range models {
+			if _, err := indexes.CreateOne(ctx, model); err != nil {
+				// A legacy sync process may already have created the same key
+				// pattern under another name. That index is still usable.
+				var commandErr mongo.CommandError
+				if errors.As(err, &commandErr) && (commandErr.Code == 85 || commandErr.Code == 86) {
+					continue
+				}
+				errs = append(errs, fmt.Errorf("%s: %w", label, err))
+			}
 		}
 	}
 	create(repairCollection, "repairs", []mongo.IndexModel{
@@ -99,6 +85,15 @@ func ensureCoreIndexes(ctx context.Context, db *mongo.Database, repairCollection
 		{Keys: bson.D{{Key: "AUFNR", Value: 1}, {Key: "ZDATE_WX", Value: 1}}},
 		{Keys: bson.D{{Key: "PCODE", Value: 1}}},
 		{Keys: bson.D{{Key: "VBELN", Value: 1}}},
+		{Keys: bson.D{{Key: "ZMCOD1", Value: 1}}, Options: options.Index().SetName("repair_sn")},
+		{Keys: bson.D{{Key: "RECORD01REPAIRM", Value: 1}}, Options: options.Index().SetName("repair_material_serial")},
+		{Keys: bson.D{{Key: "ZNGGZ", Value: 1}}, Options: options.Index().SetName("repair_station")},
+		{Keys: bson.D{{Key: "ZZRFL", Value: 1}}, Options: options.Index().SetName("repair_defect_responsibility")},
+		{Keys: bson.D{{Key: "ZJXMC", Value: 1}}, Options: options.Index().SetName("repair_model")},
+		{Keys: bson.D{{Key: "MAKTX", Value: 1}}, Options: options.Index().SetName("repair_material_description")},
+		{Keys: bson.D{{Key: "MATNR", Value: 1}}, Options: options.Index().SetName("repair_material")},
+		{Keys: bson.D{{Key: "ZDATE_WX", Value: -1}, {Key: "ZTIME", Value: -1}, {Key: "_id", Value: -1}}, Options: options.Index().SetName("repair_list_order")},
+		{Keys: bson.D{{Key: "GSTRS", Value: -1}, {Key: "ZDATE_WX", Value: -1}, {Key: "ZTIME", Value: -1}, {Key: "_id", Value: -1}}, Options: options.Index().SetName("repair_planned_list_order")},
 	})
 	create(orderCollection, "orders", []mongo.IndexModel{
 		{Keys: bson.D{{Key: "last_synced_at", Value: -1}}},
@@ -109,6 +104,16 @@ func ensureCoreIndexes(ctx context.Context, db *mongo.Database, repairCollection
 		{Keys: bson.D{{Key: "data.LGORT", Value: 1}}},
 		{Keys: bson.D{{Key: "data.KID", Value: 1}}},
 		{Keys: bson.D{{Key: "aufnr", Value: 1}}},
+		{Keys: bson.D{{Key: "is_overseas", Value: 1}}, Options: options.Index().SetName("order_overseas")},
+		{Keys: bson.D{{Key: "data.WERKS", Value: 1}}, Options: options.Index().SetName("order_plant")},
+		{Keys: bson.D{{Key: "data.ZCODE", Value: 1}}, Options: options.Index().SetName("order_serial")},
+		{Keys: bson.D{{Key: "data.ZCODE_HEAD", Value: 1}}, Options: options.Index().SetName("order_head_serial")},
+		{Keys: bson.D{{Key: "data.ZCODE_ITEM", Value: 1}}, Options: options.Index().SetName("order_item_serial")},
+		{Keys: bson.D{{Key: "records.ZCODE", Value: 1}}, Options: options.Index().SetName("order_record_serial")},
+		{Keys: bson.D{{Key: "data.CPXH", Value: 1}}, Options: options.Index().SetName("order_model_cpxh")},
+		{Keys: bson.D{{Key: "data.MAKTX", Value: 1}}, Options: options.Index().SetName("order_model_description")},
+		{Keys: bson.D{{Key: "data.GSTRS", Value: 1}}, Options: options.Index().SetName("order_planned_date")},
+		{Keys: bson.D{{Key: "data.GSTRS", Value: -1}, {Key: "last_synced_at", Value: -1}, {Key: "_id", Value: -1}}, Options: options.Index().SetName("order_list_order")},
 	})
 	create("order_bom_postings_sap", "bom", []mongo.IndexModel{
 		{Keys: bson.D{{Key: "GSTRS_DATE", Value: 1}}},
@@ -120,15 +125,30 @@ func ensureCoreIndexes(ctx context.Context, db *mongo.Database, repairCollection
 		{Keys: bson.D{{Key: "AUFNR", Value: 1}}, Options: options.Index().SetName("station_production_order")},
 		{Keys: bson.D{{Key: "MAKTX_TH", Value: 1}, {Key: "GSTRS", Value: 1}}, Options: options.Index().SetName("station_model_gstrs")},
 		{Keys: bson.D{{Key: "GSTRS", Value: 1}}, Options: options.Index().SetName("station_gstrs")},
+		{Keys: bson.D{{Key: "KDAUF", Value: 1}}, Options: options.Index().SetName("station_sales_order")},
+		{Keys: bson.D{{Key: "LGORT", Value: 1}}, Options: options.Index().SetName("station_storage_location")},
+		{Keys: bson.D{{Key: "WERKS", Value: 1}}, Options: options.Index().SetName("station_plant")},
+		{Keys: bson.D{{Key: "LINE_CODE", Value: 1}}, Options: options.Index().SetName("station_line")},
+		{Keys: bson.D{{Key: "OPERATION", Value: 1}}, Options: options.Index().SetName("station_operation")},
 		{Keys: bson.D{{Key: "_synced_at", Value: -1}}},
 	})
 	create("serial_bindings_sap", "bindings", []mongo.IndexModel{
 		{Keys: bson.D{{Key: "AUFNR_HEAD", Value: 1}}},
+		{Keys: bson.D{{Key: "PRODH", Value: 1}}, Options: options.Index().SetName("bindings_product_hierarchy")},
 		{Keys: bson.D{{Key: "_synced_at", Value: -1}}},
 	})
 	create("scs_change_records", "scs_change", []mongo.IndexModel{
 		{Keys: bson.D{{Key: "is_5000_company", Value: 1}, {Key: "create_time", Value: -1}}, Options: options.Index().SetName("scs_change_company_time")},
 		{Keys: bson.D{{Key: "_synced_at", Value: -1}}},
+		{Keys: bson.D{{Key: "so_code", Value: 1}}, Options: options.Index().SetName("scs_change_service_order")},
+		{Keys: bson.D{{Key: "customer_name", Value: 1}}, Options: options.Index().SetName("scs_change_customer")},
+		{Keys: bson.D{{Key: "device_sn", Value: 1}}, Options: options.Index().SetName("scs_change_device")},
+		{Keys: bson.D{{Key: "change_type", Value: 1}}, Options: options.Index().SetName("scs_change_type")},
+		{Keys: bson.D{{Key: "part_number", Value: 1}}, Options: options.Index().SetName("scs_change_part_number")},
+		{Keys: bson.D{{Key: "part_sn", Value: 1}}, Options: options.Index().SetName("scs_change_part_sn")},
+		{Keys: bson.D{{Key: "operator", Value: 1}}, Options: options.Index().SetName("scs_change_operator")},
+		{Keys: bson.D{{Key: "need_return", Value: 1}}, Options: options.Index().SetName("scs_change_need_return")},
+		{Keys: bson.D{{Key: "is_revoked", Value: 1}}, Options: options.Index().SetName("scs_change_revoked")},
 	})
 	create("scs_doa_records", "scs_doa", []mongo.IndexModel{
 		{Keys: bson.D{{Key: "is_5000_company", Value: 1}, {Key: "declare_time", Value: -1}}, Options: options.Index().SetName("scs_doa_company_declare_time")},
@@ -136,6 +156,22 @@ func ensureCoreIndexes(ctx context.Context, db *mongo.Database, repairCollection
 		{Keys: bson.D{{Key: "declare_time", Value: -1}}},
 		{Keys: bson.D{{Key: "acceptance_time", Value: -1}}},
 		{Keys: bson.D{{Key: "_synced_at", Value: -1}}},
+		{Keys: bson.D{{Key: "doa_code", Value: 1}}, Options: options.Index().SetName("scs_doa_code")},
+		{Keys: bson.D{{Key: "service_uid", Value: 1}}, Options: options.Index().SetName("scs_doa_service_order")},
+		{Keys: bson.D{{Key: "sales_order", Value: 1}}, Options: options.Index().SetName("scs_doa_sales_order")},
+		{Keys: bson.D{{Key: "sugon_sn", Value: 1}}, Options: options.Index().SetName("scs_doa_sn")},
+		{Keys: bson.D{{Key: "product_name", Value: 1}}, Options: options.Index().SetName("scs_doa_product")},
+		{Keys: bson.D{{Key: "doa_type", Value: 1}}, Options: options.Index().SetName("scs_doa_type")},
+		{Keys: bson.D{{Key: "status", Value: 1}}, Options: options.Index().SetName("scs_doa_status")},
+		{Keys: bson.D{{Key: "doa_judge", Value: 1}}, Options: options.Index().SetName("scs_doa_judgment")},
+		{Keys: bson.D{{Key: "customer_uid", Value: 1}}, Options: options.Index().SetName("scs_doa_customer")},
+		{Keys: bson.D{{Key: "details.equipment.product_fields.产品条码", Value: 1}}, Options: options.Index().SetName("scs_doa_equipment_barcode")},
+		{Keys: bson.D{{Key: "details.equipment.material_sn", Value: 1}}, Options: options.Index().SetName("scs_doa_equipment_material")},
+		{Keys: bson.D{{Key: "details.equipment.mtr_sn", Value: 1}}, Options: options.Index().SetName("scs_doa_equipment_mtr")},
+		{Keys: bson.D{{Key: "details.equipment.product_fields.销售订单", Value: 1}}, Options: options.Index().SetName("scs_doa_equipment_sales_order")},
+		{Keys: bson.D{{Key: "details.service_fields.服务单号", Value: 1}}, Options: options.Index().SetName("scs_doa_service_uid")},
+		{Keys: bson.D{{Key: "details.service_fields.服务订单号", Value: 1}}, Options: options.Index().SetName("scs_doa_service_order")},
+		{Keys: bson.D{{Key: "details.service_fields.服务单", Value: 1}}, Options: options.Index().SetName("scs_doa_service")},
 	})
 	create("order_bom_postings_sap", "bom_sync", []mongo.IndexModel{
 		{Keys: bson.D{{Key: "_synced_at", Value: -1}}},
@@ -181,12 +217,28 @@ func (s *Store) SyncRuns(ctx context.Context, limit int) ([]SyncRun, error) {
 	return runs, nil
 }
 
-func (s *Store) Close(ctx context.Context) error {
-	var stationErr error
-	if s.stationHANA != nil {
-		stationErr = s.stationHANA.close()
+func (s *Store) LatestTaskSyncRun(ctx context.Context, taskID string, successfulOnly bool) (SyncRun, error) {
+	stageFilter := bson.M{"task_id": taskID}
+	if successfulOnly {
+		stageFilter["state"] = "success"
 	}
-	return errors.Join(stationErr, s.client.Disconnect(ctx))
+	filter := bson.M{"stages": bson.M{"$elemMatch": stageFilter}}
+	projection := bson.M{
+		"_id": 1, "state": 1, "started_at": 1, "finished_at": 1,
+		"stages": bson.M{"$elemMatch": stageFilter},
+	}
+	var document bson.M
+	err := s.db.Collection("sync_orchestrator_runs").FindOne(ctx, filter,
+		options.FindOne().SetSort(bson.D{{Key: "started_at", Value: -1}}).SetProjection(projection),
+	).Decode(&document)
+	if err != nil {
+		return nil, err
+	}
+	return SyncRun(document), nil
+}
+
+func (s *Store) Close(ctx context.Context) error {
+	return s.client.Disconnect(ctx)
 }
 func (s *Store) Ping(ctx context.Context) error { return s.client.Ping(ctx, nil) }
 
@@ -380,10 +432,27 @@ func viewFilter(viewID string, f ViewFilters, searchFields []string, dateField s
 	}
 	switch viewID {
 	case "Z_V_ZMES_T_001":
-		addExactCompat("AUFNR", f.ProductionOrder, true)
+		if strings.TrimSpace(f.ProductionOrder) != "" && strings.EqualFold(os.Getenv("STATION_NORMALIZED_ORDERS"), "true") {
+			values := splitValues(f.ProductionOrder)
+			numeric := len(values) > 0
+			for i, value := range values {
+				if !isNumericOrder(value) {
+					numeric = false
+					break
+				}
+				values[i] = normalizeOrderNumber(value)
+			}
+			if numeric {
+				conditions = append(conditions, bson.M{"AUFNR_NORMALIZED": bson.M{"$in": values}})
+			} else {
+				addExactCompat("AUFNR", f.ProductionOrder, true)
+			}
+		} else {
+			addExactCompat("AUFNR", f.ProductionOrder, true)
+		}
 		addExactCompat("KDAUF", f.SalesOrder, true)
 		if f.ProductModel != "" {
-			conditions = append(conditions, bson.M{"$or": bson.A{bson.M{"MAKTX_TH": f.ProductModel}, bson.M{"PRODH": f.ProductModel}, bson.M{"CPXH": f.ProductModel}}})
+			conditions = append(conditions, exactAnyField([]string{"MAKTX_TH", "PRODH", "CPXH"}, f.ProductModel))
 		}
 	case "ZSGV_ZSD124":
 		addExactCompat("AUFNR_1", f.ProductionOrder, true)
@@ -392,7 +461,7 @@ func viewFilter(viewID string, f ViewFilters, searchFields []string, dateField s
 		addExactCompat("CPX", f.CPX, false)
 		addExactCompat("MATNR", f.ProductModel, false)
 		if f.MissingSalesOrder {
-			conditions = append(conditions, bson.M{"$expr": emptyViewField("VBELN_EX")})
+			conditions = append(conditions, missingField("VBELN_EX"))
 		}
 	case "ZSGV_ZPP_SERNOLIST":
 		if f.ProductionOrder != "" {
@@ -404,10 +473,10 @@ func viewFilter(viewID string, f ViewFilters, searchFields []string, dateField s
 	}
 	addExactCompat("MATNR", f.MaterialCode, false)
 	if f.StationCode != "" {
-		conditions = append(conditions, bson.M{"$or": bson.A{bson.M{"PCODE": f.StationCode}, bson.M{"LINE_CODE": f.StationCode}, bson.M{"SPEC": f.StationCode}, bson.M{"OPERATION": f.StationCode}}})
+		conditions = append(conditions, exactAnyField([]string{"PCODE", "LINE_CODE", "SPEC", "OPERATION"}, f.StationCode))
 	}
 	if f.Base != "" {
-		conditions = append(conditions, bson.M{"$or": bson.A{bson.M{"LGORT": f.Base}, bson.M{"WERKS": f.Base}}})
+		conditions = append(conditions, exactAnyField([]string{"LGORT", "WERKS"}, f.Base))
 	}
 	if f.HeadOrder != "" {
 		addExactCompat("AUFNR_HEAD", f.HeadOrder, true)

@@ -37,6 +37,7 @@ except ImportError as exc:  # pragma: no cover - exercised by deployment, not un
 
 from scripts.sources.hana.hana_view_sync import (
     env,
+    ensure_index,
     load_dotenv,
     mongo_client_options,
     mongo_write_concern_summary,
@@ -138,6 +139,7 @@ def aggregate(source: str, records: list[dict[str, Any]], synced_at: datetime) -
             "source": source,
             "aufnr": aufnr,
             "data": latest,
+            "is_overseas": "ww" in str(latest.get("MAKTX") or "").strip().lower(),
             "records": rows,
             "record_count": len(rows),
             "order_quantity": sum(number(row.get("GAMNG")) for row in rows),
@@ -190,6 +192,7 @@ def repair_identity(row: Mapping[str, Any]) -> str:
 @contextmanager
 def repair_snapshot(sql: str, params: list[Any], batch_size: int, stats: dict[str, Any]) -> Iterator[Any]:
     """Validate a complete source snapshot on disk before any MongoDB mutation."""
+    latest_source_key = ("", "")
     with tempfile.TemporaryDirectory(prefix="repair-snapshot-") as directory:
         snapshot = sqlite3.connect(str(Path(directory) / "snapshot.sqlite"))
         try:
@@ -207,6 +210,12 @@ def repair_snapshot(sql: str, params: list[Any], batch_size: int, stats: dict[st
                             repair_date = str(row.get("ZDATE_WX") or "").strip()
                             if not params[0] <= repair_date <= params[1]:
                                 raise ValueError("维修记录的 ZDATE_WX 不在本次快照范围内")
+                            source_time = str(row.get("ZTIME") or "").strip()
+                            if (repair_date, source_time) > latest_source_key:
+                                latest_source_key = (repair_date, source_time)
+                                date_text = f"{repair_date[:4]}-{repair_date[4:6]}-{repair_date[6:8]}" if len(repair_date) == 8 and repair_date.isdigit() else repair_date
+                                time_text = f"{source_time[:2]}:{source_time[2:4]}:{source_time[4:6]}" if len(source_time) == 6 and source_time.isdigit() else source_time
+                                stats["latest_source_time"] = f"{date_text} {time_text}".strip()
                             payload = BSON.encode({field: bson_value(row[field]) for field in REPAIR_COLUMNS})
                             content_hash = hashlib.sha256(payload).hexdigest()
                             existing = snapshot.execute("SELECT hash FROM repairs WHERE identity = ?", (identity,)).fetchone()
@@ -274,6 +283,7 @@ def sync_repair(
     stats: dict[str, Any] = {
         "success": False, "mode": mode, "strategy": "rolling_snapshot" if mode == "incremental" else "snapshot",
         "run_id": run_id, "snapshot_complete": False, "source_rows": 0, "unique_rows": 0,
+        "latest_source_time": "",
         "duplicate_source_rows": 0, "matched_sales_orders": 0, "empty_sales_orders_retained": 0,
         "unmatched_sales_orders_retained": 0, "batches": 0,
         "inserted": 0, "updated": 0, "unchanged": 0, "relinked": 0, "would_insert": 0, "would_update": 0,
@@ -462,6 +472,8 @@ def order_status_changes(
     for path, row in rows:
         stored = snapshot.get(json.dumps([source, *status_line_key(row)]))
         if stored is None:
+            if row.get("ZSTAT") == "RELEASED":
+                continue
             if path == "data":
                 missing_status = True
             else:
@@ -720,6 +732,7 @@ def sync_sales(args: argparse.Namespace) -> dict[str, Any]:
     db = client[database_name]
     if not args.dry_run:
         db[target_collection].create_index([("source", ASCENDING), ("aufnr", ASCENDING)], unique=True, name="uniq_source_aufnr")
+        ensure_index(db[target_collection], "is_overseas", name="order_overseas")
         db[checkpoint_collection].create_index([("source", ASCENDING)], name="sync_checkpoint_source")
 
     summary: dict[str, Any] = {"success": True, "run_id": run_id, "dataset": "sales", "mode": "full" if args.full else "incremental", "dry_run": args.dry_run, "target_collection": target_collection, "prodh_list": prodh, "sources": {}, "mongo_write_concern": mongo_write_concern_summary(client_options)}

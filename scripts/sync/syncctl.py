@@ -15,9 +15,10 @@ import subprocess
 import sys
 import time
 from dataclasses import dataclass
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterable
+from urllib.request import Request, urlopen
 from uuid import uuid4
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -33,6 +34,42 @@ from scripts.sync_runtime import Lease as ResourceLease, check_leases, error_pay
 RUN_COLLECTION = "sync_orchestrator_runs"
 LOCK_NAME = "sync-orchestrator"
 DEFAULT_RETRY_ATTEMPTS = 3
+
+
+def notify_sync_failure(run_id: str, task: str, message: str) -> dict[str, Any]:
+    """Send one notification after a sync has failed, without changing its result."""
+    token = env("GQUAN_APP_TOKEN")
+    if not token:
+        return {"success": False, "error": "未配置 GQUAN_APP_TOKEN"}
+    now = datetime.now(timezone(timedelta(hours=8))).strftime("%Y-%m-%d %H:%M:%S")
+    desc = f"任务：{task}\n时间：{now}（北京时间）\n运行编号：{run_id}\n原因：{message[:500]}"
+    payload = json.dumps({
+        "to": [env("GQUAN_APP_TO", "libiao1")],
+        "title": "数据同步异常",
+        "desc": desc,
+        "content": desc,
+        "msg_type": "AGENDA",
+    }, ensure_ascii=False).encode("utf-8")
+    try:
+        request = Request(env("GQUAN_APP_URL", "https://one.1oa.com.cn/springboard/api/v1/integrations/gquan/app"),
+                          data=payload, method="POST", headers={
+                              "Authorization": f"Bearer {token}", "Content-Type": "application/json"})
+        with urlopen(request, timeout=float(env("GQUAN_APP_TIMEOUT", "15"))) as response:
+            response.read(4096)
+            if not 200 <= response.status < 300:
+                return {"success": False, "error": f"光圈接口返回 HTTP {response.status}"}
+            return {"success": True, "status": response.status}
+    except Exception as exc:
+        return {"success": False, "error": f"光圈通知失败: {type(exc).__name__}"}
+
+
+def notify_failed_run(result: dict[str, Any]) -> dict[str, Any]:
+    failed = next((stage for stage in result.get("stages", []) if stage.get("state") == "failed"), {})
+    task = str(failed.get("label") or failed.get("task_id") or "同步编排器")
+    error = failed.get("error") or result.get("message") or "同步失败"
+    if isinstance(error, dict):
+        error = error.get("message") or str(error)
+    return notify_sync_failure(str(result.get("_id") or "未知"), task, str(error))
 
 
 @dataclass(frozen=True)
@@ -52,6 +89,8 @@ class Task:
                 args.extend(["--full", "--start-date", start_date or ""])
             if end_date:
                 args.extend(["--end-date", end_date])
+        elif self.id == "station_records_sales_orders":
+            args.extend(["--mode", "incremental", "--apply"])
         elif self.id in {"station_records", "order_bom_postings", "serial_bindings"}:
             args.extend(["--mode", mode, "--apply"])
             if mode == "full":
@@ -139,7 +178,10 @@ def validate_request(mode: str, requested: Iterable[str] | None, start_date: str
         raise SyncError("增量同步不接受 startDate", code="invalid_request")
     if start and end and start > end:
         raise SyncError("startDate 不能晚于 endDate", code="invalid_request")
-    tasks = resolve_tasks(requested, skip_scs=skip_scs)
+    selected = requested
+    if mode == "full" and not requested:
+        selected = [task.id for task in TASKS if task.full_supported]
+    tasks = resolve_tasks(selected, skip_scs=skip_scs)
     unsupported = [task.id for task in tasks if mode == "full" and not task.full_supported]
     if unsupported:
         raise SyncError("任务不支持全量同步: " + ", ".join(unsupported), code="unsupported_mode")
@@ -382,14 +424,30 @@ def main() -> int:
         client = MongoClient(mongo_uri(), **mongo_client_options())
         try:
             result = Orchestrator(client[env("MONGODB_DATABASE")]).execute(mode=args.mode, requested=args.tasks, start_date=args.start_date, end_date=args.end_date, source=args.source, run_id=args.run_id, skip_scs=args.skip_scs)
+            if result.get("state") == "failed":
+                notification = notify_failed_run(result)
+                result["notification"] = notification
+                try:
+                    client[env("MONGODB_DATABASE")][RUN_COLLECTION].update_one(
+                        {"_id": result.get("_id")}, {"$set": {"notification": notification}})
+                except Exception as exc:
+                    print(f"记录光圈通知结果失败: {type(exc).__name__}", file=sys.stderr)
+                if not notification.get("success"):
+                    print(notification["error"], file=sys.stderr)
         finally:
             client.close()
         print(json.dumps(serialize(result), ensure_ascii=False, default=str))
         return 0 if result.get("state") == "success" else 1
     except SyncError as exc:
+        notification = notify_sync_failure(args.run_id or "未知", "同步编排器", str(exc))
+        if not notification.get("success"):
+            print(notification["error"], file=sys.stderr)
         print(json.dumps({"success": False, "error": exc.payload()}, ensure_ascii=False))
         return 2
     except Exception as exc:
+        notification = notify_sync_failure(args.run_id or "未知", "同步编排器", str(exc))
+        if not notification.get("success"):
+            print(notification["error"], file=sys.stderr)
         print(json.dumps({"success": False, "error": {"code": "orchestrator_error", "message": str(exc), "retryable": False}}, ensure_ascii=False))
         return 1
 

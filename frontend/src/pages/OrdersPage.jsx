@@ -59,6 +59,6 @@ export function OrdersPage({ modelOptions = [], customerIDOptions = [], setConne
       <DataTable pageId="orders" columns={columns} items={resource.items} loading={resource.loading} error={resource.error} onOpen={detail.open} />
       <Pagination page={resource.page} total={resource.total} pageSize={resource.pageSize} setPage={resource.setPage} setPageSize={resource.setPageSize} />
     </section>
-    {(detail.loading || detail.detail) && <DetailPanel detail={detail.detail} loading={detail.loading} close={detail.close} title="销售订单详情" heading={detail.detail?.order?.aufnr || '销售订单详情'} />}
+    {(detail.loading || detail.detail) && <DetailPanel detail={detail.detail} loading={detail.loading} close={detail.close} title="销售订单详情" heading={detail.detail?.order?.aufnr || '销售订单详情'} fieldDescriptions={{ last_synced_at: '同步程序最近一次从 SAP 取回并写入此订单的时间，订单内容未变化时也可能更新。' }} />}
   </main>;
 }

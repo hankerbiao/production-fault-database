@@ -1,6 +1,6 @@
 # 看板后端 API 说明
 
-本文档描述产线故障数据库后端网关为看板提供的 HTTP API。维修、订单、BOM 和 SCS 接口查询 MongoDB；工位过站视图 `Z_V_ZMES_T_001` 默认读取按销售订单生产订单筛选后的 `station_records_sales_orders_sap`。
+本文档描述产线故障数据库后端网关为看板提供的 HTTP API。维修、订单、BOM、SCS 和工位记录接口均查询 MongoDB；工位视图 `Z_V_ZMES_T_001` 读取同步脚本维护的 `station_records_sales_orders_sap` 集合。
 
 机器可读的 OpenAPI 3.1 契约见 [`docs/openapi.json`](openapi.json)，可直接导入 Swagger UI、Postman、Insomnia 或代码生成器。本 Markdown 版本用于补充业务语义、数据来源和调用约束；两者应保持同步。
 
@@ -19,12 +19,12 @@
 
 ## 1.1 纯数据接口扩展与实现约束
 
-以下接口面向 LRR、复合机型、质量分析等上层服务，职责是稳定地返回 MongoDB 或工位 HANA 视图中的原始数据，**不**在网关中计算投入数量、故障数量、RTY、过站数量、直通率或复合机型故障结论。
+以下接口面向 LRR、复合机型、质量分析等上层服务，职责是稳定地返回 MongoDB 中的原始数据，**不**在网关中计算投入数量、故障数量、RTY、过站数量、直通率或复合机型故障结论。
 
 - 分页列表接口最大 `pageSize=100`；缺省或越界时使用 `20`。`/api/orders?all=true` 和 `/api/orders/all` 是例外，复用筛选条件并同步返回最多 `10,000` 条订单。
 
 销售订单支持全量筛选查询：`GET /api/orders/all`，或在既有接口追加 `all=true`。它使用与 `/api/orders` 完全相同的筛选和排序，但忽略看板分页，仅返回前 `10,000` 条匹配记录；超过上限时响应仍只包含前 `10,000` 条，调用方应使用日期分段查询。可通过 `total` 判断是否被截断。
-- `id` 是稳定查询键：维修和 HANA 视图优先为 `_source_key`，销售订单为 `{source}:{AUFNR}`。工位直读 HANA 时，`id` 为 `["HISTROYID","SPEC","SPEC_TIME","PCODE","OCODE"]`；缺失字段用空字符串表示，保证详情接口可直接按自然键查询。详情接口接受该值并返回完整文档/源字段。
+- `id` 是稳定查询键：维修和视图优先为 `_source_key`，销售订单为 `{source}:{AUFNR}`。详情接口接受列表返回的 `id` 并返回完整文档/源字段。
 - 逗号分隔参数（也接受中文逗号）表示批量精确查询。`salesOrder`、`productionOrder` 及对应批量参数支持 SAP 前导零兼容，例如 `123` 可命中 `0000000123`。
 - `/api/faults`、`/api/orders` 的 `items[]` 同时返回稳定摘要字段和 `raw`。`raw` 是当前 MongoDB 源文档的可扩展快照，不承诺字段集合稳定；需要逐字段兼容时应锁定同步版本或使用详情接口。五个 `/api/views/{viewID}` 列表返回完整视图文档，并补充稳定 `id`。
 - MongoDB 索引应与同步脚本的 `index_fields` 对齐，并补充复合索引：维修 `ZMCOD1 + ZDATE_WX`、`AUFNR + ZDATE_WX`、`VBELN + ZDATE_WX`；订单 `source + aufnr`、`data.VBELN`、`data.GSTRS`；工位 `PCODE + ACTUAL_START_TIME`、`AUFNR + ACTUAL_START_TIME`、`KDAUF + ACTUAL_START_TIME`；BOM `AUFNR_1 + GSTRS`、`VBELN_EX + GSTRS`。索引创建应由迁移/运维任务执行，不在查询路径即时创建。
@@ -64,13 +64,9 @@ GET /api/faults/by-orders?productionOrders=PO001,PO002
 
 二者与 `/api/faults` 使用相同分页、排序和返回格式，可叠加日期、工位等过滤器。
 
-### 工位过站原始数据 `GET /api/views/Z_V_ZMES_T_001`
+### 工位记录 `GET /api/views/Z_V_ZMES_T_001`
 
-该接口读取 `station_records_sales_orders_sap`，数据来自 HANA 视图 `"_SYS_BIC"."BW_LOCAL.ZTRRI/Z_V_ZMES_T_001"`，同步时按销售订单盘中的生产订单筛选，并限制计划开始时间 `GSTRS` 为 2025 至 2026 年。支持 `page`、`pageSize`、`dateFrom`、`dateTo`、`stationCode`、`sn`、`productionOrder`、`salesOrder`、`base`、`productModel`，以及 `/all`、`/stream`、`/detail`、`/stats`、`/packaging-counts`。原始字段包括 `HISTROYID`、`PCODE`、`OCODE`、`AUFNR`、`SPEC`、`OPERATION`、`GSTRS`、`ACTUAL_START_TIME`、`ACTUAL_END_TIME` 等。响应附加 `stationCode`：优先取 `LINE_CODE`，否则使用 `SPEC`，再否则 `OPERATION`；HANA 视图不提供 `LINE_CODE`，因此直读模式下通常取 `SPEC`。原始工位字段始终保留。该接口不计算过站数量或工位直通率。
-
-质量服务批量查询可使用 `POST /api/views/Z_V_ZMES_T_001/stream`，请求体为 `{ "dateFrom": "2026-10-26", "dateTo": "2026-11-01", "timeField": "planned", "productionOrders": ["000123", "B02"] }`。订单数组必须包含 1 至 500 个非空订单，服务按单条 HANA 批量条件匹配订单原值及去除数值前导零后的值；空集合不会触发全量查询。成功响应仍为原 `station.tsv` 表头和字段。
-
-直读 HANA 时，`id` / `_source_key` 统一为 `["HISTROYID","SPEC","SPEC_TIME","PCODE","OCODE"]` 的 JSON 字符串，空字段以 `""` 表示；`_synced_at` 和统计接口的 `latestSyncedAt` 表示本次读取时间，而非 MongoDB 同步时间。`_id` 仍为该键的 SHA-256，便于与旧链路保持同样的标识形式。旧 Mongo 链路在字段缺失时使用 `full_row:<sha256>`，直读 HANA 后统一改为可查询的自然键；如果下游持久化了旧 `id`，切换后需要按列表返回的新 `id` 刷新。HANA 视图没有 `WERKS` 字段，`base` 在该模式下只匹配 `LGORT`。
+工位数据由同步脚本从 HANA 视图写入 `station_records_sales_orders_sap`，同步筛选和范围由脚本配置决定。查询支持 `page`、`pageSize`、`dateFrom`、`dateTo`、`stationCode`、`sn`、`productionOrder`、`salesOrder`、`base`、`productModel`，以及 `/all`、`/detail`、`/stats`。原始字段包括 `HISTROYID`、`PCODE`、`OCODE`、`AUFNR`、`SPEC`、`OPERATION`、`GSTRS`、`ACTUAL_START_TIME`、`ACTUAL_END_TIME` 等。响应附加 `stationCode`：优先取 `LINE_CODE`，否则使用 `SPEC`，再否则 `OPERATION`；原始工位字段始终保留。工位 TSV 流式、批量流式和包装数量接口已移除。 工位计算可使用 `GET /api/views/Z_V_ZMES_T_001/all` 批量读取：每次最多返回 100,000 条，使用相同筛选条件和字段投影；结果未超过上限时通过一次游标读取确定总数，避免额外计数和排序分页。调用方必须校验 `len(items) == total`，不相等时按日期或生产订单拆分批量查询，不能使用截断结果计算直通率；质量监控工位计算已移除普通分页回退。
 
 ### 序列号绑定原始数据 `GET /api/views/ZSGV_ZPP_SERNOLIST`
 
@@ -250,7 +246,7 @@ GET /api/views/{viewID}/detail?id={id}
 | `needReturn` / `revoked` | string | 仅 `SCS_CHANGE`：按是否归还、是否撤销精确匹配 |
 | `company5000` | string | SCS 视图：传 `true`、`1`、`yes`、`是` 筛选 `is_5000_company=true`，其他值筛选 false |
 
-日期行为：`ZSGV_ZSD124` 与 `Z_V_ZMES_T_001` 都按计划开始时间 `GSTRS` 筛选，同时兼容 `YYYY-MM-DD` 和 `YYYYMMDD` 存量格式。上下限均为包含关系。工位直读 HANA 时，后端会把日期统一转换为 `YYYYMMDD` 后与 `GSTRS` 比较。
+日期行为：`ZSGV_ZSD124` 与 `Z_V_ZMES_T_001` 都按计划开始时间 `GSTRS` 筛选，同时兼容 `YYYY-MM-DD` 和 `YYYYMMDD` 存量格式。上下限均为包含关系。
 
 响应示例：
 

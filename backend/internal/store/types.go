@@ -7,7 +7,6 @@ import (
 
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
-	"golang.org/x/sync/singleflight"
 )
 
 type Store struct {
@@ -16,15 +15,8 @@ type Store struct {
 	repairs             *mongo.Collection
 	orders              *mongo.Collection
 	views               map[string]*mongo.Collection
-	stationHANA         *stationHANA
-	stationErr          error
-	stationRequested    bool
 	bomCacheMu          sync.RWMutex
 	bomCache            map[string]bomStreamCacheEntry
-	stationCacheMu      sync.RWMutex
-	stationLoads        singleflight.Group
-	stationCache        map[string]bomStreamCacheEntry
-	stationWarmDone     chan struct{}
 	companyOrderCacheMu sync.Mutex
 	companyOrderCacheAt time.Time
 	companyOrderCache   []string
@@ -158,11 +150,9 @@ const MaxBulkQueryRows = 10000
 const MaxOrderQueryRows = MaxBulkQueryRows
 const MaxViewQueryRows = MaxBulkQueryRows
 const MaxSCSStreamRows = 250000
-const MaxStationStreamRows = 500000
 const MaxOrderOptionValues = 20000
 
 var bomStreamFields = []string{"id", "AUFNR_1", "AUART", "VBELN_EX", "GSTRS", "GSTRS_DATE", "MENGE_A", "MATNR", "LGORT", "BUDAT_MKPF", "MAKTX"}
-var stationStreamFields = []string{"id", "PCODE", "AUFNR", "KDAUF", "GSTRS", "SPEC", "SPEC_DESC", "OPERATION", "ACTUAL_START_TIME", "ACTUAL_END_TIME", "MAKTX_TH", "LGORT", "LINE_CODE"}
 var tsvSanitizer = strings.NewReplacer("\t", " ", "\r", " ", "\n", " ")
 
 type OrderStatsResult struct {
@@ -234,11 +224,6 @@ type ViewStatsResult struct {
 	LatestCreatedAt                string   `json:"latestCreatedAt,omitempty"`
 	Is5000Count                    int64    `json:"is5000Count,omitempty"`
 }
-type PackagingCount struct {
-	ProductionOrder string `json:"productionOrder"`
-	Quantity        int64  `json:"quantity"`
-	MissingBarcode  bool   `json:"missingBarcode"`
-}
 type ViewDetailResult struct {
 	Item   bson.M  `json:"item"`
 	Fields []Field `json:"fields"`
@@ -283,8 +268,6 @@ var viewAllProjections = map[string]bson.M{
 const viewListIndexName = "api_view_list_order"
 const bomStreamCacheTTL = 60 * time.Second
 const bomStreamCacheMaxBytes = 64 << 20
-const stationStreamCacheTTL = time.Hour
-const stationStreamCacheMaxBytes = 96 << 20
 const companyOrderCacheTTL = 10 * time.Minute
 const orderOptionsCacheTTL = 10 * time.Minute
 const viewOptionsCacheTTL = 10 * time.Minute

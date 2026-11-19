@@ -1,6 +1,6 @@
 # 产线故障数据库
 
-MongoDB 数据库网关 + Vite/React 查询工作台。后端直接读取项目根目录 `.env`；维修、订单、BOM 和 SCS 数据来自 MongoDB，工位过站视图默认直读 SAP HANA。
+MongoDB 数据库网关 + Vite/React 查询工作台。后端直接读取项目根目录 `.env`；维修、订单、BOM、SCS 和工位记录均从 MongoDB 查询，HANA 数据由 Python 同步脚本写入 MongoDB。
 
 ## 初始化开发环境
 
@@ -12,7 +12,7 @@ MongoDB 数据库网关 + Vite/React 查询工作台。后端直接读取项目�
 
 脚本会幂等地创建 `.venv`、安装 Python 依赖、下载 Go 模块、执行前端 `npm ci`，并在根目录不存在 `.env` 时从 `backend/.env.example` 生成初始配置。已有 `.env` 不会被覆盖；生成后请按实际 MongoDB 和 SAP 环境补充凭据。
 
-如果当前机器只运行前后端查询、不执行 Python HANA 同步，可跳过 `hdbcli`。工位看板直读 HANA 使用 Go 内置驱动，不依赖 `hdbcli`：
+如果当前机器只运行前后端查询、不执行 Python HANA 同步，可跳过 `hdbcli`：
 
 ```bash
 ./scripts/prepare_env.sh --skip-hdbcli
@@ -99,11 +99,15 @@ BACKEND_PORT=18080 FRONTEND_PORT=5174 ./scripts/devctl.sh restart
 
 ## 部署更新
 
-在本地项目目录执行 `bash scripts/deploy.sh`。脚本会提交全部本地改动并推送当前分支，然后通过 SSH 更新 `root@10.17.150.235:/data/production-fault-database`。脚本内置内部部署账号和密码，密码认证依赖本机安装 `sshpass`。可用 `DEPLOY_SSH_PASSWORD` 覆盖默认密码，设为空值时使用密钥或交互式密码。
+在本地项目目录执行：
 
-线上 `git pull --ff-only`、依赖下载使用 `http://10.2.51.151:7897` HTTP 代理及 `socks5://10.2.51.151:7897` SOCKS 代理。脚本检查线上分支、工作区和运行中的同步进程；更新依赖并完成前后端构建后，沿用 `devctl.sh` 重启服务，最后输出提交号、任务数量及健康检查结果。服务进程不会继承部署代理。
+```bash
+bash scripts/deploy.sh
+```
 
-服务器 Node 版本不兼容时，在 `.run/node` 安装校验 SHA256 的 Node 22.23.3，后续 `devctl.sh` 也会使用该运行环境。默认端口沿用线上 `.env` 的 `PORT`，前端为 `5174`。部署失败会以非零状态退出；构建失败发生在停止服务之前。`bash scripts/deploy.sh --help` 列出可覆盖的地址、目录、代理等环境变量。
+脚本在本机编译 Linux 后端和前端，将 Git 跟踪文件及未忽略的新增文件、构建产物上传到 `nc235:/data/production-fault-database`，直接更新远端现有项目目录。远端 `.env`、虚拟环境、依赖、运行数据和未覆盖文件保留；被覆盖的远端文件和旧后端备份到 `.run/deploy-backups/`。脚本重启前后端并检查健康接口和前端页面；失败时尝试恢复备份并重启。部署期间如果同步任务正在运行，脚本会停止部署。
+
+默认使用 SSH key 或交互式认证。若环境必须使用密码，可设置 `DEPLOY_SSH_PASSWORD`；本机需要安装 `sshpass`。常用覆盖项为 `DEPLOY_SSH_TARGET`、`DEPLOY_REMOTE_DIR`、`BACKEND_PORT` 和 `FRONTEND_PORT`。Git 忽略文件（包括 `.env` 和日志）不会上传；不会自动删除远端独有的文件或备份。整个流程不提交代码，也不在服务器编译或下载依赖。
 
 ## SAP 数据同步
 
@@ -345,13 +349,12 @@ MongoDB 租约锁防止并发运行。`SYNC_PYTHON` 指定 Python 解释器，`S
   顺序同步并清洗；任一阶段失败会停止后续步骤。任务完成后前端自动刷新维修故障
   和销售订单两个看板，同步期间按钮显示“同步中”，重复点击会收到 HTTP `409`。
 
-前端同时提供 HANA 和 SCS 视图看板：**订单过账**对应 `ZSGV_ZSD124`、**序列号绑定**对应
+前端同时提供视图看板：**订单过账**对应 `ZSGV_ZSD124`、**序列号绑定**对应
 `ZSGV_ZPP_SERNOLIST`、**工位记录**对应 `Z_V_ZMES_T_001`。工位记录默认读取按销售订单生产订单筛选后的 MongoDB 表 `station_records_sales_orders_sap`，
 其余看板从对应 MongoDB 集合读取数据；均支持关键字搜索、分页、记录详情和（有日期字段的视图）起止日期筛选；
 页面显示数据来源、数据时间区间和最新同步时间。后端接口分别为
 `GET /api/views/{viewID}`、`GET /api/views/{viewID}/stats` 与
-`GET /api/views/{viewID}/detail?id=...`，允许 docs 中登记的 HANA 和 SCS 视图 ID。工位看板刷新会直读 HANA；
-设置 `STATION_VIEW_SOURCE=mongo` 可临时回退到原有 MongoDB 读取路径。
+`GET /api/views/{viewID}/detail?id=...`，允许 docs 中登记的视图 ID。
 
 订单 BOM 过账看板提供“导出销售订单为空”按钮。该导出保留当前的生产订单、物料和日期筛选，且只导出
 `VBELN_EX` 为空、空白、`null` 或缺失的 BOM 行。

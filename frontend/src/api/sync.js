@@ -1,4 +1,4 @@
-import { get, post } from './client';
+import { get, post, request } from './client';
 export const syncStatus = () => get('/api/sync/status');
 export const startSync = () => post('/api/sync/incremental');
 export const dataStatus = () => get('/api/data-status');
@@ -7,3 +7,7 @@ export const syncRuns = (limit = 20) => get('/api/sync/runs', { limit });
 export const syncRun = id => get(`/api/sync/runs/${encodeURIComponent(id)}`);
 export const createSyncRun = body => post('/api/sync/runs', body);
 export const retrySyncRun = id => post(`/api/sync/runs/${encodeURIComponent(id)}/retry`);
+export const dataCheckConfig = () => get('/api/data-check/config');
+export const saveDataCheckConfig = body => request('/api/data-check/config', { method: 'PUT', body });
+export const startDataCheck = () => post('/api/data-check/run');
+export const dataCheckRuns = (limit = 10) => get('/api/data-check/runs', { limit });

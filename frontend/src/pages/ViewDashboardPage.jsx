@@ -13,7 +13,7 @@ import { ModelSelect } from '../components/ModelSelect';
 import { Pagination } from '../components/Pagination';
 import { Stat, Stats } from '../components/Stats';
 import { downloadCsv } from '../utils/export';
-import { formatCell, formatDate, formatDateRange, formatNumber } from '../utils/formatters';
+import { formatBusinessDate, formatCell, formatDate, formatDateRange, formatNumber } from '../utils/formatters';
 
 const emptyStats = { total: 0, salesOrders: 0, productionOrders: 0, missingSalesOrder: 0, missingProductionOrder: 0, missingProductionOrderDistinct: 0, is5000Count: 0, dataStartDate: '', dataEndDate: '', latestSyncedAt: '' };
 const initialFilters = { keyword: '', productionOrder: '', salesOrder: '', productModel: '', from: '', to: '', dateFrom: '', dateTo: '', stationCode: '', sn: '', base: '', orderType: '', materialCode: '', cpx: '', headOrder: '', itemOrder: '', doaCode: '', status: '', judgment: '', customer: '', serviceOrder: '', changeType: '', partNumber: '', partSn: '', operator: '', needReturn: '', revoked: '', company5000: '' };
@@ -88,8 +88,14 @@ export function ViewDashboardPage({ config, modelOptions = [], setConnected, set
     }
   };
   const stats = resource.stats;
+  const latestStationRecordTime = config.id === 'Z_V_ZMES_T_001' && resource.page === 1
+    ? formatCell(resource.items[0]?.SPEC_TIME)
+    : null;
+  const latestBOMPostingDate = config.id === 'ZSGV_ZSD124' && stats.dataEndDate
+    ? formatBusinessDate(stats.dataEndDate)
+    : null;
   return <main>
-    <Hero title={config.title} detail={config.detail} meta={[{ label: bilingual ? '数据来源 / Data source' : '数据来源', value: config.source }, { label: bilingual ? '数据区间 / Data period' : '数据区间', value: formatDateRange(stats.dataStartDate, stats.dataEndDate) }, { label: bilingual ? '最新同步 / Latest sync' : '最新同步', value: formatDate(stats.latestSyncedAt) }]} />
+    <Hero title={config.title} detail={config.detail} meta={[{ label: bilingual ? '数据来源 / Data source' : '数据来源', value: config.source }, { label: bilingual ? '数据区间 / Data period' : '数据区间', value: formatDateRange(stats.dataStartDate, stats.dataEndDate) }, ...(latestStationRecordTime ? [{ label: '最新一条记录操作时间', value: latestStationRecordTime }] : []), ...(latestBOMPostingDate ? [{ label: '最新过账日期', value: latestBOMPostingDate }] : []), { label: bilingual ? '最新同步 / Latest sync' : '最新同步', value: formatDate(stats.latestSyncedAt) }]} />
     {!resource.preview && <Stats className="view-stats"><Stat icon={<Boxes />} label={bilingual ? '记录总数 / Total records' : (config.totalStatLabel || '记录总数')} value={formatNumber(config.totalStatKey ? stats[config.totalStatKey] : resource.total)} tone="blue" />{(config.stats || []).map(item => <Stat key={item.key} icon={item.tone === 'red' || item.tone === 'orange' ? <AlertTriangle /> : <ClipboardList />} label={item.label} value={formatNumber(stats[item.key])} tone={item.tone} />)}</Stats>}
     <section className="workspace"><div className="section-head"><div><p className="eyebrow">{config.id}</p><h2>{bilingual ? `${config.title} 明细 / Details` : `${config.title}明细`}</h2></div><span className="record-count">{resource.preview ? `当前页 ${resource.items.length} 条` : `共 ${formatNumber(resource.total)} ${config.resultCountUnit || '条记录'}`}</span></div>
       <form className="filters dashboard-filters filter-form" aria-label={`${config.title}搜索条件`} onSubmit={submit}>

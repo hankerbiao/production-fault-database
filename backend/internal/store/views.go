@@ -11,9 +11,6 @@ import (
 )
 
 func (s *Store) ViewList(ctx context.Context, viewID string, f ViewFilters, page, pageSize int, preview, includeTotal bool) (ViewListResult, error) {
-	if viewID == stationHANAViewID && s.stationRequested {
-		return s.stationViewList(ctx, f, page, pageSize, preview, includeTotal)
-	}
 	config, ok := documentedViews[viewID]
 	if !ok {
 		return ViewListResult{}, fmt.Errorf("unknown view: %s", viewID)
@@ -94,9 +91,6 @@ func (s *Store) ViewList(ctx context.Context, viewID string, f ViewFilters, page
 // a narrow projection and a hard row bound instead of forcing thousands of
 // small HTTP pages across the gateway boundary.
 func (s *Store) ViewListAll(ctx context.Context, viewID string, f ViewFilters) (ViewListResult, error) {
-	if viewID == stationHANAViewID && s.stationRequested {
-		return s.stationViewListAll(ctx, f)
-	}
 	config, ok := documentedViews[viewID]
 	if !ok {
 		return ViewListResult{}, fmt.Errorf("unknown view: %s", viewID)
@@ -108,6 +102,30 @@ func (s *Store) ViewListAll(ctx context.Context, viewID string, f ViewFilters) (
 	}
 	dateField := viewDateField(viewID, f, config.dateField)
 	filter := viewFilter(viewID, f, config.searchFields, dateField)
+	// Station calculations read a bounded cursor once, without a sort/skip for
+	// every 100 rows. Only count separately when the bulk result is truncated.
+	if viewID == "Z_V_ZMES_T_001" {
+		const stationBulkLimit = 100000
+		cur, err := s.views[viewID].Find(ctx, filter, options.Find().
+			SetProjection(viewAllProjections[viewID]).SetLimit(stationBulkLimit+1).SetBatchSize(10000))
+		if err != nil {
+			return ViewListResult{}, err
+		}
+		defer cur.Close(ctx)
+		docs := make([]bson.M, 0)
+		if err := cur.All(ctx, &docs); err != nil {
+			return ViewListResult{}, err
+		}
+		total := int64(len(docs))
+		if len(docs) > stationBulkLimit {
+			total, err = s.views[viewID].CountDocuments(ctx, filter)
+			if err != nil {
+				return ViewListResult{}, err
+			}
+			docs = docs[:stationBulkLimit]
+		}
+		return ViewListResult{Items: docs, Page: 1, PageSize: len(docs), Total: total}, nil
+	}
 	total, err := s.views[viewID].CountDocuments(ctx, filter)
 	if err != nil {
 		return ViewListResult{}, err
@@ -132,9 +150,6 @@ func (s *Store) ViewListAll(ctx context.Context, viewID string, f ViewFilters) (
 }
 
 func (s *Store) ViewDetail(ctx context.Context, viewID, id string) (ViewDetailResult, error) {
-	if viewID == stationHANAViewID && s.stationRequested {
-		return s.stationViewDetail(ctx, id)
-	}
 	if _, ok := documentedViews[viewID]; !ok {
 		return ViewDetailResult{}, fmt.Errorf("unknown view: %s", viewID)
 	}
@@ -148,9 +163,6 @@ func (s *Store) ViewDetail(ctx context.Context, viewID, id string) (ViewDetailRe
 }
 
 func (s *Store) ViewStats(ctx context.Context, viewID string, f ViewFilters) (ViewStatsResult, error) {
-	if viewID == stationHANAViewID && s.stationRequested {
-		return s.stationViewStats(ctx, f)
-	}
 	config, ok := documentedViews[viewID]
 	if !ok {
 		return ViewStatsResult{}, fmt.Errorf("unknown view: %s", viewID)

@@ -34,6 +34,7 @@ type syncRunRequest struct {
 	TaskIDs   []string `json:"taskIds,omitempty"`
 	StartDate string   `json:"startDate,omitempty"`
 	EndDate   string   `json:"endDate,omitempty"`
+	Source    string   `json:"source,omitempty"`
 }
 
 var managedSyncTasks = syncmanifest.Tasks()
@@ -87,7 +88,11 @@ func (m *syncManager) startRun(request syncRunRequest) (syncStatus, error) {
 		python = "python"
 	}
 	runID := fmt.Sprintf("api-%d", time.Now().UTC().UnixNano())
-	args := []string{script, "run", "--run-id", runID, "--mode", request.Mode, "--source", "api"}
+	source := request.Source
+	if source == "" {
+		source = "api"
+	}
+	args := []string{script, "run", "--run-id", runID, "--mode", request.Mode, "--source", source}
 	if request.StartDate != "" {
 		args = append(args, "--start-date", request.StartDate)
 	}
@@ -143,22 +148,28 @@ func runSyncCommand(python, script string, args []string) (map[string]any, error
 }
 
 func syncScriptDir() (string, error) {
+	containsSyncScripts := func(path string) bool {
+		info, statErr := os.Stat(path)
+		if statErr != nil || !info.IsDir() {
+			return false
+		}
+		_, statErr = os.Stat(filepath.Join(path, "scripts", "sync", "syncctl.py"))
+		return statErr == nil
+	}
 	if configured := os.Getenv("SYNC_SCRIPT_DIR"); configured != "" {
 		path, err := filepath.Abs(configured)
-		if err == nil {
-			if info, statErr := os.Stat(path); statErr == nil && info.IsDir() {
-				return path, nil
-			}
+		if err == nil && containsSyncScripts(path) {
+			return path, nil
 		}
-		return "", fmt.Errorf("找不到同步脚本目录 %s", configured)
+		if filepath.IsAbs(configured) {
+			return "", fmt.Errorf("找不到同步脚本目录 %s", configured)
+		}
 	}
-	candidates := []string{"..", "."}
+	candidates := []string{".", ".."}
 	for _, candidate := range candidates {
 		path, err := filepath.Abs(candidate)
-		if err == nil {
-			if info, statErr := os.Stat(path); statErr == nil && info.IsDir() {
-				return path, nil
-			}
+		if err == nil && containsSyncScripts(path) {
+			return path, nil
 		}
 	}
 	return "", fmt.Errorf("找不到同步脚本目录，请配置 SYNC_SCRIPT_DIR")

@@ -592,7 +592,7 @@ def build_parser() -> argparse.ArgumentParser:
     mode.add_argument("--apply", action="store_true", help="写入维修快照、回填订单，并清理窗口内旧记录")
     parser.set_defaults(
         repair_collection=env("REPAIR_COLLECTION", "repair_records_sap"),
-        station_collection=env("STATION_COLLECTION", "station_records_sap"),
+        station_collection=env("STATION_SALES_ORDER_COLLECTION", "station_records_sales_orders_sap"),
         sales_order_collection=env("TARGET_COLLECTION", "sales_orders_sap"),
         audit_collection=env("REPAIR_ORDER_BACKFILL_AUDIT_COLLECTION", "repair_order_backfill_audit"),
         sync_repair_hana=True,

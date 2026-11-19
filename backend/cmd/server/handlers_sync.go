@@ -106,6 +106,9 @@ func timeValue(value any) string {
 	if instant, ok := value.(time.Time); ok {
 		return instant.UTC().Format(time.RFC3339)
 	}
+	if instant, ok := value.(interface{ Time() time.Time }); ok {
+		return instant.Time().UTC().Format(time.RFC3339)
+	}
 	return ""
 }
 
@@ -115,6 +118,16 @@ func mapValue(value any) map[string]any {
 	}
 	if result, ok := value.(map[string]any); ok {
 		return result
+	}
+	return nil
+}
+
+func syncStageForTask(run store.SyncRun, taskID string) map[string]any {
+	for _, item := range anySlice(run["stages"]) {
+		stage := mapValue(item)
+		if textValue(stage["task_id"]) == taskID {
+			return stage
+		}
 	}
 	return nil
 }
@@ -166,9 +179,60 @@ func (s *server) syncTasks(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	var latestRepairRun, latestSuccessfulRepairRun store.SyncRun
+	if run, err := s.store.LatestTaskSyncRun(r.Context(), "repair_records", false); err == nil {
+		latestRepairRun = run
+		if stage := syncStageForTask(run, "repair_records"); stage != nil {
+			stateByTask["repair_records"] = textValue(stage["state"])
+		}
+	}
+	if run, err := s.store.LatestTaskSyncRun(r.Context(), "repair_records", true); err == nil {
+		latestSuccessfulRepairRun = run
+	}
+	nextDashboardSync := nextDashboardSyncAt(time.Now())
+	nextSCSSync := nextSCSSyncAt(time.Now())
 	tasks := make([]map[string]any, len(managedSyncTasks))
 	for index, task := range managedSyncTasks {
-		tasks[index] = map[string]any{"id": task.ID, "label": task.Label, "dependencies": task.Dependencies, "fullSupported": task.FullSupported, "state": stateByTask[task.ID]}
+		item := map[string]any{"id": task.ID, "label": task.Label, "dependencies": task.Dependencies, "fullSupported": task.FullSupported, "state": stateByTask[task.ID], "scheduleTimezone": "Asia/Shanghai"}
+		switch task.ID {
+		case "station_records_sales_orders":
+			item["schedule"] = "每 2 小时偶数时 :05（本机 crontab）"
+			item["nextSyncAt"] = nextLocalStationSyncAt(time.Now()).Format(time.RFC3339)
+		case "repair_records":
+			item["schedule"] = "每 2 小时奇数时 :25（本机 crontab）"
+			item["nextSyncAt"] = nextLocalRepairSyncAt(time.Now()).Format(time.RFC3339)
+			if latestRepairRun != nil {
+				item["lastRunAt"] = timeValue(latestRepairRun["started_at"])
+				if stage := syncStageForTask(latestRepairRun, "repair_records"); stage != nil {
+					if startedAt := timeValue(stage["started_at"]); startedAt != "" {
+						item["lastRunAt"] = startedAt
+					}
+				}
+			}
+			if latestSuccessfulRepairRun != nil {
+				item["lastSuccessAt"] = timeValue(latestSuccessfulRepairRun["finished_at"])
+				if stage := syncStageForTask(latestSuccessfulRepairRun, "repair_records"); stage != nil {
+					if summary := mapValue(stage["summary"]); summary != nil {
+						if hanaSync := mapValue(summary["hana_sync"]); hanaSync != nil {
+							item["latestDataAt"] = textValue(hanaSync["latest_source_time"])
+						}
+					}
+				}
+			}
+		case "order_bom_postings", "order_bom_planned_start":
+			item["schedule"] = "每 2 小时偶数时 :45（本机 crontab）"
+			item["nextSyncAt"] = nextLocalOrderBOMSyncAt(time.Now()).Format(time.RFC3339)
+		case "sales_orders":
+			item["schedule"] = "本机 HANA 任务依赖每 2 小时刷新；看板时段仍会同步"
+			item["nextSyncAt"] = nextSalesOrderDependencySyncAt(time.Now()).Format(time.RFC3339)
+		case "scs_doa", "scs_change":
+			item["schedule"] = "每日 18:00"
+			item["nextSyncAt"] = nextSCSSync.Format(time.RFC3339)
+		default:
+			item["schedule"] = "每日 08:00、12:00、18:00、22:00"
+			item["nextSyncAt"] = nextDashboardSync.Format(time.RFC3339)
+		}
+		tasks[index] = item
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": tasks})
 }

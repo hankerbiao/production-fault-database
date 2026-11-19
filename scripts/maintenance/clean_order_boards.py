@@ -56,7 +56,7 @@ class BoardSpec:
 
 SPECS = {
     "bom": BoardSpec("bom", "BOM_COLLECTION", "order_bom_postings_sap", "ZSGV_ZSD124", "AUFNR_1", "VBELN_EX", "BUDAT_MKPF"),
-    "station": BoardSpec("station", "STATION_COLLECTION", "station_records_sap", "Z_V_ZMES_T_001", "AUFNR", "KDAUF", "ACTUAL_START_TIME"),
+    "station": BoardSpec("station", "STATION_SALES_ORDER_COLLECTION", "station_records_sales_orders_sap", "Z_V_ZMES_T_001_SALES_ORDERS", "AUFNR", "KDAUF", "ACTUAL_START_TIME"),
 }
 
 

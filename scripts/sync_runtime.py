@@ -1,6 +1,7 @@
 """Shared resource leases, guarded cleanup, and synchronization contracts."""
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import json
 import os
@@ -10,6 +11,7 @@ import tempfile
 import threading
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any, Callable, Iterator
 from uuid import uuid4
 
@@ -20,6 +22,7 @@ from pymongo.errors import DuplicateKeyError
 
 _active_leases: set["Lease"] = set()
 _lease_guard = threading.Lock()
+DEPLOY_LOCK_PATH = Path(__file__).resolve().parents[1] / ".run" / "deploy.lock"
 
 
 def order_key(value: Any) -> str:
@@ -118,13 +121,22 @@ def resource_lock(db: Any, collection: str, *, ttl_seconds: int | None = None) -
     ttl_seconds = ttl_seconds if ttl_seconds is not None else int(os.getenv("SYNC_MONGO_LOCK_TTL_SECONDS", "120"))
     if ttl_seconds < 1:
         raise ValueError("SYNC_MONGO_LOCK_TTL_SECONDS 必须大于 0")
-    lease = Lease(db, f"dataset:{collection}", ttl_seconds=ttl_seconds,
-                  collection=os.getenv("SYNC_LOCK_COLLECTION", "sync_locks"))
-    lease.acquire()
-    try:
-        yield lease
-    finally:
-        lease.close()
+    DEPLOY_LOCK_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with DEPLOY_LOCK_PATH.open("a+") as deployment_lock:
+        try:
+            fcntl.flock(deployment_lock.fileno(), fcntl.LOCK_SH | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise RuntimeError("部署正在运行，拒绝启动同步任务") from exc
+        try:
+            lease = Lease(db, f"dataset:{collection}", ttl_seconds=ttl_seconds,
+                          collection=os.getenv("SYNC_LOCK_COLLECTION", "sync_locks"))
+            lease.acquire()
+            try:
+                yield lease
+            finally:
+                lease.close()
+        finally:
+            fcntl.flock(deployment_lock.fileno(), fcntl.LOCK_UN)
 
 
 def validate_cleanup(existing: int, stale: int, source_rows: int, allow: bool = False) -> None:

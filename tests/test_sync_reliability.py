@@ -3,6 +3,7 @@ from contextlib import contextmanager
 from types import SimpleNamespace
 from unittest.mock import Mock
 import sys
+import fcntl
 
 import pytest
 
@@ -10,6 +11,17 @@ from scripts.sources.hana import hana_view_sync as hana
 from scripts.sources import scs_doa_sync as doa
 from scripts.sync import syncctl
 from scripts import sync_runtime as runtime
+
+
+def test_deployment_lock_blocks_write_sync(monkeypatch, tmp_path):
+    lock_path = tmp_path / "deploy.lock"
+    monkeypatch.setattr(runtime, "DEPLOY_LOCK_PATH", lock_path)
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with lock_path.open("a+") as deployment_lock:
+        fcntl.flock(deployment_lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        with pytest.raises(RuntimeError, match="部署正在运行"):
+            with runtime.resource_lock({}, "station"):
+                pass
 
 
 def test_station_lookback_applies_to_timestamp():

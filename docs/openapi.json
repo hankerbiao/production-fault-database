@@ -13,7 +13,8 @@
     { "name": "health", "description": "健康检查" },
     { "name": "faults", "description": "维修故障记录" },
     { "name": "orders", "description": "销售订单" },
-    { "name": "views", "description": "HANA 原始视图" },
+    { "name": "views", "description": "同步到 MongoDB 的业务视图" },
+    { "name": "hana", "description": "实时 HANA 查询" },
     { "name": "scs", "description": "SCS 服务数据" },
     { "name": "sync", "description": "同步任务和数据状态" }
   ],
@@ -67,6 +68,23 @@
         "responses": {
           "200": { "description": "MongoDB 可用", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Health" } } } },
           "503": { "$ref": "#/components/responses/ServiceUnavailable" }
+        }
+      }
+    },
+    "/api/hana/material-vendor": {
+      "get": {
+        "tags": ["hana"],
+        "operationId": "getHanaMaterialVendor",
+        "description": "通过完整物料号或末尾 8 个字符查询 HANA 视图 BW_LOCAL.BI::ZSGV_R15_BI 中去重后的厂商。每次请求建立并关闭一个 HANA 连接，最多并发执行一个查询。",
+        "parameters": [
+          { "name": "materialNumber", "in": "query", "required": true, "description": "物料号，支持完整 MATNR 精确匹配和末尾 8 个字符匹配。", "schema": { "type": "string", "minLength": 1, "maxLength": 40, "example": "B2400123" } }
+        ],
+        "responses": {
+          "200": { "description": "厂商查询结果", "content": { "application/json": { "schema": { "type": "object", "required": ["materialNumber", "matchedSuffix", "count", "vendors"], "properties": { "materialNumber": { "type": "string" }, "matchedSuffix": { "type": "string", "description": "用于后缀匹配的最后 8 个字符。" }, "count": { "type": "integer" }, "vendors": { "type": "array", "items": { "type": "string" } } } } } } },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "429": { "description": "另一个 HANA 查询正在执行，请稍后重试。" },
+          "502": { "$ref": "#/components/responses/ServerError" },
+          "504": { "description": "HANA 查询超过 20 秒超时。" }
         }
       }
     },
@@ -209,7 +227,7 @@
     },
     "/api/views/{viewID}/stream": {
       "get": {
-        "tags": ["views"], "operationId": "streamViewRecords", "description": "以 TSV 下载视图数据；支持 ZSGV_ZSD124、Z_V_ZMES_T_001、SCS_DOA 和 SCS_CHANGE。SCS 流式结果不受 /all 的 10,000 条上限限制。",
+        "tags": ["views"], "operationId": "streamViewRecords", "description": "以 TSV 下载视图数据；支持 ZSGV_ZSD124、SCS_DOA 和 SCS_CHANGE。工位记录不提供流式接口；SCS 流式结果不受 /all 的 10,000 条上限限制。",
         "parameters": [{ "$ref": "#/components/parameters/ViewID" }, { "$ref": "#/components/parameters/Keyword" }, { "$ref": "#/components/parameters/From" }, { "$ref": "#/components/parameters/To" }, { "$ref": "#/components/parameters/DateFrom" }, { "$ref": "#/components/parameters/DateTo" }, { "$ref": "#/components/parameters/AcceptedDateFrom" }, { "$ref": "#/components/parameters/AcceptedDateTo" }, { "$ref": "#/components/parameters/ProductionOrder" }, { "$ref": "#/components/parameters/SalesOrder" }, { "$ref": "#/components/parameters/StationCode" }, { "$ref": "#/components/parameters/SN" }, { "$ref": "#/components/parameters/Base" }, { "$ref": "#/components/parameters/ProductModel" }, { "$ref": "#/components/parameters/DOACode" }, { "$ref": "#/components/parameters/DOAType" }, { "$ref": "#/components/parameters/Status" }, { "$ref": "#/components/parameters/Judgment" }, { "$ref": "#/components/parameters/EnrichmentStatus" }, { "$ref": "#/components/parameters/Customer" }, { "$ref": "#/components/parameters/ServiceOrder" }, { "$ref": "#/components/parameters/ChangeType" }, { "$ref": "#/components/parameters/PartNumber" }, { "$ref": "#/components/parameters/PartSN" }, { "$ref": "#/components/parameters/Operator" }, { "$ref": "#/components/parameters/NeedReturn" }, { "$ref": "#/components/parameters/Revoked" }, { "$ref": "#/components/parameters/Company5000" }, { "$ref": "#/components/parameters/MissingSalesOrder" }, { "$ref": "#/components/parameters/MaterialCode" }],
         "responses": { "200": { "description": "TSV 文件", "content": { "text/tab-separated-values": { "schema": { "type": "string" } } } }, "400": { "$ref": "#/components/responses/BadRequest" }, "501": { "$ref": "#/components/responses/NotImplemented" } }
       }

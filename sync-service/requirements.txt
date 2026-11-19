@@ -1,0 +1,10 @@
+# Runtime dependencies for MongoDB/HANA synchronization and cleanup scripts
+pymongo>=4.6,<5
+httpx>=0.25,<1
+hdbcli>=2.20,<3
+
+# Test tooling
+pytest>=7.4,<9
+
+fastapi>=0.110,<1
+uvicorn>=0.27,<1

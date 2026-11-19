@@ -90,6 +90,7 @@ def test_aggregate_preserves_order_lines():
     docs, stats = sync.aggregate("SG", rows, datetime(2026, 1, 1, tzinfo=timezone.utc))
     assert stats == {"fetched": 3, "unique": 1, "skipped": 1}
     assert docs[0]["_id"] == "SG:100" and docs[0]["record_count"] == 2
+    assert docs[0]["is_overseas"] is False
     assert docs[0]["order_quantity"] == 1002 and docs[0]["storage_quantity"] == 5
     assert sync.aggregate("KK", rows, datetime.now(timezone.utc))[0][0]["_id"] == "KK:100"
 

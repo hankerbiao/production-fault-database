@@ -18,6 +18,7 @@ type storeAPI interface {
 	DataStatus(context.Context) (store.DataStatus, error)
 	SyncRun(context.Context, string) (store.SyncRun, error)
 	LatestSyncRun(context.Context) (store.SyncRun, error)
+	LatestTaskSyncRun(context.Context, string, bool) (store.SyncRun, error)
 	SyncRuns(context.Context, int) ([]store.SyncRun, error)
 	List(context.Context, store.Filters, int, int, bool) (store.ListResult, error)
 	FaultSNs(context.Context, store.Filters) ([]store.FaultSN, error)
@@ -35,8 +36,6 @@ type storeAPI interface {
 	ViewList(context.Context, string, store.ViewFilters, int, int, bool, bool) (store.ViewListResult, error)
 	ViewListAll(context.Context, string, store.ViewFilters) (store.ViewListResult, error)
 	ViewBOMStream(context.Context, store.ViewFilters, io.Writer) error
-	ViewStationStream(context.Context, store.ViewFilters, io.Writer) error
-	PackagingCounts(context.Context, string) ([]store.PackagingCount, error)
 	ViewSCSStream(context.Context, string, store.ViewFilters, io.Writer) error
 	SCSDevices(context.Context, store.SCSDeviceFilters, int, int) (store.SCSDevicePage, error)
 	ViewDetail(context.Context, string, string) (store.ViewDetailResult, error)

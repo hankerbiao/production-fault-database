@@ -71,6 +71,14 @@ GET /api/orders/detail?id=SG:PO001
 
 维修故障列表允许叠加 `dateFrom`、`dateTo`、`station`、`timeField`、`company5000` 和 `nonCriticalMaterialSerial`。`company5000=yes` 表示维修记录的生产订单号存在于销售订单看板，`company5000=no` 表示不存在。`nonCriticalMaterialSerial` 精确匹配非关键件物料序号 `RECORD01REPAIRM`，多个值用逗号分隔。按 SN 的批量 POST 接口单次不应超过 10,000 个 SN。故障列表逐条返回，不按序列号去重；需要去重时应在结果层明确使用的键和规则。
 
+### 实时 HANA 物料厂商查询
+
+```text
+GET /api/hana/material-vendor?materialNumber=B2400123
+```
+
+接口直接查询 HANA 视图 `BW_LOCAL.BI::ZSGV_R15_BI`，先按完整 `MATNR` 精确匹配，也按输入物料号末尾 8 个字符匹配。响应中的 `vendors` 是去重后的厂商列表。每次请求最多运行一个 HANA 查询；接口为本次调用单独建立连接，查询结束或失败时关闭游标和连接。忙碌时返回 `429`，查询超过 20 秒返回 `504`。
+
 ### 工位、BOM 与序列号绑定
 
 ```text
@@ -80,7 +88,7 @@ GET /api/views/ZSGV_ZPP_SERNOLIST?headSn=HEAD001
 GET /api/views/ZSGV_ZPP_SERNOLIST?itemSn=ITEM001
 ```
 
-`Z_V_ZMES_T_001` 用于工位过程记录，默认直读 HANA 视图，`dateFrom` / `dateTo` 按计划开始时间 `GSTRS` 筛选，兼容 `YYYY-MM-DD` 和 `YYYYMMDD`；设置 `STATION_VIEW_SOURCE=mongo` 可回退到 MongoDB。`ZSGV_ZSD124` 用于 BOM 过账，`ZSGV_ZPP_SERNOLIST` 用于机头/部件序列号映射。BOM、工位和 SCS 视图支持 `GET /api/views/{viewID}/stream` 的 TSV 流式输出，适用于服务端批量计算，不适用于浏览器端无边界加载。
+`Z_V_ZMES_T_001` 用于工位过程记录，查询 `station_records_sales_orders_sap` 集合，`dateFrom` / `dateTo` 按计划开始时间 `GSTRS` 筛选，兼容 `YYYY-MM-DD` 和 `YYYYMMDD`。工位数据由 Python 同步脚本从 HANA 写入 MongoDB；工位 TSV 流式接口已移除。`ZSGV_ZSD124` 用于 BOM 过账，`ZSGV_ZPP_SERNOLIST` 用于机头/部件序列号映射。BOM 和 SCS 视图支持 `GET /api/views/{viewID}/stream` 的 TSV 输出。
 
 ### SCS 数据
 

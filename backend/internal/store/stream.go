@@ -13,7 +13,6 @@ import (
 
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
-	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
@@ -102,94 +101,6 @@ func (s *Store) viewBOMStream(ctx context.Context, f ViewFilters, out io.Writer)
 	return nil
 }
 
-// ViewStationStream exposes the narrow station projection used by station RTY.
-// It avoids JSON map reflection while preserving every matching station row;
-// callers are responsible for applying selective model/base/SN filters.
-func (s *Store) ViewStationStream(ctx context.Context, f ViewFilters, out io.Writer) error {
-	if s.stationRequested {
-		return s.stationViewStationStream(ctx, f, out)
-	}
-	useDefaultFilters := f == (ViewFilters{})
-	if useDefaultFilters {
-		f = defaultStationStreamFilters()
-	}
-	if useDefaultFilters && s.stationWarmDone != nil {
-		select {
-		case <-s.stationWarmDone:
-		case <-ctx.Done():
-			return ctx.Err()
-		}
-	}
-	return s.viewStationStream(ctx, f, out)
-}
-
-// PackagingCounts returns only the distinct host-barcode counts needed by
-// exports, instead of streaming every historical station row across HTTP.
-func (s *Store) PackagingCounts(ctx context.Context, input string) ([]PackagingCount, error) {
-	if s.stationRequested {
-		return s.stationPackagingCounts(ctx, input)
-	}
-	items := make([]any, 0)
-	for _, value := range strings.Split(input, ",") {
-		items = append(items, value)
-	}
-	values := normalizedOrderCandidates(items)
-	if len(values) == 0 {
-		return nil, fmt.Errorf("production orders are required")
-	}
-	pipeline := packagingCountPipeline(values)
-	cur, err := s.views["Z_V_ZMES_T_001"].Aggregate(ctx, pipeline, options.Aggregate().SetAllowDiskUse(true).SetMaxTime(30*time.Second))
-	if err != nil {
-		return nil, err
-	}
-	defer cur.Close(ctx)
-	result := make([]PackagingCount, 0, len(values))
-	if err := cur.All(ctx, &result); err != nil {
-		return nil, err
-	}
-	return result, nil
-}
-
-func packagingCountPipeline(values []string) mongo.Pipeline {
-	filter := bson.M{"AUFNR": bson.M{"$in": values}}
-	barcode := bson.M{"$trim": bson.M{"input": bson.M{"$convert": bson.M{
-		"input": "$PCODE", "to": "string", "onError": "", "onNull": "",
-	}}}}
-	stationValue := func(field string) bson.M {
-		return bson.M{"$trim": bson.M{"input": bson.M{"$convert": bson.M{
-			"input": "$" + field, "to": "string", "onError": "", "onNull": "",
-		}}}}
-	}
-	lineCode, spec, operation := stationValue("LINE_CODE"), stationValue("SPEC"), stationValue("OPERATION")
-	stationSource := bson.M{"$cond": bson.A{
-		bson.M{"$ne": bson.A{lineCode, ""}}, lineCode,
-		bson.M{"$cond": bson.A{bson.M{"$ne": bson.A{spec, ""}}, spec, operation}},
-	}}
-	stationTrimmed := bson.M{"$trim": bson.M{"input": stationSource}}
-	stationColonNormalized := bson.M{"$replaceAll": bson.M{"input": stationTrimmed, "find": "：", "replacement": ":"}}
-	stationBeforeColon := bson.M{"$arrayElemAt": bson.A{bson.M{"$split": bson.A{stationColonNormalized, ":"}}, 0}}
-	stationCode := bson.M{"$trim": bson.M{"input": bson.M{"$arrayElemAt": bson.A{bson.M{"$split": bson.A{stationBeforeColon, "-"}}, -1}}}}
-	return mongo.Pipeline{
-		{{Key: "$match", Value: filter}},
-		{{Key: "$set", Value: bson.M{
-			"_packagingStation": bson.M{"$in": bson.A{stationCode, bson.A{"OP300", "OP310"}}},
-			"_packagingBarcode": barcode,
-			"_packagingOrder":   normalizedOrderExpression("AUFNR"),
-		}}},
-		{{Key: "$match", Value: bson.M{"_packagingStation": true}}},
-		{{Key: "$group", Value: bson.M{
-			"_id":            bson.M{"order": "$_packagingOrder", "barcode": "$_packagingBarcode"},
-			"missingBarcode": bson.M{"$max": bson.M{"$cond": bson.A{bson.M{"$eq": bson.A{"$_packagingBarcode", ""}}, 1, 0}}},
-		}}},
-		{{Key: "$group", Value: bson.M{
-			"_id":            "$_id.order",
-			"quantity":       bson.M{"$sum": bson.M{"$cond": bson.A{bson.M{"$eq": bson.A{"$_id.barcode", ""}}, 0, 1}}},
-			"missingBarcode": bson.M{"$max": "$missingBarcode"},
-		}}},
-		{{Key: "$project", Value: bson.M{"_id": 0, "productionOrder": "$_id", "quantity": 1, "missingBarcode": bson.M{"$gt": bson.A{"$missingBarcode", 0}}}}},
-	}
-}
-
 // ViewSCSStream exposes the normalized SCS source fields for server-side
 // calculations without the 10,000-row JSON endpoint limit.
 func (s *Store) ViewSCSStream(ctx context.Context, viewID string, f ViewFilters, out io.Writer) error {
@@ -248,86 +159,6 @@ func scsStreamFields(viewID string) []string {
 	return []string{"id", "so_code", "customer_name", "device_sn", "change_type", "part_number", "part_sn", "part_name", "operator", "need_return", "is_revoked", "create_time", "is_5000_company"}
 }
 
-func defaultStationStreamFilters() ViewFilters {
-	end := time.Now()
-	return ViewFilters{DateFrom: end.AddDate(0, 0, -29).Format("2006-01-02"), DateTo: end.Format("2006-01-02")}
-}
-
-func (s *Store) prewarmStationStream() {
-	defer close(s.stationWarmDone)
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
-	defer cancel()
-	_ = s.viewStationStream(ctx, defaultStationStreamFilters(), io.Discard)
-}
-
-func (s *Store) viewStationStream(ctx context.Context, f ViewFilters, out io.Writer) error {
-	config, ok := documentedViews["Z_V_ZMES_T_001"]
-	if !ok {
-		return fmt.Errorf("unknown view: Z_V_ZMES_T_001")
-	}
-	filter := viewFilter("Z_V_ZMES_T_001", f, config.searchFields, viewDateField("Z_V_ZMES_T_001", f, config.dateField))
-	cacheKey := stationStreamCacheKey(f)
-	now := time.Now()
-	s.stationCacheMu.RLock()
-	cached, ok := s.stationCache[cacheKey]
-	s.stationCacheMu.RUnlock()
-	if ok {
-		if cached.expiresAt.After(now) {
-			_, err := out.Write(cached.data)
-			return err
-		}
-		s.stationCacheMu.Lock()
-		delete(s.stationCache, cacheKey)
-		s.stationCacheMu.Unlock()
-	}
-	if err := ensureStreamRowLimit(ctx, s.views["Z_V_ZMES_T_001"], filter, MaxStationStreamRows); err != nil {
-		return err
-	}
-	projection := bson.M{"_id": 0, "_source_key": 1}
-	for _, field := range stationStreamFields[1:] {
-		projection[field] = 1
-	}
-	cur, err := s.views["Z_V_ZMES_T_001"].Find(ctx, filter, options.Find().SetProjection(projection).SetLimit(MaxStationStreamRows).SetBatchSize(10000))
-	if err != nil {
-		return err
-	}
-	defer cur.Close(ctx)
-	var snapshot bytes.Buffer
-	w := bufio.NewWriterSize(io.MultiWriter(out, &snapshot), 1<<20)
-	if _, err := io.WriteString(w, strings.Join(stationStreamFields, "\t")+"\n"); err != nil {
-		return err
-	}
-	for cur.Next(ctx) {
-		var doc bson.M
-		if err := cur.Decode(&doc); err != nil {
-			return err
-		}
-		row := make([]string, 0, len(stationStreamFields))
-		row = append(row, csvValue(doc["_source_key"]))
-		for _, field := range stationStreamFields[1:] {
-			row = append(row, csvValue(doc[field]))
-		}
-		for i := range row {
-			row[i] = tsvSanitizer.Replace(row[i])
-		}
-		if _, err := io.WriteString(w, strings.Join(row, "\t")+"\n"); err != nil {
-			return err
-		}
-	}
-	if err := cur.Err(); err != nil {
-		return err
-	}
-	if err := w.Flush(); err != nil {
-		return err
-	}
-	if snapshot.Len() <= stationStreamCacheMaxBytes {
-		s.stationCacheMu.Lock()
-		s.stationCache[cacheKey] = bomStreamCacheEntry{data: snapshot.Bytes(), expiresAt: time.Now().Add(stationStreamCacheTTL)}
-		s.stationCacheMu.Unlock()
-	}
-	return nil
-}
-
 func ensureStreamRowLimit(ctx context.Context, collection interface {
 	CountDocuments(context.Context, interface{}, ...*options.CountOptions) (int64, error)
 }, filter bson.M, limit int) error {
@@ -343,10 +174,6 @@ func ensureStreamRowLimit(ctx context.Context, collection interface {
 
 func bomStreamCacheKey(f ViewFilters) string {
 	return strings.Join([]string{f.Keyword, f.From, f.To, f.DateFrom, f.DateTo, f.StationCode, f.SN, f.ProductionOrder, f.SalesOrder, f.Base, f.ProductModel, f.HeadOrder, f.ItemOrder, f.HeadSN, f.ItemSN, f.MaterialCode, f.CPX, strconv.FormatBool(f.MissingSalesOrder)}, "\x00")
-}
-
-func stationStreamCacheKey(f ViewFilters) string {
-	return strings.Join([]string{f.Keyword, f.From, f.To, f.DateFrom, f.DateTo, f.TimeField, f.StationCode, f.SN, f.ProductionOrder, f.SalesOrder, f.Base, f.ProductModel}, "\x00")
 }
 
 func hasBOMFilter(f ViewFilters) bool {

@@ -381,7 +381,7 @@ def test_dry_run_entry_does_not_acquire_mongo_lease(monkeypatch):
 def test_dry_run_backfills_new_source_rows_without_mutating_local_repairs(monkeypatch):
     from scripts.sync import 增量同步和清洗维修故障记录 as backfill
     db = seed_db(monkeypatch)
-    db["station_records_sap"].docs = [
+    db["station_records_sales_orders_sap"].docs = [
         {"_id": "station", "PCODE": "PC-NEW", "AUFNR": "PO-1", "KDAUF": "SO-1"},
     ]
     source(monkeypatch, [repair(PCODE="PC-NEW", AUFNR="", VBELN="")])

@@ -30,14 +30,12 @@ func TestRepairFilterMatchesNonCriticalMaterialSerial(t *testing.T) {
 	if !ok || len(conditions) != 1 {
 		t.Fatalf("filter=%v", filter)
 	}
-	branches, ok := conditions[0].(bson.M)["$or"].(primitive.A)
-	if !ok || len(branches) != 2 {
+	branches, ok := conditions[0].(bson.M)["RECORD01REPAIRM"].(bson.M)
+	if !ok {
 		t.Fatalf("serial filter=%v", conditions[0])
 	}
-	first := branches[0].(bson.M)["RECORD01REPAIRM"].(bson.M)
-	second := branches[1].(bson.M)["RECORD01REPAIRM"].(bson.M)
-	if first["$regex"] != "^37001343$" || second["$regex"] != "^K5000090$" || first["$options"] != "i" {
-		t.Fatalf("serial patterns=%v %v", first, second)
+	if branches["$in"] == nil {
+		t.Fatalf("serial values=%v", branches)
 	}
 }
 
@@ -47,8 +45,8 @@ func TestRepairFilterMatchesMaterialCode(t *testing.T) {
 	if !ok || len(conditions) != 1 {
 		t.Fatalf("filter=%v", filter)
 	}
-	material := conditions[0].(bson.M)["MATNR"].(bson.M)
-	if material["$regex"] != "^MAT-1$" || material["$options"] != "i" {
+	material := conditions[0].(bson.M)["MATNR"]
+	if material != "MAT-1" {
 		t.Fatalf("material filter=%v", material)
 	}
 }
@@ -139,15 +137,14 @@ func TestOrderOptionFilterScopesToNonEmptyFieldAndBase(t *testing.T) {
 	}
 }
 
-func TestOrderFilterOverseasMatchesMaterialDescription(t *testing.T) {
+func TestOrderFilterOverseasUsesIndexedFlag(t *testing.T) {
 	filter := orderFilter(OrderFilters{Overseas: true, Source: "SG", ProductModel: "Model-A"})
 	conditions := filter["$and"].(primitive.A)
 	if len(conditions) != 3 || conditions[0].(bson.M)["source"] != "SG" {
 		t.Fatalf("overseas filter lost other conditions: %v", filter)
 	}
-	description := conditions[1].(bson.M)["data.MAKTX"].(bson.M)
-	if description["$regex"] != "WW" || description["$options"] != "i" {
-		t.Fatalf("expected case-insensitive WW substring search on material description: %v", description)
+	if conditions[1].(bson.M)["is_overseas"] != true {
+		t.Fatalf("expected exact overseas flag filter: %v", conditions[1])
 	}
 	if filter := orderFilter(OrderFilters{}); len(filter) != 0 {
 		t.Fatalf("unchecked overseas filter must include all orders: %v", filter)
@@ -180,13 +177,27 @@ func TestBatchAndLeadingZeroFilters(t *testing.T) {
 	if len(conditions) != 2 {
 		t.Fatalf("filter=%v", filter)
 	}
-	production := conditions[1].(bson.M)["$or"].(primitive.A)
-	if len(production) != 2 {
-		t.Fatalf("production batch=%v", production)
+	production := conditions[1].(bson.M)["AUFNR"].(bson.M)["$in"].([]string)
+	for _, value := range []string{"123", "000000000123", "0000456", "456"} {
+		if !containsString(production, value) {
+			t.Fatalf("production batch=%v missing %q", production, value)
+		}
 	}
-	first := production[0].(bson.M)["AUFNR"].(bson.M)
-	if first["$regex"] != "^0*123$" {
-		t.Fatalf("leading-zero regex=%v", first)
+}
+
+func TestSCSDeviceFilterUsesExactMongoPredicates(t *testing.T) {
+	filter := scsDeviceFilter(SCSDeviceFilters{Company5000: "true", SalesOrder: "SO-1", ServiceOrder: "SV-1", SN: "SN-1"})
+	encoded, err := bson.MarshalExtJSON(filter, false, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, value := range []string{"is_5000_company", "sales_order", "服务单号", "产品条码"} {
+		if !strings.Contains(string(encoded), value) {
+			t.Fatalf("SCS filter missing %q: %s", value, encoded)
+		}
+	}
+	if strings.Contains(string(encoded), "$regex") {
+		t.Fatalf("SCS filter unexpectedly uses regex: %s", encoded)
 	}
 }
 
@@ -314,33 +325,6 @@ func TestStationViewDateFilterUsesPlannedStartByDefault(t *testing.T) {
 	}
 }
 
-func TestPackagingCountPipelineFiltersExactStationsAndDeduplicatesHostBarcodes(t *testing.T) {
-	input := strings.Join([]string{"000000000001", "2"}, ",")
-	items := make([]any, 0)
-	for _, value := range strings.Split(input, ",") {
-		items = append(items, value)
-	}
-	values := normalizedOrderCandidates(items)
-	if !containsString(values, "1") || !containsString(values, "000000000001") {
-		t.Fatalf("leading-zero variants were not generated: %v", values)
-	}
-	pipeline := packagingCountPipeline(values)
-	encoded, err := bson.MarshalExtJSON(bson.M{"pipeline": pipeline}, false, false)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, code := range []string{"OP300", "OP310", `["OP300","OP310"]`, "$PCODE", "$AUFNR", "$LINE_CODE", "$SPEC", "$OPERATION", "missingBarcode"} {
-		if !strings.Contains(string(encoded), code) {
-			t.Fatalf("aggregation misses %q: %s", code, encoded)
-		}
-	}
-	for _, code := range []string{"OP30\"", "OP320"} {
-		if strings.Contains(string(encoded), code) {
-			t.Fatalf("aggregation unexpectedly includes %q: %s", code, encoded)
-		}
-	}
-}
-
 func TestStationViewFilterUsesPlannedStartWhenRequested(t *testing.T) {
 	filters := ViewFilters{DateFrom: "2026-05-01", DateTo: "2026-05-31", TimeField: "planned", ProductModel: "6210 C21"}
 	dateField := viewDateField("Z_V_ZMES_T_001", filters, "ACTUAL_START_TIME")
@@ -360,14 +344,23 @@ func TestStationViewFilterUsesPlannedStartWhenRequested(t *testing.T) {
 	}
 }
 
+func TestStationSNFilterUsesIndexedEqualityForNumericValue(t *testing.T) {
+	filter := viewFilter("Z_V_ZMES_T_001", ViewFilters{SN: "6102315004772705"}, nil, "")
+	conditions := filter["$and"].(primitive.A)
+	stationSN := conditions[0].(bson.M)["PCODE"]
+	if stationSN != "6102315004772705" {
+		t.Fatalf("station SN filter=%v, want indexed equality", stationSN)
+	}
+}
+
 func TestBOMViewFilterIncludesEmptySalesOrders(t *testing.T) {
 	filter := viewFilter("ZSGV_ZSD124", ViewFilters{MissingSalesOrder: true}, nil, "GSTRS")
 	conditions := filter["$and"].(primitive.A)
 	if len(conditions) != 1 {
 		t.Fatalf("filter=%v", filter)
 	}
-	expr, ok := conditions[0].(bson.M)["$expr"].(bson.M)
-	if !ok || expr["$eq"] == nil {
+	missing, ok := conditions[0].(bson.M)["$or"].(primitive.A)
+	if !ok || len(missing) != 3 {
 		t.Fatalf("empty sales order condition=%v", conditions[0])
 	}
 }
@@ -395,8 +388,8 @@ func TestBOMViewFilterUsesOrderType(t *testing.T) {
 	if len(conditions) != 1 {
 		t.Fatalf("filter=%v", filter)
 	}
-	condition, ok := conditions[0].(bson.M)["AUART"].(bson.M)
-	if !ok || condition["$regex"] != "^ZP01$" {
+	condition := conditions[0].(bson.M)["AUART"]
+	if condition != "ZP01" {
 		t.Fatalf("order type condition=%v", conditions[0])
 	}
 }
@@ -404,8 +397,8 @@ func TestBOMViewFilterUsesOrderType(t *testing.T) {
 func TestBOMViewFilterUsesCompany(t *testing.T) {
 	filter := viewFilter("ZSGV_ZSD124", ViewFilters{CPX: "海光服务器产品事业部"}, nil, "GSTRS")
 	conditions := filter["$and"].(primitive.A)
-	condition, ok := conditions[0].(bson.M)["CPX"].(bson.M)
-	if !ok || condition["$regex"] != "^海光服务器产品事业部$" {
+	condition := conditions[0].(bson.M)["CPX"]
+	if condition != "海光服务器产品事业部" {
 		t.Fatalf("company condition=%v", conditions[0])
 	}
 }
@@ -511,13 +504,6 @@ func TestBOMQueryRejectsUnboundedFilters(t *testing.T) {
 	}
 	if err := ValidateBOMFilter(ViewFilters{CPX: "5000公司"}); err != nil {
 		t.Fatalf("company BOM query rejected: %v", err)
-	}
-}
-
-func TestStationStreamIncludesPlannedStart(t *testing.T) {
-	joined := strings.Join(stationStreamFields, ",")
-	if !strings.Contains(joined, "GSTRS") {
-		t.Fatalf("station stream missing GSTRS: %s", joined)
 	}
 }
 

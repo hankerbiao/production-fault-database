@@ -34,6 +34,7 @@ type fakeStore struct {
 	gotFilters           store.Filters
 	gotOrderFilters      store.OrderFilters
 	gotID                string
+	kkDetail             bson.M
 	gotAll               bool
 	gotPreview           bool
 	gotViewID            string
@@ -41,6 +42,9 @@ type fakeStore struct {
 	exportResource       string
 	exportKeys           []string
 	exportItems          []bson.M
+	viewItems            map[string][]bson.M
+	kkDeliveries         store.KKDeliveryListResult
+	gotKKFilters         store.KKDeliveryFilters
 }
 
 func (f *fakeStore) ExportRows(_ context.Context, resource string, keys []string) ([]bson.M, error) {
@@ -198,10 +202,58 @@ func (f *fakeStore) FaultRowsBySNS(context.Context, []string, string, string, st
 }
 func (f *fakeStore) ViewList(_ context.Context, viewID string, filters store.ViewFilters, page, pageSize int, preview, includeTotal bool) (store.ViewListResult, error) {
 	f.gotViewID, f.gotViewFilters, f.gotPage, f.gotPageSize, f.gotPreview, f.gotIncludeTotal = viewID, filters, page, pageSize, preview, includeTotal
-	return store.ViewListResult{}, f.err
+	if f.err != nil {
+		return store.ViewListResult{}, f.err
+	}
+	all, ok := f.viewItems[viewID]
+	if !ok {
+		return store.ViewListResult{}, nil
+	}
+	start := (page - 1) * pageSize
+	if start > len(all) {
+		start = len(all)
+	}
+	end := start + pageSize
+	if end > len(all) {
+		end = len(all)
+	}
+	items := all[start:end]
+	if preview {
+		items = all[start:]
+		if len(items) > pageSize {
+			items = items[:pageSize]
+		}
+	}
+	return store.ViewListResult{Items: items, Page: page, PageSize: pageSize, Total: int64(len(all))}, nil
 }
 func (f *fakeStore) ViewListAll(context.Context, string, store.ViewFilters) (store.ViewListResult, error) {
 	return store.ViewListResult{}, f.err
+}
+func (f *fakeStore) KKDeliveryRecords(_ context.Context, filters store.KKDeliveryFilters, page, pageSize int) (store.KKDeliveryListResult, error) {
+	f.gotKKFilters, f.gotPage, f.gotPageSize = filters, page, pageSize
+	if f.err != nil {
+		return store.KKDeliveryListResult{}, f.err
+	}
+	return f.kkDeliveries, nil
+}
+func (f *fakeStore) KKDeliveryStream(_ context.Context, filters store.KKDeliveryFilters, out io.Writer) error {
+	f.gotKKFilters = filters
+	if f.err == nil {
+		_, _ = io.WriteString(out, "销售订单号,物料号,交付日期,客户号,工厂,设备序列号（SERNR）,SN\r\n")
+	}
+	return f.err
+}
+func (f *fakeStore) KKDeliveryDetail(_ context.Context, id string) (bson.M, error) {
+	f.gotID = id
+	return f.kkDetail, f.err
+}
+func (f *fakeStore) KKCumulativeDeliveries(_ context.Context, dateTo string) (store.KKCumulativeResult, error) {
+	f.gotKKFilters.DateTo = dateTo
+	return store.KKCumulativeResult{DateTo: dateTo, Quantity: 3, BatchCount: 1, Items: []store.KKCumulativeDelivery{{SalesOrder: "SO1", Month: "2026-11", Quantity: 3, Devices: 2}}}, f.err
+}
+func (f *fakeStore) KKDeliveryShipmentStats(_ context.Context, filters store.KKDeliveryFilters) (store.KKShipmentStats, error) {
+	f.gotKKFilters = filters
+	return store.KKShipmentStats{DeviceCount: 2, ByModel: []store.KKShipmentModel{{Model: "6215 C2", Devices: 2}}}, f.err
 }
 func (f *fakeStore) ViewBOMStream(context.Context, store.ViewFilters, io.Writer) error { return f.err }
 

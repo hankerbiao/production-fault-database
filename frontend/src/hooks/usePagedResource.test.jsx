@@ -9,6 +9,8 @@ describe('usePagedResource pagination', () => {
     const loadStats = vi.fn(async () => ({ total: 41 }));
     const { result } = renderHook(() => usePagedResource({ loadPage, loadStats }));
 
+    expect(loadPage).not.toHaveBeenCalled();
+    await act(async () => { await result.current.applyFilters({}); });
     await waitFor(() => expect(loadPage).toHaveBeenCalledTimes(1));
     expect(loadPage).toHaveBeenLastCalledWith({}, 1, 20);
     expect(loadStats).toHaveBeenCalledTimes(1);
@@ -25,6 +27,8 @@ describe('usePagedResource pagination', () => {
     const loadStats = vi.fn(async () => ({}));
     const { result } = renderHook(() => usePagedResource({ loadPage, loadStats }));
 
+    expect(loadPage).not.toHaveBeenCalled();
+    await act(async () => { await result.current.applyFilters({}); });
     await waitFor(() => expect(loadPage).toHaveBeenCalledTimes(1));
     act(() => result.current.setPage(3));
     await waitFor(() => expect(loadPage).toHaveBeenCalledTimes(2));
@@ -41,10 +45,10 @@ describe('usePagedResource pagination', () => {
     const loadStats = vi.fn(async () => ({ total: 0 }));
     const { result } = renderHook(() => usePagedResource({ loadPage, loadStats, initialFilters: { keyword: '' } }));
 
-    await waitFor(() => expect(loadPage).toHaveBeenCalledTimes(1));
+    expect(loadPage).not.toHaveBeenCalled();
     act(() => result.current.setFilters({ keyword: 'AUFNR-1' }));
     expect(result.current.appliedFilters).toEqual({ keyword: '' });
-    expect(loadPage).toHaveBeenCalledTimes(1);
+    expect(loadPage).not.toHaveBeenCalled();
 
     await act(async () => { await result.current.applyFilters({ keyword: 'AUFNR-1' }); });
     expect(result.current.appliedFilters).toEqual({ keyword: 'AUFNR-1' });

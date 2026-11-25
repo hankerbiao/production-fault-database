@@ -16,6 +16,21 @@ import (
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
+// DefaultKKDeliveryCollection is the active KK delivery dataset. The legacy
+// sales_order_delivery_records_sap collection is retired and is only referenced
+// by cleanup scripts, not by this gateway.
+const DefaultKKDeliveryCollection = "sales_order_deliveries_kk_sap"
+
+// KKDeliveryCollectionName allows deployments to point at a migrated collection
+// without rebuilding the gateway. The default matches the current production
+// dataset and the collection name shown in the service config.
+func KKDeliveryCollectionName() string {
+	if name := strings.TrimSpace(os.Getenv("KK_DELIVERY_COLLECTION")); name != "" {
+		return name
+	}
+	return DefaultKKDeliveryCollection
+}
+
 func New(ctx context.Context, uri, database, repairCollection, orderCollection string) (*Store, error) {
 	client, err := mongo.Connect(ctx, options.Client().ApplyURI(uri))
 	if err != nil {
@@ -26,13 +41,14 @@ func New(ctx context.Context, uri, database, repairCollection, orderCollection s
 		return nil, err
 	}
 	db := client.Database(database)
+	kkDeliveryCollection := KKDeliveryCollectionName()
 	// RTY joins orders to repairs by production order and date. Build the
 	// supporting indexes asynchronously so startup remains fast while large
 	// collections become queryable without full scans.
 	go func() {
 		indexCtx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 		defer cancel()
-		if err := ensureCoreIndexes(indexCtx, db, repairCollection, orderCollection); err != nil {
+		if err := ensureCoreIndexes(indexCtx, db, repairCollection, orderCollection, kkDeliveryCollection); err != nil {
 			log.Printf("api indexes initialization failed: %v", err)
 			return
 		}
@@ -57,14 +73,15 @@ func New(ctx context.Context, uri, database, repairCollection, orderCollection s
 		}(id, collection, keys)
 	}
 	result := &Store{
-		client: client, db: db, repairs: db.Collection(repairCollection), orders: db.Collection(orderCollection), views: views,
+		client: client, db: db, repairs: db.Collection(repairCollection), orders: db.Collection(orderCollection),
+		kkDeliveries: db.Collection(kkDeliveryCollection), views: views,
 		bomCache:         make(map[string]bomStreamCacheEntry),
 		viewOptionsCache: make(map[string]ViewOptionsResult),
 	}
 	return result, nil
 }
 
-func ensureCoreIndexes(ctx context.Context, db *mongo.Database, repairCollection, orderCollection string) error {
+func ensureCoreIndexes(ctx context.Context, db *mongo.Database, repairCollection, orderCollection, kkDeliveryCollection string) error {
 	var errs []error
 	create := func(collection, label string, models []mongo.IndexModel) {
 		indexes := db.Collection(collection).Indexes()
@@ -114,6 +131,16 @@ func ensureCoreIndexes(ctx context.Context, db *mongo.Database, repairCollection
 		{Keys: bson.D{{Key: "data.MAKTX", Value: 1}}, Options: options.Index().SetName("order_model_description")},
 		{Keys: bson.D{{Key: "data.GSTRS", Value: 1}}, Options: options.Index().SetName("order_planned_date")},
 		{Keys: bson.D{{Key: "data.GSTRS", Value: -1}, {Key: "last_synced_at", Value: -1}, {Key: "_id", Value: -1}}, Options: options.Index().SetName("order_list_order")},
+	})
+	create(kkDeliveryCollection, "kk deliveries", []mongo.IndexModel{
+		{Keys: bson.D{{Key: "WADAT", Value: 1}}, Options: options.Index().SetName("kk_delivery_date")},
+		{Keys: bson.D{{Key: "DATUM", Value: -1}, {Key: "_id", Value: -1}}, Options: options.Index().SetName("kk_delivery_data_date")},
+		// The list page filters by one of these identifiers first, then keeps
+		// the newest DATUM per SN. Compound indexes let MongoDB satisfy both
+		// the filter and the sort without scanning the full collection.
+		{Keys: bson.D{{Key: "SN", Value: 1}, {Key: "DATUM", Value: -1}, {Key: "_id", Value: -1}}, Options: options.Index().SetName("kk_delivery_sn_data")},
+		{Keys: bson.D{{Key: "VBELN", Value: 1}, {Key: "DATUM", Value: -1}, {Key: "_id", Value: -1}}, Options: options.Index().SetName("kk_delivery_order_data")},
+		{Keys: bson.D{{Key: "MATNR", Value: 1}, {Key: "DATUM", Value: -1}, {Key: "_id", Value: -1}}, Options: options.Index().SetName("kk_delivery_material_data")},
 	})
 	create("order_bom_postings_sap", "bom", []mongo.IndexModel{
 		{Keys: bson.D{{Key: "GSTRS_DATE", Value: 1}}},

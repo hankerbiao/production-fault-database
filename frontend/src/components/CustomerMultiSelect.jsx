@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Check, ChevronDown } from 'lucide-react';
 
-export function CustomerMultiSelect({ options = [], value = [], onChange }) {
+export function CustomerMultiSelect({ options = [], value = [], onChange, onOpen }) {
   const [open, setOpen] = useState(false);
   const ref = useRef(null);
   const selected = new Set(value);
@@ -20,7 +20,7 @@ export function CustomerMultiSelect({ options = [], value = [], onChange }) {
   };
 
   return <div className="customer-select" ref={ref}>
-    <button type="button" className="customer-select-trigger" aria-label="客户 ID" aria-haspopup="listbox" aria-expanded={open} onClick={() => setOpen(current => !current)}>
+    <button type="button" className="customer-select-trigger" aria-label="客户 ID" aria-haspopup="listbox" aria-expanded={open} onClick={() => { if (!open) onOpen?.(); setOpen(current => !current); }}>
       <span>{value.length ? `已选 ${value.length} 个客户` : '客户 ID（可多选）'}</span>
       <ChevronDown size={15} />
     </button>

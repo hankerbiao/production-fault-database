@@ -14,7 +14,7 @@ function readPreferences(pageId, columns) {
   } catch { return { density: 'comfortable', hidden: [] }; }
 }
 
-export function DataTable({ pageId, columns, items, loading, error, onOpen, emptyMessage = '没有找到匹配的数据', loadingMessage = '正在加载数据', bilingual = false, itemUnit = '条当前结果' }) {
+export function DataTable({ pageId, columns, items, loading, error, onOpen, emptyMessage = '没有找到匹配的数据', loadingMessage = '正在加载数据', bilingual = false, itemUnit = '条当前结果', idle = false, idleMessage = '当前页面默认不加载数据。设置筛选条件后点击“搜索”，才会请求后端。' }) {
   const initial = useMemo(() => readPreferences(pageId, columns), [pageId, columns]);
   const [density, setDensity] = useState(initial.density);
   const [hidden, setHidden] = useState(initial.hidden);
@@ -35,7 +35,7 @@ export function DataTable({ pageId, columns, items, loading, error, onOpen, empt
   const toggleColumn = key => setHidden(current => current.includes(key) ? current.filter(item => item !== key) : [...current, key]);
   return <section className={`record-table ${pageId === 'ZSGV_ZSD124' ? 'bom-table-shell' : ''} ${scsTable ? 'scs-table-shell' : ''} ${density === 'compact' ? 'is-compact' : ''}`}>
     <div className="table-toolbar">
-      <span>{loading ? '正在更新结果' : `显示 ${items.length} ${itemUnit}`}</span>
+      <span>{loading ? '正在更新结果' : idle ? '尚未查询' : `显示 ${items.length} ${itemUnit}`}</span>
       <div className="table-toolbar-actions">
         <button type="button" className={density === 'compact' ? 'active' : ''} onClick={() => setDensity(value => value === 'compact' ? 'comfortable' : 'compact')} title="切换表格密度" aria-pressed={density === 'compact'}><Rows3 size={15} />{density === 'compact' ? '紧凑' : '舒适'}</button>
         <div className="column-menu" ref={menuRef}>
@@ -49,7 +49,7 @@ export function DataTable({ pageId, columns, items, loading, error, onOpen, empt
         <tbody>{items.map(item => <tr className="record-row" key={item.id} onClick={() => onOpen(item.id)}>{visibleColumns.map(column => <td className={column.className} key={column.key}>{column.render(item)}</td>)}<td><button className="icon-button" title={bilingual ? '查看完整数据库字段 / View all database fields' : '查看完整数据库字段'} onClick={event => { event.stopPropagation(); onOpen(item.id); }}><Eye size={16} /></button></td></tr>)}</tbody>
       </table>
       {loading && <div className="table-loading" role="status" aria-live="polite"><span className="loading-spinner" aria-hidden="true" /><span className="loading-bars" aria-hidden="true"><i /><i /><i /><i /></span><span className="loading-grid" aria-hidden="true"><i /><i /><i /><i /><i /><i /><i /><i /><i /></span><p>{loadingMessage}</p></div>}
-      {!loading && !items.length && <div className="empty-state"><strong>{error ? '暂时无法读取数据' : '没有匹配结果'}</strong><p>{error || emptyMessage}</p></div>}
+      {!loading && !items.length && <div className="empty-state"><strong>{error ? '暂时无法读取数据' : idle ? '尚未查询' : '没有匹配结果'}</strong><p>{error || (idle ? idleMessage : emptyMessage)}</p></div>}
     </div>
     {!loading && items.length > 0 && <div className="mobile-record-list">{items.map(item => <button className="mobile-record" type="button" key={item.id} onClick={() => onOpen(item.id)}>{visibleColumns.slice(0, 4).map((column, index) => <span key={column.key} className={index === 0 ? 'mobile-primary' : ''}><small>{column.label}</small><b>{column.render(item)}</b></span>)}<Eye size={16} /></button>)}</div>}
   </section>;

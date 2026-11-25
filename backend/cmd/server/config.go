@@ -7,6 +7,8 @@ import (
 	"runtime"
 	"strings"
 	"time"
+
+	"production-fault-gateway/internal/store"
 )
 
 const serviceVersion = "0.1.0"
@@ -76,6 +78,7 @@ func newServiceConfig() serviceConfig {
 			{Label: "订单 BOM 过账", Name: "order_bom_postings_sap"},
 			{Label: "SCS DOA", Name: "scs_doa_records"},
 			{Label: "SCS 换上换下", Name: "scs_change_records"},
+			{Label: "KK 订单交付", Name: store.KKDeliveryCollectionName()},
 		},
 		Features: []featureConfig{
 			{Label: "分页查询（每页 20 条）", Enabled: true},

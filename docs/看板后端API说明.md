@@ -29,6 +29,14 @@
 - `/api/faults`、`/api/orders` 的 `items[]` 同时返回稳定摘要字段和 `raw`。`raw` 是当前 MongoDB 源文档的可扩展快照，不承诺字段集合稳定；需要逐字段兼容时应锁定同步版本或使用详情接口。五个 `/api/views/{viewID}` 列表返回完整视图文档，并补充稳定 `id`。
 - MongoDB 索引应与同步脚本的 `index_fields` 对齐，并补充复合索引：维修 `ZMCOD1 + ZDATE_WX`、`AUFNR + ZDATE_WX`、`VBELN + ZDATE_WX`；订单 `source + aufnr`、`data.VBELN`、`data.GSTRS`；工位 `PCODE + ACTUAL_START_TIME`、`AUFNR + ACTUAL_START_TIME`、`KDAUF + ACTUAL_START_TIME`；BOM `AUFNR_1 + GSTRS`、`VBELN_EX + GSTRS`。索引创建应由迁移/运维任务执行，不在查询路径即时创建。
 
+### KK 累计出货 `GET /api/kk-sales-order-deliveries/cumulative-counts`
+
+必填参数 `dateTo` 使用 `YYYY-MM-DD`。按 `WADAT` 累计至当天（含），以交货单号 `VBELN_L`、销售订单 `VBELN`、行项目 `POSNR` 和 `LFIMG` 的字符串值归并批次。每批只计一次 `LFIMG`。数量缺失、无法转换或为零时，使用该批次内非空 SN 去重数。没有 SN 的批次仍按 `LFIMG` 计量。
+
+每个 `items` 元素包含 `salesOrder`、`month`、`quantity` 和 `devices`。月份取批次最早的有效 `WADAT`，`quantity` 为组内批次出货数量合计，`devices` 为该组非空 SN 去重数。同一 SN 可以出现在不同组，分组相加不代表全区间唯一 SN 数。出货量和 SN 数均为零的分组省略。
+
+顶层 `quantity` 为分组数量合计，`batchCount` 为纳入统计的批次数，`missingQuantityBatches` 为其中使用 SN 数兜底的批次数，`invalidDateBatches` 为因无有效日期跳过的批次数。`/shipment-stats` 对同一交付项的冲突 `LFIMG` 执行独立校验，遇到冲突可能返回 422。
+
 ### 销售订单原始数据 `GET /api/orders`
 
 在既有 `page`、`pageSize`、`keyword`、`source`、`gstrsFrom`、`gstrsTo` 基础上支持：
@@ -348,7 +356,7 @@ curl 'http://127.0.0.1:18080/api/views/SCS_CHANGE/detail?id=<items[].id>'
 
 ### `GET /api/orders/stats`
 
-接受相同筛选参数，返回 `total`、去重销售订单数 `salesOrders`、来源订单数 `sg`/`kk`、数量汇总 `orderQuantity`、机器数量汇总 `machineQuantity`（取明细 `GAMNG` 汇总）、`storageQuantity`、`dataStartDate`、`dataEndDate` 和 `latestSyncedAt`。
+接受相同筛选参数，返回 `total`、去重销售订单数 `salesOrders`、来源订单数 `sg`/`kk`、数量汇总 `orderQuantity`、机器数量汇总 `machineQuantity`（取明细 `GAMNG` 汇总）、`storageQuantity`、`dataStartDate`、`dataEndDate` 和 `latestSyncedAt`。其中 `kk` 只统计 `data.VBELN` 以 `XNC` 开头的订单，不限制 `source`；其他订单仍可在明细中查询，但不计入该统计。
 
 ### `GET /api/orders/models`
 

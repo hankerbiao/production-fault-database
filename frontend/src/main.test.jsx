@@ -3,6 +3,8 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import { describe, expect, it, vi } from 'vitest';
 import { App } from './main.jsx';
 
+const submitSearch = () => fireEvent.click(screen.getByRole('button', { name: /^搜索/ }));
+
 const faultStats = { total: 1, withError: 1, withRepairPerson: 1, withMaterialCode: 1, withNonCriticalMaterialSerial: 1, salesOrders: 1, productionOrders: 1, hostBarcodes: 1, missingSalesOrder: 0, missingProductionOrder: 0, dataStartDate: '20260101', dataEndDate: '20260102', latestSyncedAt: '2026-01-02T03:04:05Z' };
 const orderStats = { total: 1, salesOrders: 1, sg: 1, kk: 0, orderQuantity: 3, machineQuantity: 3, storageQuantity: 2, dataStartDate: '20260101', dataEndDate: '20260102', latestSyncedAt: '2026-01-02T03:04:05Z' };
 
@@ -38,13 +40,27 @@ function mockFetch({ fail = false } = {}) {
 }
 
 describe('operations workbench', () => {
-  it('omits the retired delivery view from navigation and requests', async () => {
+  it('does not fetch page data until the user searches', async () => {
     const fetchMock = mockFetch();
     vi.stubGlobal('fetch', fetchMock);
     render(<App />);
     expect(await screen.findByRole('heading', { name: '维修故障记录' })).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /销售订单交付明细/ })).not.toBeInTheDocument();
-    expect(fetchMock.mock.calls.some(([url]) => String(url).includes('ZSGV_ZSD46N_SO_KK'))).toBe(false);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(screen.getAllByText('尚未查询').length).toBeGreaterThan(0);
+
+    fireEvent.click(screen.getAllByRole('button', { name: /工位记录/ })[0]);
+    expect(await screen.findByRole('heading', { name: '工位记录' })).toBeInTheDocument();
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(screen.getAllByText('尚未查询').length).toBeGreaterThan(0);
+  });
+
+  it('exposes the KK delivery page without fetching it before navigation', async () => {
+    const fetchMock = mockFetch();
+    vi.stubGlobal('fetch', fetchMock);
+    render(<App />);
+    expect(await screen.findByRole('heading', { name: '维修故障记录' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /KK 销售订单交付明细/ })).toBeInTheDocument();
+    expect(fetchMock.mock.calls.some(([url]) => String(url).includes('/api/kk-sales-order-deliveries'))).toBe(false);
   });
 
   it('opens the service configuration panel with redacted database metadata', async () => {
@@ -63,6 +79,8 @@ describe('operations workbench', () => {
     render(<App />);
     fireEvent.click(screen.getByRole('button', { name: 'API 文档' }));
     expect(await screen.findByRole('heading', { name: 'API 文档中心' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '加载 API 契约' }));
+    expect(await screen.findByText('1.0.0')).toBeInTheDocument();
     fireEvent.click(screen.getByText('查看 Agent 任务编排指南'));
     expect(await screen.findByRole('heading', { name: 'Agent Guide' })).toBeInTheDocument();
     expect(screen.getByText('需人工确认')).toBeInTheDocument();
@@ -79,6 +97,8 @@ describe('operations workbench', () => {
     render(<App />);
     fireEvent.click(screen.getByRole('button', { name: 'API 文档' }));
     expect(await screen.findByRole('heading', { name: 'API 文档中心' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '加载 API 契约' }));
+    await screen.findByText('1.0.0');
     fireEvent.click(screen.getByRole('button', { name: /SCS 数据/ }));
     expect(screen.getByText('/api/views/SCS_DOA')).toBeInTheDocument();
     expect(screen.getByText('查询 SCS DOA 申报')).toBeInTheDocument();
@@ -88,12 +108,13 @@ describe('operations workbench', () => {
     vi.stubGlobal('fetch', mockFetch());
     render(<App />);
     expect(await screen.findByRole('heading', { name: '维修故障记录' })).toBeInTheDocument();
+    submitSearch();
     expect(screen.getByText('SAP HANA 视图 ZSGV_ZZT_WLJL', { exact: false })).toBeInTheDocument();
     expect(screen.queryByText('已登记维修人员')).not.toBeInTheDocument();
     expect(screen.queryByText('含错误码或错误码描述')).not.toBeInTheDocument();
     expect(screen.getByRole('columnheader', { name: '计划生产时间' })).toBeInTheDocument();
     expect(screen.getByRole('columnheader', { name: '物料号' })).toBeInTheDocument();
-    expect(screen.getByText('主机条码数量（去重）')).toBeInTheDocument();
+    expect(await screen.findByText('主机条码数量（去重）')).toBeInTheDocument();
     expect(screen.getByText('物料号（MATNR）有值').parentElement).toHaveTextContent('1');
     expect(screen.getByText('非关键件物料序号（RECORD01REPAIRM）有值').parentElement).toHaveTextContent('1');
     expect((await screen.findAllByText('PC-1')).length).toBeGreaterThan(0);
@@ -108,8 +129,9 @@ describe('operations workbench', () => {
     vi.stubGlobal('fetch', fetchMock);
     render(<App />);
     await screen.findByRole('heading', { name: '维修故障记录' });
+    submitSearch();
 
-    expect(screen.getByText('第 1 / 1 页')).toBeInTheDocument();
+    expect(await screen.findByText('第 1 / 1 页')).toBeInTheDocument();
     fireEvent.change(screen.getByRole('combobox', { name: '每页数量' }), { target: { value: '50' } });
     await waitFor(() => expect(fetchMock.mock.calls.some(([url]) => String(url).includes('/api/faults?') && String(url).includes('page=1') && String(url).includes('pageSize=50'))).toBe(true));
   });
@@ -228,6 +250,7 @@ describe('operations workbench', () => {
     render(<App />);
     fireEvent.click(screen.getAllByRole('button', { name: /销售订单看板/ })[0]);
     expect(await screen.findByRole('heading', { name: '销售订单看板' })).toBeInTheDocument();
+    submitSearch();
     expect(await screen.findByText('机器数量汇总：3')).toBeInTheDocument();
     fireEvent.change(screen.getByRole('combobox', { name: '订单来源' }), { target: { value: 'SG' } });
     fireEvent.click(screen.getByRole('button', { name: '客户 ID' }));
@@ -306,6 +329,7 @@ describe('operations workbench', () => {
     fireEvent.click(screen.getByRole('button', { name: /工位记录/ }));
     expect(await screen.findByRole('heading', { name: '工位记录' })).toBeInTheDocument();
     expect(screen.getByRole('columnheader', { name: '主机序列号（PCODE）' })).toBeInTheDocument();
+    submitSearch();
     await waitFor(() => expect(fetchMock.mock.calls.some(([url]) => String(url).includes('/api/views/Z_V_ZMES_T_001?') && String(url).includes('page=1') && String(url).includes('pageSize=20') && String(url).includes('preview=true'))).toBe(true));
     expect(fetchMock.mock.calls.some(([url]) => String(url).startsWith('/api/views/Z_V_ZMES_T_001/stats'))).toBe(false);
     expect(screen.getByText('当前页 1 条')).toBeInTheDocument();
@@ -322,6 +346,7 @@ describe('operations workbench', () => {
     expect(screen.queryByText('记录总数')).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /订单过账/ }));
     expect(await screen.findByRole('heading', { name: '订单 BOM 过账' })).toBeInTheDocument();
+    submitSearch();
     await waitFor(() => expect(screen.getByText('记录总数').parentElement).toHaveTextContent('2'));
   });
 
@@ -331,6 +356,8 @@ describe('operations workbench', () => {
     fireEvent.click(screen.getByRole('button', { name: /序列号绑定/ }));
     expect(await screen.findByRole('heading', { name: '序列号绑定 / Serial Number Binding', exact: true })).toBeInTheDocument();
     expect(screen.getByRole('columnheader', { name: '大刀/机头序列号（ZCODE_HEAD）' })).toBeInTheDocument();
+    submitSearch();
+    await screen.findAllByTitle(/查看完整数据库字段/);
     fireEvent.click(screen.getAllByTitle(/查看完整数据库字段/)[0]);
     const dialog = await screen.findByRole('dialog');
     expect(within(dialog).getByText('大刀/机头序列号（ZCODE_HEAD）')).toBeInTheDocument();
@@ -346,6 +373,7 @@ describe('operations workbench', () => {
     expect(checkbox).toBeChecked();
     expect(checkbox.closest('.filter-form-body')).not.toBeNull();
     expect(screen.getByRole('button', { name: /高级条件展开/ })).toHaveAttribute('aria-expanded', 'false');
+    submitSearch();
     await waitFor(() => {
       for (const endpoint of ['/api/views/SCS_DOA?', '/api/views/SCS_DOA/stats']) {
         const requests = fetchMock.mock.calls.filter(([url]) => String(url).startsWith(endpoint));
@@ -406,6 +434,7 @@ describe('operations workbench', () => {
     expect(await screen.findByRole('heading', { name: 'SCS DOA 申报明细' })).toBeInTheDocument();
     expect(screen.getByRole('columnheader', { name: '判定结果' })).toHaveClass('column-judgment');
     expect(screen.getByRole('columnheader', { name: '客户全称' })).toHaveClass('column-customer');
+    submitSearch();
     expect(await screen.findByText('是')).toHaveClass('result-pill', 'is-yes');
     expect(screen.getByText('北京示例科技有限公司')).toBeInTheDocument();
   });
@@ -446,6 +475,8 @@ describe('operations workbench', () => {
     expect(screen.getByRole('columnheader', { name: '计划开始时间（源值）' })).toBeInTheDocument();
     expect(screen.getByRole('columnheader', { name: '计划开始日期（标准化）' })).toBeInTheDocument();
     expect(screen.getByRole('columnheader', { name: '订单类型' })).toBeInTheDocument();
+    submitSearch();
+    expect(await screen.findByText('生产订单数量（去重）')).toBeInTheDocument();
     expect(screen.getByText('生产订单数量（去重）').parentElement).toHaveTextContent('2');
     expect(screen.getByText('销售订单数量（去重）').parentElement).toHaveTextContent('1');
     expect(screen.getByText('销售订单为空').parentElement).toHaveTextContent('3');
@@ -511,6 +542,7 @@ describe('operations workbench', () => {
     vi.stubGlobal('fetch', vi.fn((url, options) => String(url).startsWith('/api/views/ZSGV_ZSD124?') ? pending : baseFetch(url, options)));
     render(<App />);
     fireEvent.click(screen.getByRole('button', { name: /订单过账/ }));
+    submitSearch();
     expect(await screen.findByRole('status')).toHaveTextContent('正在加载订单 BOM 过账数据');
     expect(document.querySelector('.bom-table-shell .loading-spinner')).toBeInTheDocument();
     expect(document.querySelectorAll('.bom-table-shell .loading-bars i')).toHaveLength(4);
@@ -521,6 +553,8 @@ describe('operations workbench', () => {
   it('shows disconnected state when gateway fails', async () => {
     vi.stubGlobal('fetch', mockFetch({ fail: true }));
     render(<App />);
+    await screen.findByRole('heading', { name: '维修故障记录' });
+    submitSearch();
     expect(await screen.findByText('无法连接 MongoDB 网关')).toBeInTheDocument();
     expect(screen.getByText('MongoDB 未连接')).toBeInTheDocument();
   });

@@ -39,14 +39,23 @@ func repairStatsPipeline(filter bson.M, timeField string) mongo.Pipeline {
 	}
 }
 
+const xncSalesOrderPattern = "^XNC"
+
 func orderStatsPipeline(filter bson.M) mongo.Pipeline {
 	normalizedVBELN := normalizedOrderExpression("data.VBELN")
+	// This KPI intentionally covers only XNC sales orders and does not
+	// restrict the data source. Other orders remain visible in the order list
+	// but must not inflate this statistic.
+	xncSalesOrder := bson.M{"$regexMatch": bson.M{
+		"input": bson.M{"$ifNull": bson.A{"$data.VBELN", ""}},
+		"regex": xncSalesOrderPattern,
+	}}
 	return mongo.Pipeline{
 		{{Key: "$match", Value: filter}},
 		{{Key: "$group", Value: bson.M{
 			"_id": nil, "total": bson.M{"$sum": 1}, "salesOrderValues": bson.M{"$addToSet": normalizedVBELN},
 			"sg":              bson.M{"$sum": bson.M{"$cond": bson.A{bson.M{"$eq": bson.A{"$source", "SG"}}, 1, 0}}},
-			"kk":              bson.M{"$sum": bson.M{"$cond": bson.A{bson.M{"$eq": bson.A{"$source", "KK"}}, 1, 0}}},
+			"kk":              bson.M{"$sum": bson.M{"$cond": bson.A{xncSalesOrder, 1, 0}}},
 			"orderQuantity":   bson.M{"$sum": bson.M{"$ifNull": bson.A{"$order_quantity", bson.M{"$ifNull": bson.A{"$data.GAMNG", 0}}}}},
 			"storageQuantity": bson.M{"$sum": bson.M{"$ifNull": bson.A{"$storage_quantity", bson.M{"$ifNull": bson.A{"$data.WMENG", 0}}}}},
 			"dataStartDate":   bson.M{"$min": "$data.GSTRS"}, "dataEndDate": bson.M{"$max": "$data.GSTRS"}, "latestSyncedAt": bson.M{"$max": "$last_synced_at"},

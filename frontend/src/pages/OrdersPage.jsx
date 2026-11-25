@@ -20,8 +20,9 @@ const initialFilters = { keyword: '', source: '', productionOrder: '', salesOrde
 const initialStats = { total: 0, salesOrders: 0, dataStartDate: '', dataEndDate: '', latestSyncedAt: '', sg: 0, kk: 0, orderQuantity: 0, machineQuantity: 0, storageQuantity: 0 };
 const filterLabels = { source: '来源', productionOrder: '生产订单', salesOrder: '销售订单', customer: '客户', productModel: '机型', dateFrom: '开始日期', dateTo: '结束日期', keyword: '关键字', overseas: '海外' };
 
-export function OrdersPage({ modelOptions = [], customerIDOptions = [], setConnected, setRefreshing, refreshToken = 0 }) {
+export function OrdersPage({ modelOptions = [], customerIDOptions = [], loadModelOptions, loadCustomerIDOptions, setConnected, setRefreshing, refreshToken = 0 }) {
   const resource = usePagedResource({ loadPage: useCallback((filters, page, size) => listOrders(filters, page, size), []), loadStats: useCallback(filters => orderStats(filters), []), initialFilters, initialStats, refreshToken, onConnectionChange: setConnected, onRefreshing: setRefreshing });
+  const idle = !resource.started;
   const detail = useDetail(orderDetail, '无法读取该记录的详细字段');
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [exporting, setExporting] = useState(false);
@@ -40,15 +41,16 @@ export function OrdersPage({ modelOptions = [], customerIDOptions = [], setConne
   const stats = resource.stats;
   return <main>
     <Hero title="销售订单看板" detail="集中查看订单、生产计划和数量状态。" meta={[{ label: '数据来源', value: 'SAP 销售订单同步' }, { label: '数据区间', value: formatDateRange(stats.dataStartDate, stats.dataEndDate) }, { label: '最新同步', value: formatDate(stats.latestSyncedAt) }]} />
-    <Stats className="order-stats"><Stat icon={<Boxes />} label="订单记录" value={formatNumber(stats.total)} tone="blue" /><Stat icon={<ClipboardList />} label="销售订单（去重）" value={formatNumber(stats.salesOrders)} tone="orange" /><Stat icon={<PackageSearch />} label="SG 记录" value={formatNumber(stats.sg)} tone="green" /><Stat icon={<PackageSearch />} label="KK 记录" value={formatNumber(stats.kk)} tone="red" /><Stat icon={<ClipboardList />} label="订单数量" value={formatNumber(stats.orderQuantity)} tone="blue" /><Stat icon={<ClipboardList />} label="入库数量" value={formatNumber(stats.storageQuantity)} tone="orange" /></Stats>
-    <section className="workspace"><div className="section-head"><div><p className="eyebrow">SALES ORDERS</p><h2>订单明细</h2></div><div className="section-head-meta"><span className="record-count">共 {formatNumber(resource.total)} 条</span><span className="record-summary">机器数量汇总：{formatNumber(stats.machineQuantity)}</span></div></div>
+    {resource.started && <Stats className="order-stats"><Stat icon={<Boxes />} label="订单记录" value={formatNumber(stats.total)} tone="blue" /><Stat icon={<ClipboardList />} label="销售订单（去重）" value={formatNumber(stats.salesOrders)} tone="orange" /><Stat icon={<PackageSearch />} label="SG 记录" value={formatNumber(stats.sg)} tone="green" /><Stat icon={<PackageSearch />} label="XNC 记录" value={formatNumber(stats.kk)} tone="red" /><Stat icon={<ClipboardList />} label="订单数量" value={formatNumber(stats.orderQuantity)} tone="blue" /><Stat icon={<ClipboardList />} label="入库数量" value={formatNumber(stats.storageQuantity)} tone="orange" /></Stats>}
+
+    <section className="workspace"><div className="section-head"><div><p className="eyebrow">SALES ORDERS</p><h2>订单明细</h2></div><div className="section-head-meta"><span className="record-count">{idle ? '尚未查询' : `共 ${formatNumber(resource.total)} 条`}</span>{!idle && <span className="record-summary">机器数量汇总：{formatNumber(stats.machineQuantity)}</span>}</div></div>
       <form className="filters order-filters filter-form" aria-label="订单搜索条件" onSubmit={submit}>
         <div className="filter-form-body">
           <label className="filter-field"><span>订单来源</span><select aria-label="订单来源" value={resource.filters.source} onChange={event => update('source', event.target.value)}><option value="">全部来源</option><option value="SG">SG</option><option value="KK">KK</option></select></label>
           <label className="filter-field"><span>生产订单</span><input className="filter-text" aria-label="生产订单" placeholder="AUFNR" value={resource.filters.productionOrder} onChange={event => update('productionOrder', event.target.value)} /></label>
           <label className="filter-field"><span>销售订单</span><input className="filter-text" aria-label="销售订单" placeholder="VBELN" value={resource.filters.salesOrder} onChange={event => update('salesOrder', event.target.value)} /></label>
-          <div className="filter-field"><span>客户</span><CustomerMultiSelect options={customerIDOptions} value={resource.filters.customer ? resource.filters.customer.split(',').filter(Boolean) : []} onChange={values => update('customer', values.join(','))} /></div>
-          <div className="filter-field"><span>机型</span><ModelSelect options={modelOptions} value={resource.filters.productModel} onChange={value => update('productModel', value)} placeholder="机型 / Product model" /></div>
+          <div className="filter-field"><span>客户</span><CustomerMultiSelect options={customerIDOptions} onOpen={loadCustomerIDOptions} value={resource.filters.customer ? resource.filters.customer.split(',').filter(Boolean) : []} onChange={values => update('customer', values.join(','))} /></div>
+          <div className="filter-field"><span>机型</span><ModelSelect options={modelOptions} onOpen={loadModelOptions} value={resource.filters.productModel} onChange={value => update('productModel', value)} placeholder="机型 / Product model" /></div>
           <div className="filter-field filter-field-date"><span>订单时间周期</span><DateRangePicker from={resource.filters.dateFrom} to={resource.filters.dateTo} onChange={(dateFrom, dateTo) => resource.setFilters(previous => ({ ...previous, dateFrom, dateTo }))} label="订单时间周期" /></div>
           <div className="filter-field"><span>订单范围</span><label className="filter-checkbox"><input type="checkbox" aria-label="海外" checked={resource.filters.overseas === 'true'} onChange={event => update('overseas', event.target.checked ? 'true' : '')} /><span>海外</span></label></div>
         </div>
@@ -56,8 +58,8 @@ export function OrdersPage({ modelOptions = [], customerIDOptions = [], setConne
         {advancedOpen && <div className="advanced-filters"><div className="advanced-filters-head"><strong>更多筛选</strong><span>订单号、客户或机型关键字</span></div><div className="advanced-filters-grid"><input className="filter-text" aria-label="关键字" placeholder="关键字：订单号、客户或机型" value={resource.filters.keyword} onChange={event => update('keyword', event.target.value)} /></div></div>}
       </form>
       <ActiveFilters filters={resource.appliedFilters} labels={filterLabels} initialFilters={initialFilters} onRemove={removeFilter} onClear={reset} />
-      <DataTable pageId="orders" columns={columns} items={resource.items} loading={resource.loading} error={resource.error} onOpen={detail.open} />
-      <Pagination page={resource.page} total={resource.total} pageSize={resource.pageSize} setPage={resource.setPage} setPageSize={resource.setPageSize} />
+      <DataTable pageId="orders" columns={columns} items={resource.items} loading={resource.loading} error={resource.error} onOpen={detail.open} idle={idle} />
+      {resource.started && <Pagination page={resource.page} total={resource.total} pageSize={resource.pageSize} setPage={resource.setPage} setPageSize={resource.setPageSize} />}
     </section>
     {(detail.loading || detail.detail) && <DetailPanel detail={detail.detail} loading={detail.loading} close={detail.close} title="销售订单详情" heading={detail.detail?.order?.aufnr || '销售订单详情'} fieldDescriptions={{ last_synced_at: '同步程序最近一次从 SAP 取回并写入此订单的时间，订单内容未变化时也可能更新。' }} />}
   </main>;

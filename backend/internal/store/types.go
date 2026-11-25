@@ -14,6 +14,7 @@ type Store struct {
 	db                  *mongo.Database
 	repairs             *mongo.Collection
 	orders              *mongo.Collection
+	kkDeliveries        *mongo.Collection
 	views               map[string]*mongo.Collection
 	bomCacheMu          sync.RWMutex
 	bomCache            map[string]bomStreamCacheEntry
@@ -26,6 +27,9 @@ type Store struct {
 	viewOptionsCacheMu  sync.Mutex
 	viewOptionsCacheAt  time.Time
 	viewOptionsCache    map[string]ViewOptionsResult
+	scsDevicesMu        sync.Mutex
+	scsDevicesExpires   time.Time
+	scsDevicesSnapshot  []SCSDevice
 	dataStatusCacheMu   sync.Mutex
 	dataStatusCacheAt   time.Time
 	dataStatusCache     DataStatus
@@ -206,6 +210,36 @@ type ViewListResult struct {
 	Total    int64    `json:"total"`
 	HasMore  bool     `json:"hasMore,omitempty"`
 	Preview  bool     `json:"preview,omitempty"`
+}
+
+type KKDeliveryFilters struct {
+	DateFrom       string
+	DateTo         string
+	SalesOrder     string
+	MaterialNumber string
+	CustomerNumber string
+	Plant          string
+	SN             string
+}
+
+type KKDelivery struct {
+	ID             string `bson:"_id" json:"id"`
+	SalesOrder     string `bson:"VBELN" json:"VBELN"`
+	MaterialNumber string `bson:"MATNR" json:"MATNR"`
+	DeliveryDate   string `bson:"WADAT" json:"WADAT"`
+	DataDate       string `bson:"DATUM" json:"DATUM"`
+	CustomerNumber string `bson:"KUNNR" json:"KUNNR"`
+	Plant          string `bson:"WERKS" json:"WERKS"`
+	DeviceSerial   string `bson:"SERNR" json:"SERNR"`
+	SN             string `bson:"SN" json:"SN"`
+}
+
+type KKDeliveryListResult struct {
+	Items           []KKDelivery `json:"items"`
+	Page            int          `json:"page"`
+	PageSize        int          `json:"pageSize"`
+	Total           int64        `json:"total"`
+	CollectionEmpty bool         `json:"collectionEmpty"`
 }
 type ViewStatsResult struct {
 	Total                          int64    `json:"total"`

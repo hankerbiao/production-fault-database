@@ -63,6 +63,7 @@ go run ./cmd/server
 完整的看板 API 参数、响应字段、筛选规则和调用示例见
 [`docs/看板后端API说明.md`](docs/看板后端API说明.md)。
 机器可读的 OpenAPI 3.1 定义见 [`docs/openapi.json`](docs/openapi.json)，可导入 Swagger UI、Postman 或代码生成器。
+机器配置查询接口的参数、返参字段和数据口径见 [`docs/机器配置查询接口.md`](docs/机器配置查询接口.md)。
 
 维修故障、销售订单、订单过账、序列号绑定和工位记录看板均支持导出当前筛选结果为 UTF-8 CSV 文件；销售订单导出查询全部筛选结果，单次最多 10,000 条，不受当前看板分页限制。
 
@@ -415,10 +416,8 @@ MongoDB 的 `sync_locks` 租约锁跨主机协调；租约时长由 `SYNC_MONGO_
 ```
 
 默认仅预览预计变更数，`--apply` 按集合资源锁分批更新，重复执行只更新变化值。
-销售订单交付明细自 2026-10-15 起停用，页面、查询 API、物化汇总和同步入口已移除。
-SCS DOA 无前置数据同步依赖，换上换下仍依赖 DOA。升级时先重新构建并重启 Go 后端，
-再运行 `scripts/maintenance/remove_sales_order_delivery.py --apply` 清理明细、历史汇总及其同步元数据；
-不带 `--apply` 时仅预览。此脚本可重复执行，不访问 SAP HANA。
+旧版 `sales_order_delivery_records_sap` 明细自 2026-10-15 起停用，对应的旧页面、查询 API、物化汇总和同步入口已移除；当前 KK 交付页面和 `/api/kk-sales-order-deliveries` 读取 `sales_order_deliveries_kk_sap`，集合名可通过 `KK_DELIVERY_COLLECTION` 覆盖。
+SCS DOA 无前置数据同步依赖，换上换下仍依赖 DOA。升级时先重新构建并重启 Go 后端，再运行 `scripts/maintenance/remove_sales_order_delivery.py --apply` 清理旧明细、历史汇总及其同步元数据；不带 `--apply` 时仅预览。此脚本只清理旧集合，不会删除当前的 `_kk_sap` 数据，可重复执行，不访问 SAP HANA。
 
 在 `.env` 中配置 `SCS_USERNAME`、`SCS_PASSWORD`，以及已有的 MongoDB 配置。首次全量同步：
 

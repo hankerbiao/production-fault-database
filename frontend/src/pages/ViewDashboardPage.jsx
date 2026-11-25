@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useRef, useState } from 'react';
 import { AlertTriangle, Boxes, ClipboardList, Search, SlidersHorizontal } from 'lucide-react';
 import { bomCompanyOptions, listView, viewDetail, viewStats } from '../api/views';
 import { usePagedResource } from '../hooks/usePagedResource';
@@ -38,7 +38,7 @@ function AdvancedFilterField({ field, value, options, onChange }) {
     value={value || ''} onChange={event => onChange(event.target.value)} />;
 }
 
-export function ViewDashboardPage({ config, modelOptions = [], setConnected, setRefreshing, refreshToken = 0 }) {
+export function ViewDashboardPage({ config, modelOptions = [], loadModelOptions, setConnected, setRefreshing, refreshToken = 0 }) {
   const defaultFilters = { ...initialFilters, ...config.defaultFilters };
   const isStationPreview = filters => config.id === 'Z_V_ZMES_T_001' && !hasActiveFilters(filters);
   const resource = usePagedResource({ loadPage: useCallback((filters, page, size) => listView(config.id, filters, page, size, isStationPreview(filters)), [config.id]), loadStats: useCallback(filters => isStationPreview(filters) ? Promise.resolve(emptyStats) : viewStats(config.id, filters), [config.id]), initialFilters: defaultFilters, initialStats: emptyStats, refreshToken, onConnectionChange: setConnected, onRefreshing: setRefreshing });
@@ -46,19 +46,13 @@ export function ViewDashboardPage({ config, modelOptions = [], setConnected, set
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [fieldOptions, setFieldOptions] = useState({});
+  const cpxOptionsLoaded = useRef(false);
+  const idle = !resource.started;
   const bilingual = config.bilingual;
-  useEffect(() => {
-    let current = true;
-    if (config.id !== 'ZSGV_ZSD124') {
-      setFieldOptions({});
-      return () => { current = false; };
-    }
-    bomCompanyOptions().then(result => {
-      if (current) setFieldOptions({ cpx: result.items || [] });
-    }).catch(() => {
-      if (current) setFieldOptions({ cpx: [] });
-    });
-    return () => { current = false; };
+  const loadCPXOptions = useCallback(() => {
+    if (config.id !== 'ZSGV_ZSD124' || cpxOptionsLoaded.current) return;
+    cpxOptionsLoaded.current = true;
+    bomCompanyOptions().then(result => setFieldOptions({ cpx: result.items || [] })).catch(() => { cpxOptionsLoaded.current = false; });
   }, [config.id]);
   const update = (key, value) => resource.setFilters(previous => ({ ...previous, [key]: value }));
   const submit = event => { event.preventDefault(); resource.applyFilters({ ...resource.filters }); };
@@ -96,14 +90,14 @@ export function ViewDashboardPage({ config, modelOptions = [], setConnected, set
     : null;
   return <main>
     <Hero title={config.title} detail={config.detail} meta={[{ label: bilingual ? '数据来源 / Data source' : '数据来源', value: config.source }, { label: bilingual ? '数据区间 / Data period' : '数据区间', value: formatDateRange(stats.dataStartDate, stats.dataEndDate) }, ...(latestStationRecordTime ? [{ label: '最新一条记录操作时间', value: latestStationRecordTime }] : []), ...(latestBOMPostingDate ? [{ label: '最新过账日期', value: latestBOMPostingDate }] : []), { label: bilingual ? '最新同步 / Latest sync' : '最新同步', value: formatDate(stats.latestSyncedAt) }]} />
-    {!resource.preview && <Stats className="view-stats"><Stat icon={<Boxes />} label={bilingual ? '记录总数 / Total records' : (config.totalStatLabel || '记录总数')} value={formatNumber(config.totalStatKey ? stats[config.totalStatKey] : resource.total)} tone="blue" />{(config.stats || []).map(item => <Stat key={item.key} icon={item.tone === 'red' || item.tone === 'orange' ? <AlertTriangle /> : <ClipboardList />} label={item.label} value={formatNumber(stats[item.key])} tone={item.tone} />)}</Stats>}
-    <section className="workspace"><div className="section-head"><div><p className="eyebrow">{config.id}</p><h2>{bilingual ? `${config.title} 明细 / Details` : `${config.title}明细`}</h2></div><span className="record-count">{resource.preview ? `当前页 ${resource.items.length} 条` : `共 ${formatNumber(resource.total)} ${config.resultCountUnit || '条记录'}`}</span></div>
+    {resource.started && !resource.preview && <Stats className="view-stats"><Stat icon={<Boxes />} label={bilingual ? '记录总数 / Total records' : (config.totalStatLabel || '记录总数')} value={formatNumber(config.totalStatKey ? stats[config.totalStatKey] : resource.total)} tone="blue" />{(config.stats || []).map(item => <Stat key={item.key} icon={item.tone === 'red' || item.tone === 'orange' ? <AlertTriangle /> : <ClipboardList />} label={item.label} value={formatNumber(stats[item.key])} tone={item.tone} />)}</Stats>}
+    <section className="workspace"><div className="section-head"><div><p className="eyebrow">{config.id}</p><h2>{bilingual ? `${config.title} 明细 / Details` : `${config.title}明细`}</h2></div><span className="record-count">{idle ? '尚未查询' : resource.preview ? `当前页 ${resource.items.length} 条` : `共 ${formatNumber(resource.total)} ${config.resultCountUnit || '条记录'}`}</span></div>
       <form className="filters dashboard-filters filter-form" aria-label={`${config.title}搜索条件`} onSubmit={submit}>
         <div className="filter-form-body">
           {config.showProductionOrder && <label className="filter-field"><span>{bilingual ? '生产订单 / Production order' : '生产订单'}</span><input className="filter-text" aria-label="生产订单" placeholder="AUFNR" value={resource.filters.productionOrder} onChange={event => update('productionOrder', event.target.value)} /></label>}
           {config.showSalesOrder && <label className="filter-field"><span>{bilingual ? '销售订单 / Sales order' : '销售订单'}</span><input className="filter-text" aria-label="销售订单" placeholder="VBELN" value={resource.filters.salesOrder} onChange={event => update('salesOrder', event.target.value)} /></label>}
-          {config.showCPXCompany && <div className="filter-field"><span>公司（CPX）</span><ModelSelect options={fieldOptions.cpx || []} value={resource.filters.cpx} onChange={value => update('cpx', value)} placeholder="公司 / CPX" toggleLabel="展开公司选项" /></div>}
-          {config.showProductModel && <div className="filter-field"><span>{bilingual ? '产品层次 / Product hierarchy' : '机型'}</span><ModelSelect options={modelOptions} value={resource.filters.productModel} onChange={value => update('productModel', value)} placeholder={bilingual ? '产品层次 / Product hierarchy' : '机型 / Product model'} /></div>}
+          {config.showCPXCompany && <div className="filter-field"><span>公司（CPX）</span><ModelSelect options={fieldOptions.cpx || []} onOpen={loadCPXOptions} value={resource.filters.cpx} onChange={value => update('cpx', value)} placeholder="公司 / CPX" toggleLabel="展开公司选项" /></div>}
+          {config.showProductModel && <div className="filter-field"><span>{bilingual ? '产品层次 / Product hierarchy' : '机型'}</span><ModelSelect options={modelOptions} onOpen={loadModelOptions} value={resource.filters.productModel} onChange={value => update('productModel', value)} placeholder={bilingual ? '产品层次 / Product hierarchy' : '机型 / Product model'} /></div>}
           {config.dateField && <div className="filter-field filter-field-date"><span>{bilingual ? `${config.dateLabel || '时间周期'} / Date period` : (config.dateLabel || '时间周期')}</span><DateRangePicker from={resource.filters.from} to={resource.filters.to} onChange={(from, to) => resource.setFilters(previous => ({ ...previous, from, to }))} label={bilingual ? `${config.dateLabel || '时间周期'} / Date period` : (config.dateLabel || '时间周期')} bilingual={bilingual} /></div>}
           {config.showCompany5000 && <div className="filter-field"><span>公司归属</span><label className="filter-checkbox"><input type="checkbox" checked={resource.filters.company5000 === 'true'} onChange={event => update('company5000', event.target.checked ? 'true' : '')} /><span>是否为5000公司</span></label></div>}
         </div>
@@ -128,8 +122,8 @@ export function ViewDashboardPage({ config, modelOptions = [], setConnected, set
         </div>}
       </form>
       <ActiveFilters filters={resource.appliedFilters} labels={filterLabels} initialFilters={defaultFilters} onRemove={removeFilter} onClear={reset} />
-      <DataTable pageId={config.id} columns={columns} items={resource.items} loading={resource.loading} error={resource.error} onOpen={detail.open} loadingMessage={`正在加载${config.title}数据`} bilingual={bilingual} itemUnit={config.resultItemUnit || '条当前结果'} />
-      <Pagination page={resource.page} total={resource.total} pageSize={resource.pageSize} setPage={resource.setPage} setPageSize={resource.setPageSize} bilingual={bilingual} preview={resource.preview} hasMore={resource.hasMore} itemUnit={config.resultItemUnit || '条'} />
+      <DataTable pageId={config.id} columns={columns} items={resource.items} loading={resource.loading} error={resource.error} onOpen={detail.open} loadingMessage={`正在加载${config.title}数据`} bilingual={bilingual} itemUnit={config.resultItemUnit || '条当前结果'} idle={idle} />
+      {resource.started && <Pagination page={resource.page} total={resource.total} pageSize={resource.pageSize} setPage={resource.setPage} setPageSize={resource.setPageSize} bilingual={bilingual} preview={resource.preview} hasMore={resource.hasMore} itemUnit={config.resultItemUnit || '条'} />}
     </section>
     {(detail.loading || detail.detail) && <DetailPanel detail={detail.detail} loading={detail.loading} close={detail.close} title={bilingual ? '视图记录详情 / View Record Details' : '视图记录详情'} heading={bilingual ? '完整数据库字段 / All database fields' : '完整数据库字段'} />}
   </main>;

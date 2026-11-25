@@ -515,6 +515,24 @@ func TestOrderStatsPipelineExposesMachineQuantity(t *testing.T) {
 	}
 }
 
+func TestOrderStatsPipelineRestrictsKKToXNC(t *testing.T) {
+	pipeline := orderStatsPipeline(orderFilter(OrderFilters{}))
+	group := pipeline[1].Map()["$group"].(bson.M)
+	kk := group["kk"].(bson.M)
+	sum, ok := kk["$sum"].(bson.M)
+	if !ok {
+		t.Fatalf("kk sum=%v", kk)
+	}
+	cond := sum["$cond"].(bson.A)
+	regex := cond[0].(bson.M)["$regexMatch"].(bson.M)
+	if regex["regex"] != xncSalesOrderPattern || xncSalesOrderPattern != "^XNC" {
+		t.Fatalf("kk XNC regex=%v", regex)
+	}
+	if len(cond) != 3 {
+		t.Fatalf("kk condition should not restrict source: %v", cond)
+	}
+}
+
 func TestNormalizeFaultAndOrder(t *testing.T) {
 	doc := bson.M{"_source_key": "key", "PCODE": " PC-1 ", "ZMCOD1": "SN-1", "ERROR_CODE": "E1", "ZDATE_WX": "20260102", "ZTIME": "030405", "VBELN": "SO1", "AUFNR": "PO1", "GSTRS": "20260101", "_synced_at": primitive.NewDateTimeFromTime(time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC))}
 	fault := normalizeFault(doc)
@@ -699,7 +717,7 @@ func TestSCSChangeFilterUsesCompanyFlag(t *testing.T) {
 
 func TestSCSStreamFieldsExposeNormalizedGatewayColumns(t *testing.T) {
 	doa := strings.Join(scsStreamFields("SCS_DOA"), ",")
-	for _, field := range []string{"service_uid", "acceptance_time", "sales_order", "is_5000_company", "GSTRS", "gstrs_status", "production_orders"} {
+	for _, field := range []string{"service_uid", "acceptance_time", "sales_order", "is_5000_company", "GSTRS", "gstrs_status", "production_orders", "shipment_date"} {
 		if !strings.Contains(doa, field) {
 			t.Fatalf("DOA stream missing %s: %s", field, doa)
 		}

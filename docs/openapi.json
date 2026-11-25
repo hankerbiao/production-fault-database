@@ -6,329 +6,4580 @@
     "description": "MongoDB 查询网关。默认地址为 http://127.0.0.1:18080；部署可通过 PORT 修改端口。当前服务不提供认证、授权或限流，生产环境应置于受信任网络或由上游网关保护。"
   },
   "servers": [
-    { "url": "http://127.0.0.1:18080", "description": "本地默认地址" },
-    { "url": "http://localhost:18080", "description": "本地别名" }
+    {
+      "url": "http://127.0.0.1:18080",
+      "description": "本地默认地址"
+    },
+    {
+      "url": "http://localhost:18080",
+      "description": "本地别名"
+    }
   ],
   "tags": [
-    { "name": "health", "description": "健康检查" },
-    { "name": "faults", "description": "维修故障记录" },
-    { "name": "orders", "description": "销售订单" },
-    { "name": "views", "description": "同步到 MongoDB 的业务视图" },
-    { "name": "hana", "description": "实时 HANA 查询" },
-    { "name": "scs", "description": "SCS 服务数据" },
-    { "name": "sync", "description": "同步任务和数据状态" }
+    {
+      "name": "health",
+      "description": "健康检查"
+    },
+    {
+      "name": "faults",
+      "description": "维修故障记录"
+    },
+    {
+      "name": "orders",
+      "description": "销售订单"
+    },
+    {
+      "name": "views",
+      "description": "同步到 MongoDB 的业务视图"
+    },
+    {
+      "name": "hana",
+      "description": "实时 HANA 查询"
+    },
+    {
+      "name": "scs",
+      "description": "SCS 服务数据"
+    },
+    {
+      "name": "sync",
+      "description": "同步任务和数据状态"
+    },
+    {
+      "name": "machines",
+      "description": "机器物料配置聚合"
+    }
   ],
   "paths": {
     "/api/scs/doa/devices": {
       "get": {
-        "tags": ["scs"],
+        "tags": [
+          "scs"
+        ],
         "operationId": "listSCSDoaDevices",
-        "description": "返回 DOA 关联设备，不按产品线字段过滤。按产品条码聚合并保留各申报证据；下游应通过销售订单数据核实范围，日期冲突或缺失时不推断值。完整规则见 docs/SCS设备日期接口.md。",
+        "description": "返回 DOA 关联设备，不按产品线字段过滤。按产品条码聚合并保留各申报证据，evidence 包含申报发货日期 shipmentDate；下游应通过销售订单数据核实范围，日期冲突或缺失时不推断值。完整规则见 docs/SCS设备日期接口.md。",
         "parameters": [
-          { "name": "page", "in": "query", "schema": { "type": "integer", "minimum": 1, "default": 1 } },
-          { "name": "pageSize", "in": "query", "schema": { "type": "integer", "minimum": 1, "maximum": 1000, "default": 100 } },
-          { "name": "company5000", "in": "query", "schema": { "type": "boolean" } },
-          { "name": "salesOrder", "in": "query", "schema": { "type": "string" } },
-          { "name": "serviceOrder", "in": "query", "schema": { "type": "string" } },
-          { "name": "sn", "in": "query", "schema": { "type": "string" } }
+          {
+            "name": "page",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 1
+            }
+          },
+          {
+            "name": "pageSize",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1000,
+              "default": 100
+            }
+          },
+          {
+            "name": "company5000",
+            "in": "query",
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "salesOrder",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "serviceOrder",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "sn",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
         ],
         "responses": {
-          "200": { "description": "设备及完整申报关联证据的分页结果", "content": { "application/json": { "schema": { "type": "object", "required": ["items", "page", "pageSize", "total", "hasMore", "scope"], "properties": { "items": { "type": "array", "items": { "type": "object" } }, "page": { "type": "integer" }, "pageSize": { "type": "integer" }, "total": { "type": "integer" }, "hasMore": { "type": "boolean" }, "scope": { "const": "all" } } } } } },
-          "400": { "$ref": "#/components/responses/BadRequest" },
-          "500": { "$ref": "#/components/responses/ServerError" }
+          "200": {
+            "description": "设备及完整申报关联证据的分页结果",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "items",
+                    "page",
+                    "pageSize",
+                    "total",
+                    "hasMore",
+                    "scope"
+                  ],
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
+                    },
+                    "page": {
+                      "type": "integer"
+                    },
+                    "pageSize": {
+                      "type": "integer"
+                    },
+                    "total": {
+                      "type": "integer"
+                    },
+                    "hasMore": {
+                      "type": "boolean"
+                    },
+                    "scope": {
+                      "const": "all"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "500": {
+            "$ref": "#/components/responses/ServerError"
+          }
         }
       }
     },
     "/api/exports/rows": {
       "post": {
-        "tags": ["orders", "faults", "views"],
+        "tags": [
+          "orders",
+          "faults",
+          "views"
+        ],
         "operationId": "exportSourceRows",
         "description": "服务端导出批量读取。orders 按含源标识的完整 _id 查询，返回完整 data；faults 按生产订单 AUFNR 查询，返回 34 个原始导出字段及记录 ID；bindings 按机头订单查询绑定字段；bom 按生产订单 AUFNR_1 精确查询并只返回发料聚合所需字段。SAP 订单兼容去零和 12 位补零形式，不按维修时间筛选。成功只返回完整结果；orders、faults、bindings 每批超过 10,000 行，或 bom 超过 250,000 行，返回 413 且不返回部分数据，调用方应拆分 keys 重试。",
-        "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["resource", "keys"], "additionalProperties": false, "properties": { "resource": { "type": "string", "enum": ["orders", "faults", "bindings", "bom"] }, "keys": { "type": "array", "maxItems": 1000, "items": { "type": "string", "minLength": 1, "maxLength": 256 } } } } } } },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "resource",
+                  "keys"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "resource": {
+                    "type": "string",
+                    "enum": [
+                      "orders",
+                      "faults",
+                      "bindings",
+                      "bom"
+                    ]
+                  },
+                  "keys": {
+                    "type": "array",
+                    "maxItems": 1000,
+                    "items": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 256
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
         "responses": {
-          "200": { "description": "完整原始行，包含 items、total 和 complete=true", "content": { "application/json": { "schema": { "type": "object", "required": ["items", "total", "complete"], "properties": { "items": { "type": "array", "items": { "type": "object" } }, "total": { "type": "integer" }, "complete": { "const": true } } } } } },
-          "400": { "$ref": "#/components/responses/BadRequest" },
-          "413": { "$ref": "#/components/responses/PayloadTooLarge" },
-          "500": { "$ref": "#/components/responses/ServerError" }
+          "200": {
+            "description": "完整原始行，包含 items、total 和 complete=true",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "items",
+                    "total",
+                    "complete"
+                  ],
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
+                    },
+                    "total": {
+                      "type": "integer"
+                    },
+                    "complete": {
+                      "const": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "500": {
+            "$ref": "#/components/responses/ServerError"
+          }
         }
       }
     },
     "/api/exports/version": {
       "get": {
-        "tags": ["health"],
+        "tags": [
+          "health"
+        ],
         "operationId": "getExportSourceVersion",
         "description": "导出缓存失效标识。返回 orders、faults、bindings 三个字符串，分别含集合估计数量和最新同步时间；估计数量仅作缓存版本，不作业务统计。",
-        "responses": { "200": { "description": "原始数据同步版本", "content": { "application/json": { "schema": { "type": "object", "additionalProperties": { "type": "string" } } } } }, "500": { "$ref": "#/components/responses/ServerError" } }
+        "responses": {
+          "200": {
+            "description": "原始数据同步版本",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "$ref": "#/components/responses/ServerError"
+          }
+        }
       }
     },
     "/api/health": {
       "get": {
-        "tags": ["health"],
+        "tags": [
+          "health"
+        ],
         "operationId": "getHealth",
         "responses": {
-          "200": { "description": "MongoDB 可用", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Health" } } } },
-          "503": { "$ref": "#/components/responses/ServiceUnavailable" }
+          "200": {
+            "description": "MongoDB 可用",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Health"
+                }
+              }
+            }
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
         }
       }
     },
     "/api/hana/material-vendor": {
       "get": {
-        "tags": ["hana"],
+        "tags": [
+          "hana"
+        ],
         "operationId": "getHanaMaterialVendor",
         "description": "通过完整物料号或末尾 8 个字符查询 HANA 视图 BW_LOCAL.BI::ZSGV_R15_BI 中去重后的厂商。每次请求建立并关闭一个 HANA 连接，最多并发执行一个查询。",
         "parameters": [
-          { "name": "materialNumber", "in": "query", "required": true, "description": "物料号，支持完整 MATNR 精确匹配和末尾 8 个字符匹配。", "schema": { "type": "string", "minLength": 1, "maxLength": 40, "example": "B2400123" } }
+          {
+            "name": "materialNumber",
+            "in": "query",
+            "required": true,
+            "description": "物料号，支持完整 MATNR 精确匹配和末尾 8 个字符匹配。",
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 40,
+              "example": "B2400123"
+            }
+          }
         ],
         "responses": {
-          "200": { "description": "厂商查询结果", "content": { "application/json": { "schema": { "type": "object", "required": ["materialNumber", "matchedSuffix", "count", "vendors"], "properties": { "materialNumber": { "type": "string" }, "matchedSuffix": { "type": "string", "description": "用于后缀匹配的最后 8 个字符。" }, "count": { "type": "integer" }, "vendors": { "type": "array", "items": { "type": "string" } } } } } } },
-          "400": { "$ref": "#/components/responses/BadRequest" },
-          "429": { "description": "另一个 HANA 查询正在执行，请稍后重试。" },
-          "502": { "$ref": "#/components/responses/ServerError" },
-          "504": { "description": "HANA 查询超过 20 秒超时。" }
+          "200": {
+            "description": "厂商查询结果",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "materialNumber",
+                    "matchedSuffix",
+                    "count",
+                    "vendors"
+                  ],
+                  "properties": {
+                    "materialNumber": {
+                      "type": "string"
+                    },
+                    "matchedSuffix": {
+                      "type": "string",
+                      "description": "用于后缀匹配的最后 8 个字符。"
+                    },
+                    "count": {
+                      "type": "integer"
+                    },
+                    "vendors": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "429": {
+            "description": "另一个 HANA 查询正在执行，请稍后重试。"
+          },
+          "502": {
+            "$ref": "#/components/responses/ServerError"
+          },
+          "504": {
+            "description": "HANA 查询超过 20 秒超时。"
+          }
+        }
+      }
+    },
+    "/api/machines/config/5000": {
+      "get": {
+        "tags": [
+          "machines"
+        ],
+        "operationId": "getMachineConfigBySN",
+        "description": "按整机 SN 从本地 MongoDB 工位视图 Z_V_ZMES_T_001 解析生产订单号 AUFNR，再按 AUFNR 从订单 BOM 过账明细视图 ZSGV_ZSD124 分页取全部物料，按 MATNR 汇总有符号 MENGE（261 发料为正、262 退料为负），除以订单台数 PSMNG 得到单机数量。排除包装、标签和螺钉组。输出与 stepsmanagement queryMaterialByOrderID 兼容的结构；id/relationId 为本地代理键，needNum 恒为 null。",
+        "parameters": [
+          {
+            "name": "sn",
+            "in": "query",
+            "required": true,
+            "description": "整机序列号。",
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 40,
+              "example": "6102299104767755"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "按物料汇总的机器配置数组",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/MachineConfigItem"
+                  }
+                }
+              }
+            },
+            "headers": {
+              "X-Machine-BOM-Truncated": {
+                "description": "当 BOM 明细达到 100 页 / 10,000 行上限时为 true，返回结果可能不完整。",
+                "schema": {
+                  "type": "string",
+                  "enum": [
+                    "true"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "404": {
+            "description": "SN 未匹配到生产订单",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "$ref": "#/components/responses/ServerError"
+          }
         }
       }
     },
     "/api/config": {
       "get": {
-        "tags": ["health"],
+        "tags": [
+          "health"
+        ],
         "operationId": "getServiceConfig",
         "description": "返回当前服务的脱敏运行配置。不会返回 MongoDB 完整 URI、用户名、密码或同步凭据。",
         "responses": {
-          "200": { "description": "服务配置", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ServiceConfig" } } } }
+          "200": {
+            "description": "服务配置",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServiceConfig"
+                }
+              }
+            }
+          }
         }
       }
     },
     "/api/faults": {
       "get": {
-        "tags": ["faults"], "operationId": "listFaults",
-        "parameters": [{ "$ref": "#/components/parameters/Page" }, { "$ref": "#/components/parameters/PageSize" }, { "$ref": "#/components/parameters/Keyword" }, { "$ref": "#/components/parameters/HostBarcode" }, { "$ref": "#/components/parameters/NonCriticalMaterialSerial" }, { "$ref": "#/components/parameters/DefectResponsibility" }, { "$ref": "#/components/parameters/NGStation" }, { "$ref": "#/components/parameters/SalesOrder" }, { "$ref": "#/components/parameters/ProductionOrder" }, { "$ref": "#/components/parameters/SNS" }, { "$ref": "#/components/parameters/ProductionOrders" }, { "$ref": "#/components/parameters/SalesOrders" }, { "$ref": "#/components/parameters/DateFrom" }, { "$ref": "#/components/parameters/DateTo" }, { "$ref": "#/components/parameters/TimeField" }, { "$ref": "#/components/parameters/Station" }, { "$ref": "#/components/parameters/ProductModel" }, { "$ref": "#/components/parameters/Company5000" }],
-        "responses": { "200": { "$ref": "#/components/responses/FaultPage" }, "500": { "$ref": "#/components/responses/ServerError" } }
+        "tags": [
+          "faults"
+        ],
+        "operationId": "listFaults",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Page"
+          },
+          {
+            "$ref": "#/components/parameters/PageSize"
+          },
+          {
+            "$ref": "#/components/parameters/Keyword"
+          },
+          {
+            "$ref": "#/components/parameters/HostBarcode"
+          },
+          {
+            "$ref": "#/components/parameters/NonCriticalMaterialSerial"
+          },
+          {
+            "$ref": "#/components/parameters/DefectResponsibility"
+          },
+          {
+            "$ref": "#/components/parameters/NGStation"
+          },
+          {
+            "$ref": "#/components/parameters/SalesOrder"
+          },
+          {
+            "$ref": "#/components/parameters/ProductionOrder"
+          },
+          {
+            "$ref": "#/components/parameters/SNS"
+          },
+          {
+            "$ref": "#/components/parameters/ProductionOrders"
+          },
+          {
+            "$ref": "#/components/parameters/SalesOrders"
+          },
+          {
+            "$ref": "#/components/parameters/DateFrom"
+          },
+          {
+            "$ref": "#/components/parameters/DateTo"
+          },
+          {
+            "$ref": "#/components/parameters/TimeField"
+          },
+          {
+            "$ref": "#/components/parameters/Station"
+          },
+          {
+            "$ref": "#/components/parameters/ProductModel"
+          },
+          {
+            "$ref": "#/components/parameters/Company5000"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/FaultPage"
+          },
+          "500": {
+            "$ref": "#/components/responses/ServerError"
+          }
+        }
       }
     },
     "/api/faults/lookup": {
       "post": {
-        "tags": ["faults"], "operationId": "lookupFaultSerialNumbers", "description": "按生产订单或销售订单批量查找关联序列号。空数组返回空 items；请求体中的订单数组建议控制在 10,000 项以内。",
-        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/FaultLookupRequest" }, "example": { "productionOrders": ["PO001"], "salesOrders": [], "dateFrom": "2026-01-01", "dateTo": "2026-01-31" } } } },
-        "responses": { "200": { "description": "序列号匹配结果", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/FaultSNList" } } } }, "400": { "$ref": "#/components/responses/BadRequest" }, "500": { "$ref": "#/components/responses/ServerError" } }
+        "tags": [
+          "faults"
+        ],
+        "operationId": "lookupFaultSerialNumbers",
+        "description": "按生产订单或销售订单批量查找关联序列号。空数组返回空 items；请求体中的订单数组建议控制在 10,000 项以内。",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FaultLookupRequest"
+              },
+              "example": {
+                "productionOrders": [
+                  "PO001"
+                ],
+                "salesOrders": [],
+                "dateFrom": "2026-01-01",
+                "dateTo": "2026-01-31"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "序列号匹配结果",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FaultSNList"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "500": {
+            "$ref": "#/components/responses/ServerError"
+          }
+        }
       }
     },
     "/api/faults/by-sns": {
-      "get": { "tags": ["faults"], "operationId": "listFaultsBySNS", "description": "`/api/faults` 的别名，建议传 sns（逗号或中文逗号分隔）；也接受 /api/faults 的其他筛选参数。", "parameters": [{ "$ref": "#/components/parameters/Page" }, { "$ref": "#/components/parameters/PageSize" }, { "$ref": "#/components/parameters/Keyword" }, { "$ref": "#/components/parameters/HostBarcode" }, { "$ref": "#/components/parameters/NonCriticalMaterialSerial" }, { "$ref": "#/components/parameters/DefectResponsibility" }, { "$ref": "#/components/parameters/NGStation" }, { "$ref": "#/components/parameters/SalesOrder" }, { "$ref": "#/components/parameters/ProductionOrder" }, { "$ref": "#/components/parameters/SNS" }, { "$ref": "#/components/parameters/ProductionOrders" }, { "$ref": "#/components/parameters/SalesOrders" }, { "$ref": "#/components/parameters/DateFrom" }, { "$ref": "#/components/parameters/DateTo" }, { "$ref": "#/components/parameters/TimeField" }, { "$ref": "#/components/parameters/Station" }, { "$ref": "#/components/parameters/ProductModel" }, { "$ref": "#/components/parameters/Company5000" }], "responses": { "200": { "$ref": "#/components/responses/FaultPage" }, "500": { "$ref": "#/components/responses/ServerError" } } },
+      "get": {
+        "tags": [
+          "faults"
+        ],
+        "operationId": "listFaultsBySNS",
+        "description": "`/api/faults` 的别名，建议传 sns（逗号或中文逗号分隔）；也接受 /api/faults 的其他筛选参数。",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Page"
+          },
+          {
+            "$ref": "#/components/parameters/PageSize"
+          },
+          {
+            "$ref": "#/components/parameters/Keyword"
+          },
+          {
+            "$ref": "#/components/parameters/HostBarcode"
+          },
+          {
+            "$ref": "#/components/parameters/NonCriticalMaterialSerial"
+          },
+          {
+            "$ref": "#/components/parameters/DefectResponsibility"
+          },
+          {
+            "$ref": "#/components/parameters/NGStation"
+          },
+          {
+            "$ref": "#/components/parameters/SalesOrder"
+          },
+          {
+            "$ref": "#/components/parameters/ProductionOrder"
+          },
+          {
+            "$ref": "#/components/parameters/SNS"
+          },
+          {
+            "$ref": "#/components/parameters/ProductionOrders"
+          },
+          {
+            "$ref": "#/components/parameters/SalesOrders"
+          },
+          {
+            "$ref": "#/components/parameters/DateFrom"
+          },
+          {
+            "$ref": "#/components/parameters/DateTo"
+          },
+          {
+            "$ref": "#/components/parameters/TimeField"
+          },
+          {
+            "$ref": "#/components/parameters/Station"
+          },
+          {
+            "$ref": "#/components/parameters/ProductModel"
+          },
+          {
+            "$ref": "#/components/parameters/Company5000"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/FaultPage"
+          },
+          "500": {
+            "$ref": "#/components/responses/ServerError"
+          }
+        }
+      },
       "post": {
-        "tags": ["faults"], "operationId": "listFaultRowsBySNS", "description": "按序列号批量返回原始维修故障行。单次 SNS 数量超过 10,000 时返回 413。",
-        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/FaultRowsBySNSRequest" }, "example": { "sns": ["SN001"], "dateFrom": "2026-01-01", "dateTo": "2026-01-31", "station": "LINE-1", "timeField": "planned" } } } },
-        "responses": { "200": { "description": "原始故障行", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/RawItems" } } } }, "400": { "$ref": "#/components/responses/BadRequest" }, "413": { "$ref": "#/components/responses/PayloadTooLarge" }, "500": { "$ref": "#/components/responses/ServerError" } }
+        "tags": [
+          "faults"
+        ],
+        "operationId": "listFaultRowsBySNS",
+        "description": "按序列号批量返回原始维修故障行。单次 SNS 数量超过 10,000 时返回 413。",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FaultRowsBySNSRequest"
+              },
+              "example": {
+                "sns": [
+                  "SN001"
+                ],
+                "dateFrom": "2026-01-01",
+                "dateTo": "2026-01-31",
+                "station": "LINE-1",
+                "timeField": "planned"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "原始故障行",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RawItems"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "500": {
+            "$ref": "#/components/responses/ServerError"
+          }
+        }
       }
     },
     "/api/faults/by-orders": {
-      "get": { "tags": ["faults"], "operationId": "listFaultsByOrders", "description": "`/api/faults` 的别名，建议传 productionOrders（逗号或中文逗号分隔）；也接受 /api/faults 的其他筛选参数。", "parameters": [{ "$ref": "#/components/parameters/Page" }, { "$ref": "#/components/parameters/PageSize" }, { "$ref": "#/components/parameters/Keyword" }, { "$ref": "#/components/parameters/HostBarcode" }, { "$ref": "#/components/parameters/NonCriticalMaterialSerial" }, { "$ref": "#/components/parameters/DefectResponsibility" }, { "$ref": "#/components/parameters/NGStation" }, { "$ref": "#/components/parameters/SalesOrder" }, { "$ref": "#/components/parameters/ProductionOrder" }, { "$ref": "#/components/parameters/SNS" }, { "$ref": "#/components/parameters/ProductionOrders" }, { "$ref": "#/components/parameters/SalesOrders" }, { "$ref": "#/components/parameters/DateFrom" }, { "$ref": "#/components/parameters/DateTo" }, { "$ref": "#/components/parameters/TimeField" }, { "$ref": "#/components/parameters/Station" }, { "$ref": "#/components/parameters/ProductModel" }, { "$ref": "#/components/parameters/Company5000" }], "responses": { "200": { "$ref": "#/components/responses/FaultPage" }, "500": { "$ref": "#/components/responses/ServerError" } } }
+      "get": {
+        "tags": [
+          "faults"
+        ],
+        "operationId": "listFaultsByOrders",
+        "description": "`/api/faults` 的别名，建议传 productionOrders（逗号或中文逗号分隔）；也接受 /api/faults 的其他筛选参数。",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Page"
+          },
+          {
+            "$ref": "#/components/parameters/PageSize"
+          },
+          {
+            "$ref": "#/components/parameters/Keyword"
+          },
+          {
+            "$ref": "#/components/parameters/HostBarcode"
+          },
+          {
+            "$ref": "#/components/parameters/NonCriticalMaterialSerial"
+          },
+          {
+            "$ref": "#/components/parameters/DefectResponsibility"
+          },
+          {
+            "$ref": "#/components/parameters/NGStation"
+          },
+          {
+            "$ref": "#/components/parameters/SalesOrder"
+          },
+          {
+            "$ref": "#/components/parameters/ProductionOrder"
+          },
+          {
+            "$ref": "#/components/parameters/SNS"
+          },
+          {
+            "$ref": "#/components/parameters/ProductionOrders"
+          },
+          {
+            "$ref": "#/components/parameters/SalesOrders"
+          },
+          {
+            "$ref": "#/components/parameters/DateFrom"
+          },
+          {
+            "$ref": "#/components/parameters/DateTo"
+          },
+          {
+            "$ref": "#/components/parameters/TimeField"
+          },
+          {
+            "$ref": "#/components/parameters/Station"
+          },
+          {
+            "$ref": "#/components/parameters/ProductModel"
+          },
+          {
+            "$ref": "#/components/parameters/Company5000"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/FaultPage"
+          },
+          "500": {
+            "$ref": "#/components/responses/ServerError"
+          }
+        }
+      }
     },
     "/api/faults/stats": {
-      "get": { "tags": ["faults"], "operationId": "getFaultStats", "parameters": [{ "$ref": "#/components/parameters/Keyword" }, { "$ref": "#/components/parameters/HostBarcode" }, { "$ref": "#/components/parameters/NonCriticalMaterialSerial" }, { "$ref": "#/components/parameters/DefectResponsibility" }, { "$ref": "#/components/parameters/NGStation" }, { "$ref": "#/components/parameters/SalesOrder" }, { "$ref": "#/components/parameters/ProductionOrder" }, { "$ref": "#/components/parameters/SNS" }, { "$ref": "#/components/parameters/ProductionOrders" }, { "$ref": "#/components/parameters/SalesOrders" }, { "$ref": "#/components/parameters/DateFrom" }, { "$ref": "#/components/parameters/DateTo" }, { "$ref": "#/components/parameters/TimeField" }, { "$ref": "#/components/parameters/Station" }, { "$ref": "#/components/parameters/ProductModel" }, { "$ref": "#/components/parameters/Company5000" }], "responses": { "200": { "description": "统计结果", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/FaultStats" } } } }, "500": { "$ref": "#/components/responses/ServerError" } } }
+      "get": {
+        "tags": [
+          "faults"
+        ],
+        "operationId": "getFaultStats",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Keyword"
+          },
+          {
+            "$ref": "#/components/parameters/HostBarcode"
+          },
+          {
+            "$ref": "#/components/parameters/NonCriticalMaterialSerial"
+          },
+          {
+            "$ref": "#/components/parameters/DefectResponsibility"
+          },
+          {
+            "$ref": "#/components/parameters/NGStation"
+          },
+          {
+            "$ref": "#/components/parameters/SalesOrder"
+          },
+          {
+            "$ref": "#/components/parameters/ProductionOrder"
+          },
+          {
+            "$ref": "#/components/parameters/SNS"
+          },
+          {
+            "$ref": "#/components/parameters/ProductionOrders"
+          },
+          {
+            "$ref": "#/components/parameters/SalesOrders"
+          },
+          {
+            "$ref": "#/components/parameters/DateFrom"
+          },
+          {
+            "$ref": "#/components/parameters/DateTo"
+          },
+          {
+            "$ref": "#/components/parameters/TimeField"
+          },
+          {
+            "$ref": "#/components/parameters/Station"
+          },
+          {
+            "$ref": "#/components/parameters/ProductModel"
+          },
+          {
+            "$ref": "#/components/parameters/Company5000"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "统计结果",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FaultStats"
+                }
+              }
+            }
+          },
+          "500": {
+            "$ref": "#/components/responses/ServerError"
+          }
+        }
+      }
     },
     "/api/faults/detail": {
-      "get": { "tags": ["faults"], "operationId": "getFaultDetail", "parameters": [{ "$ref": "#/components/parameters/Id" }], "responses": { "200": { "description": "详情", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/FaultDetail" } } } }, "400": { "$ref": "#/components/responses/BadRequest" }, "404": { "$ref": "#/components/responses/NotFound" }, "500": { "$ref": "#/components/responses/ServerError" } } }
+      "get": {
+        "tags": [
+          "faults"
+        ],
+        "operationId": "getFaultDetail",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Id"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "详情",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FaultDetail"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/ServerError"
+          }
+        }
+      }
     },
     "/api/orders": {
       "get": {
-        "tags": ["orders"], "operationId": "listOrders", "description": "分页订单查询。传 `all=true` 时转为最多 10,000 条的全量查询，忽略 page/pageSize。",
-        "parameters": [{ "$ref": "#/components/parameters/Page" }, { "$ref": "#/components/parameters/PageSize" }, { "$ref": "#/components/parameters/Keyword" }, { "$ref": "#/components/parameters/Source" }, { "$ref": "#/components/parameters/OrderScope" }, { "$ref": "#/components/parameters/GSTRSFrom" }, { "$ref": "#/components/parameters/GSTRSTo" }, { "$ref": "#/components/parameters/SalesOrder" }, { "$ref": "#/components/parameters/ProductionOrder" }, { "$ref": "#/components/parameters/SerialNumber" }, { "$ref": "#/components/parameters/ProductModel" }, { "$ref": "#/components/parameters/Customer" }, { "$ref": "#/components/parameters/Base" }, { "$ref": "#/components/parameters/DateFrom" }, { "$ref": "#/components/parameters/DateTo" }, { "$ref": "#/components/parameters/Overseas" }, { "$ref": "#/components/parameters/All" }],
-        "responses": { "200": { "$ref": "#/components/responses/OrderPage" }, "500": { "$ref": "#/components/responses/ServerError" }, "501": { "$ref": "#/components/responses/NotImplemented" } }
+        "tags": [
+          "orders"
+        ],
+        "operationId": "listOrders",
+        "description": "分页订单查询。传 `all=true` 时转为最多 10,000 条的全量查询，忽略 page/pageSize。",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Page"
+          },
+          {
+            "$ref": "#/components/parameters/PageSize"
+          },
+          {
+            "$ref": "#/components/parameters/Keyword"
+          },
+          {
+            "$ref": "#/components/parameters/Source"
+          },
+          {
+            "$ref": "#/components/parameters/OrderScope"
+          },
+          {
+            "$ref": "#/components/parameters/GSTRSFrom"
+          },
+          {
+            "$ref": "#/components/parameters/GSTRSTo"
+          },
+          {
+            "$ref": "#/components/parameters/SalesOrder"
+          },
+          {
+            "$ref": "#/components/parameters/ProductionOrder"
+          },
+          {
+            "$ref": "#/components/parameters/SerialNumber"
+          },
+          {
+            "$ref": "#/components/parameters/ProductModel"
+          },
+          {
+            "$ref": "#/components/parameters/Customer"
+          },
+          {
+            "$ref": "#/components/parameters/Base"
+          },
+          {
+            "$ref": "#/components/parameters/DateFrom"
+          },
+          {
+            "$ref": "#/components/parameters/DateTo"
+          },
+          {
+            "$ref": "#/components/parameters/Overseas"
+          },
+          {
+            "$ref": "#/components/parameters/All"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/OrderPage"
+          },
+          "500": {
+            "$ref": "#/components/responses/ServerError"
+          },
+          "501": {
+            "$ref": "#/components/responses/NotImplemented"
+          }
+        }
       }
     },
     "/api/orders/all": {
-      "get": { "tags": ["orders"], "operationId": "listAllOrders", "description": "按筛选条件同步返回最多 10,000 条订单。", "parameters": [{ "$ref": "#/components/parameters/Keyword" }, { "$ref": "#/components/parameters/Source" }, { "$ref": "#/components/parameters/OrderScope" }, { "$ref": "#/components/parameters/GSTRSFrom" }, { "$ref": "#/components/parameters/GSTRSTo" }, { "$ref": "#/components/parameters/SalesOrder" }, { "$ref": "#/components/parameters/ProductionOrder" }, { "$ref": "#/components/parameters/SerialNumber" }, { "$ref": "#/components/parameters/ProductModel" }, { "$ref": "#/components/parameters/Customer" }, { "$ref": "#/components/parameters/Base" }, { "$ref": "#/components/parameters/DateFrom" }, { "$ref": "#/components/parameters/DateTo" }, { "$ref": "#/components/parameters/Overseas" }], "responses": { "200": { "$ref": "#/components/responses/OrderPage" }, "500": { "$ref": "#/components/responses/ServerError" }, "501": { "$ref": "#/components/responses/NotImplemented" } } }
+      "get": {
+        "tags": [
+          "orders"
+        ],
+        "operationId": "listAllOrders",
+        "description": "按筛选条件同步返回最多 10,000 条订单。",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Keyword"
+          },
+          {
+            "$ref": "#/components/parameters/Source"
+          },
+          {
+            "$ref": "#/components/parameters/OrderScope"
+          },
+          {
+            "$ref": "#/components/parameters/GSTRSFrom"
+          },
+          {
+            "$ref": "#/components/parameters/GSTRSTo"
+          },
+          {
+            "$ref": "#/components/parameters/SalesOrder"
+          },
+          {
+            "$ref": "#/components/parameters/ProductionOrder"
+          },
+          {
+            "$ref": "#/components/parameters/SerialNumber"
+          },
+          {
+            "$ref": "#/components/parameters/ProductModel"
+          },
+          {
+            "$ref": "#/components/parameters/Customer"
+          },
+          {
+            "$ref": "#/components/parameters/Base"
+          },
+          {
+            "$ref": "#/components/parameters/DateFrom"
+          },
+          {
+            "$ref": "#/components/parameters/DateTo"
+          },
+          {
+            "$ref": "#/components/parameters/Overseas"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/OrderPage"
+          },
+          "500": {
+            "$ref": "#/components/responses/ServerError"
+          },
+          "501": {
+            "$ref": "#/components/responses/NotImplemented"
+          }
+        }
+      }
     },
     "/api/orders/detail": {
-      "get": { "tags": ["orders"], "operationId": "getOrderDetail", "parameters": [{ "$ref": "#/components/parameters/Id" }], "responses": { "200": { "description": "详情", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/OrderDetail" } } } }, "400": { "$ref": "#/components/responses/BadRequest" }, "404": { "$ref": "#/components/responses/NotFound" }, "500": { "$ref": "#/components/responses/ServerError" } } }
+      "get": {
+        "tags": [
+          "orders"
+        ],
+        "operationId": "getOrderDetail",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Id"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "详情",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrderDetail"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/ServerError"
+          }
+        }
+      }
     },
     "/api/orders/stats": {
-      "get": { "tags": ["orders"], "operationId": "getOrderStats", "parameters": [{ "$ref": "#/components/parameters/Keyword" }, { "$ref": "#/components/parameters/Source" }, { "$ref": "#/components/parameters/OrderScope" }, { "$ref": "#/components/parameters/GSTRSFrom" }, { "$ref": "#/components/parameters/GSTRSTo" }, { "$ref": "#/components/parameters/SalesOrder" }, { "$ref": "#/components/parameters/ProductionOrder" }, { "$ref": "#/components/parameters/SerialNumber" }, { "$ref": "#/components/parameters/ProductModel" }, { "$ref": "#/components/parameters/Customer" }, { "$ref": "#/components/parameters/Base" }, { "$ref": "#/components/parameters/DateFrom" }, { "$ref": "#/components/parameters/DateTo" }, { "$ref": "#/components/parameters/Overseas" }], "responses": { "200": { "description": "统计结果", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/OrderStats" } } } }, "500": { "$ref": "#/components/responses/ServerError" } } }
+      "get": {
+        "tags": [
+          "orders"
+        ],
+        "operationId": "getOrderStats",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Keyword"
+          },
+          {
+            "$ref": "#/components/parameters/Source"
+          },
+          {
+            "$ref": "#/components/parameters/OrderScope"
+          },
+          {
+            "$ref": "#/components/parameters/GSTRSFrom"
+          },
+          {
+            "$ref": "#/components/parameters/GSTRSTo"
+          },
+          {
+            "$ref": "#/components/parameters/SalesOrder"
+          },
+          {
+            "$ref": "#/components/parameters/ProductionOrder"
+          },
+          {
+            "$ref": "#/components/parameters/SerialNumber"
+          },
+          {
+            "$ref": "#/components/parameters/ProductModel"
+          },
+          {
+            "$ref": "#/components/parameters/Customer"
+          },
+          {
+            "$ref": "#/components/parameters/Base"
+          },
+          {
+            "$ref": "#/components/parameters/DateFrom"
+          },
+          {
+            "$ref": "#/components/parameters/DateTo"
+          },
+          {
+            "$ref": "#/components/parameters/Overseas"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "统计结果",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrderStats"
+                }
+              }
+            }
+          },
+          "500": {
+            "$ref": "#/components/responses/ServerError"
+          }
+        }
+      }
     },
     "/api/orders/models": {
-      "get": { "tags": ["orders"], "operationId": "listOrderModels", "parameters": [{ "$ref": "#/components/parameters/Keyword" }], "responses": { "200": { "description": "生产机型候选", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/OrderModels" } } } }, "500": { "$ref": "#/components/responses/ServerError" } } }
+      "get": {
+        "tags": [
+          "orders"
+        ],
+        "operationId": "listOrderModels",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Keyword"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "生产机型候选",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrderModels"
+                }
+              }
+            }
+          },
+          "500": {
+            "$ref": "#/components/responses/ServerError"
+          }
+        }
+      }
     },
     "/api/orders/customer-ids": {
-      "get": { "tags": ["orders"], "operationId": "listOrderCustomerIDs", "responses": { "200": { "description": "客户 ID 候选", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/OrderCustomerIDs" } } } }, "500": { "$ref": "#/components/responses/ServerError" } } }
+      "get": {
+        "tags": [
+          "orders"
+        ],
+        "operationId": "listOrderCustomerIDs",
+        "responses": {
+          "200": {
+            "description": "客户 ID 候选",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrderCustomerIDs"
+                }
+              }
+            }
+          },
+          "500": {
+            "$ref": "#/components/responses/ServerError"
+          }
+        }
+      }
     },
     "/api/orders/options": {
-      "get": { "tags": ["orders"], "operationId": "listOrderOptions", "description": "返回 LRR 筛选候选。可通过 base 限定基地，结果按同步版本短时缓存，避免分页读取完整订单。", "parameters": [{ "$ref": "#/components/parameters/Base" }], "responses": { "200": { "description": "订单筛选候选", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/OrderOptions" } } } }, "500": { "$ref": "#/components/responses/ServerError" } } }
+      "get": {
+        "tags": [
+          "orders"
+        ],
+        "operationId": "listOrderOptions",
+        "description": "返回 LRR 筛选候选。可通过 base 限定基地，结果按同步版本短时缓存，避免分页读取完整订单。",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Base"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "订单筛选候选",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrderOptions"
+                }
+              }
+            }
+          },
+          "500": {
+            "$ref": "#/components/responses/ServerError"
+          }
+        }
+      }
+    },
+    "/api/kk-sales-order-deliveries": {
+      "get": {
+        "tags": [
+          "orders"
+        ],
+        "operationId": "listKKSalesOrderDeliveries",
+        "summary": "分页查询 KK 销售订单交付明细",
+        "description": "只读查询 prod_line_fault_5000.sales_order_deliveries_kk_sap。WADAT 使用 YYYY-MM-DD 筛选；按 SN 去重，每个非空 SN 保留 DATUM 最新的一条，DATUM 相同时以 MongoDB _id 较大者优先。空 SN 记录分别保留。销售订单号、物料号、客户号、SERNR 和 SN 按字符串处理，保留前导零。sn 为精确匹配，可与其他条件组合。page 须为 1 至 1,000,000，pageSize 须为 1 至 100。",
+        "parameters": [
+          {
+            "name": "dateFrom",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          },
+          {
+            "name": "dateTo",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          },
+          {
+            "name": "salesOrder",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "materialNumber",
+            "in": "query",
+            "description": "兼容 SAP 前导零格式和去掉前导零后的物料号。",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "customerNumber",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "plant",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "sn",
+            "in": "query",
+            "description": "精确匹配 SN，可与其他筛选条件组合。",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/Page"
+          },
+          {
+            "$ref": "#/components/parameters/PageSize"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "分页结果及集合是否为空。按 SN 去重后返回 DATUM 最新记录；旧文档未包含 SERNR 或 SN 时返回空字符串。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "items",
+                    "page",
+                    "pageSize",
+                    "total",
+                    "collectionEmpty"
+                  ],
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "required": [
+                          "id"
+                        ],
+                        "properties": {
+                          "id": {
+                            "type": "string",
+                            "description": "交付记录的 MongoDB ID，用于查询原始数据。"
+                          },
+                          "VBELN": {
+                            "type": "string"
+                          },
+                          "MATNR": {
+                            "type": "string"
+                          },
+                          "WADAT": {
+                            "type": "string",
+                            "pattern": "^\\d{8}$"
+                          },
+                          "DATUM": {
+                            "type": "string",
+                            "description": "源记录数据时间；同一 SN 保留该值最新的记录。"
+                          },
+                          "KUNNR": {
+                            "type": "string"
+                          },
+                          "WERKS": {
+                            "type": "string"
+                          },
+                          "SERNR": {
+                            "type": "string"
+                          },
+                          "SN": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    },
+                    "page": {
+                      "type": "integer"
+                    },
+                    "pageSize": {
+                      "type": "integer"
+                    },
+                    "total": {
+                      "type": "integer"
+                    },
+                    "collectionEmpty": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "503": {
+            "description": "MongoDB 查询失败",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/kk-sales-order-deliveries/export": {
+      "get": {
+        "tags": [
+          "orders"
+        ],
+        "operationId": "exportKKSalesOrderDeliveries",
+        "summary": "导出筛选后的 KK 销售订单交付明细",
+        "description": "以 UTF-8 CSV 流式下载符合当前筛选条件的全部结果。按 SN 去重，每个非空 SN 保留 DATUM 最新的一条，DATUM 相同时以 MongoDB _id 较大者优先；空 SN 记录分别保留。CSV 包含 DATUM 列。导出必须同时提供 dateFrom 和 dateTo，按 YYYY-MM-DD 格式，首尾日期均包含且范围最多 31 天。销售订单号、物料号、客户号、SERNR 和 SN 按字符串导出，保留前导零。",
+        "parameters": [
+          {
+            "name": "dateFrom",
+            "in": "query",
+            "required": true,
+            "description": "交付日期起始日（包含）。",
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          },
+          {
+            "name": "dateTo",
+            "in": "query",
+            "required": true,
+            "description": "交付日期结束日（包含）；与 dateFrom 的范围最多 31 天。",
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          },
+          {
+            "name": "salesOrder",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "materialNumber",
+            "in": "query",
+            "description": "兼容 SAP 前导零格式和去掉前导零后的物料号。",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "customerNumber",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "plant",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "sn",
+            "in": "query",
+            "description": "精确匹配 SN，可与其他筛选条件组合。",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "完整 CSV 文件",
+            "content": {
+              "text/csv": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            },
+            "headers": {
+              "Content-Disposition": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "附件文件名。"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          }
+        }
+      }
+    },
+    "/api/kk-sales-order-deliveries/detail": {
+      "get": {
+        "tags": [
+          "orders"
+        ],
+        "operationId": "getKKSalesOrderDeliveryDetail",
+        "summary": "读取一条 KK 交付记录的原始数据",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "query",
+            "required": true,
+            "description": "列表行返回的 ID。",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "完整 MongoDB 文档",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "404": {
+            "description": "记录不存在"
+          },
+          "503": {
+            "description": "MongoDB 查询失败"
+          }
+        }
+      }
     },
     "/api/views/ZSGV_ZSD124/options": {
-      "get": { "tags": ["views"], "operationId": "listBOMCompanyOptions", "summary": "查询订单 BOM 的公司候选", "responses": { "200": { "description": "CPX 公司候选", "content": { "application/json": { "schema": { "type": "object", "properties": { "items": { "type": "array", "items": { "type": "string" } } } } } } }, "500": { "$ref": "#/components/responses/ServerError" } } }
+      "get": {
+        "tags": [
+          "views"
+        ],
+        "operationId": "listBOMCompanyOptions",
+        "summary": "查询订单 BOM 的公司候选",
+        "responses": {
+          "200": {
+            "description": "CPX 公司候选",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "$ref": "#/components/responses/ServerError"
+          }
+        }
+      }
     },
     "/api/views/{viewID}": {
-      "get": { "tags": ["views"], "operationId": "listViewRecords", "description": "允许的 viewID：ZSGV_ZSD124、ZSGV_ZPP_SERNOLIST、Z_V_ZMES_T_001、SCS_DOA、SCS_CHANGE。pageSize 越界时使用 20。SCS_DOA 和 SCS_CHANGE 分别对应 SCS DOA 申报与换上换下数据。", "parameters": [{ "$ref": "#/components/parameters/ViewID" }, { "$ref": "#/components/parameters/Page" }, { "$ref": "#/components/parameters/PageSize" }, { "$ref": "#/components/parameters/Keyword" }, { "$ref": "#/components/parameters/From" }, { "$ref": "#/components/parameters/To" }, { "$ref": "#/components/parameters/DateFrom" }, { "$ref": "#/components/parameters/DateTo" }, { "$ref": "#/components/parameters/StationCode" }, { "$ref": "#/components/parameters/SN" }, { "$ref": "#/components/parameters/ProductionOrder" }, { "$ref": "#/components/parameters/SalesOrder" }, { "$ref": "#/components/parameters/Base" }, { "$ref": "#/components/parameters/ProductModel" }, { "$ref": "#/components/parameters/HeadOrder" }, { "$ref": "#/components/parameters/ItemOrder" }, { "$ref": "#/components/parameters/HeadSN" }, { "$ref": "#/components/parameters/ItemSN" }, { "$ref": "#/components/parameters/MissingSalesOrder" }, { "$ref": "#/components/parameters/MaterialCode" }, { "$ref": "#/components/parameters/DOACode" }, { "$ref": "#/components/parameters/DOAType" }, { "$ref": "#/components/parameters/Status" }, { "$ref": "#/components/parameters/Judgment" }, { "$ref": "#/components/parameters/EnrichmentStatus" }, { "$ref": "#/components/parameters/AcceptedDateFrom" }, { "$ref": "#/components/parameters/AcceptedDateTo" }, { "$ref": "#/components/parameters/Customer" }, { "$ref": "#/components/parameters/ServiceOrder" }, { "$ref": "#/components/parameters/ChangeType" }, { "$ref": "#/components/parameters/PartNumber" }, { "$ref": "#/components/parameters/PartSN" }, { "$ref": "#/components/parameters/Operator" }, { "$ref": "#/components/parameters/NeedReturn" }, { "$ref": "#/components/parameters/Revoked" }, { "$ref": "#/components/parameters/Company5000" }], "responses": { "200": { "$ref": "#/components/responses/ViewPage" }, "400": { "$ref": "#/components/responses/BadRequest" }, "501": { "$ref": "#/components/responses/NotImplemented" } } }
+      "get": {
+        "tags": [
+          "views"
+        ],
+        "operationId": "listViewRecords",
+        "description": "允许的 viewID：ZSGV_ZSD124、ZSGV_ZPP_SERNOLIST、Z_V_ZMES_T_001、SCS_DOA、SCS_CHANGE。pageSize 越界时使用 20。SCS_DOA 和 SCS_CHANGE 分别对应 SCS DOA 申报与换上换下数据。",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ViewID"
+          },
+          {
+            "$ref": "#/components/parameters/Page"
+          },
+          {
+            "$ref": "#/components/parameters/PageSize"
+          },
+          {
+            "$ref": "#/components/parameters/Keyword"
+          },
+          {
+            "$ref": "#/components/parameters/From"
+          },
+          {
+            "$ref": "#/components/parameters/To"
+          },
+          {
+            "$ref": "#/components/parameters/DateFrom"
+          },
+          {
+            "$ref": "#/components/parameters/DateTo"
+          },
+          {
+            "$ref": "#/components/parameters/StationCode"
+          },
+          {
+            "$ref": "#/components/parameters/SN"
+          },
+          {
+            "$ref": "#/components/parameters/ProductionOrder"
+          },
+          {
+            "$ref": "#/components/parameters/SalesOrder"
+          },
+          {
+            "$ref": "#/components/parameters/Base"
+          },
+          {
+            "$ref": "#/components/parameters/ProductModel"
+          },
+          {
+            "$ref": "#/components/parameters/HeadOrder"
+          },
+          {
+            "$ref": "#/components/parameters/ItemOrder"
+          },
+          {
+            "$ref": "#/components/parameters/HeadSN"
+          },
+          {
+            "$ref": "#/components/parameters/ItemSN"
+          },
+          {
+            "$ref": "#/components/parameters/MissingSalesOrder"
+          },
+          {
+            "$ref": "#/components/parameters/MaterialCode"
+          },
+          {
+            "$ref": "#/components/parameters/DOACode"
+          },
+          {
+            "$ref": "#/components/parameters/DOAType"
+          },
+          {
+            "$ref": "#/components/parameters/Status"
+          },
+          {
+            "$ref": "#/components/parameters/Judgment"
+          },
+          {
+            "$ref": "#/components/parameters/EnrichmentStatus"
+          },
+          {
+            "$ref": "#/components/parameters/AcceptedDateFrom"
+          },
+          {
+            "$ref": "#/components/parameters/AcceptedDateTo"
+          },
+          {
+            "$ref": "#/components/parameters/Customer"
+          },
+          {
+            "$ref": "#/components/parameters/ServiceOrder"
+          },
+          {
+            "$ref": "#/components/parameters/ChangeType"
+          },
+          {
+            "$ref": "#/components/parameters/PartNumber"
+          },
+          {
+            "$ref": "#/components/parameters/PartSN"
+          },
+          {
+            "$ref": "#/components/parameters/Operator"
+          },
+          {
+            "$ref": "#/components/parameters/NeedReturn"
+          },
+          {
+            "$ref": "#/components/parameters/Revoked"
+          },
+          {
+            "$ref": "#/components/parameters/Company5000"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/ViewPage"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "501": {
+            "$ref": "#/components/responses/NotImplemented"
+          }
+        }
+      }
     },
     "/api/views/{viewID}/detail": {
-      "get": { "tags": ["views"], "operationId": "getViewDetail", "parameters": [{ "$ref": "#/components/parameters/ViewID" }, { "$ref": "#/components/parameters/Id" }], "responses": { "200": { "description": "视图详情", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ViewDetail" } } } }, "400": { "$ref": "#/components/responses/BadRequest" }, "404": { "$ref": "#/components/responses/NotFound" }, "501": { "$ref": "#/components/responses/NotImplemented" } } }
+      "get": {
+        "tags": [
+          "views"
+        ],
+        "operationId": "getViewDetail",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ViewID"
+          },
+          {
+            "$ref": "#/components/parameters/Id"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "视图详情",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ViewDetail"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "501": {
+            "$ref": "#/components/responses/NotImplemented"
+          }
+        }
+      }
     },
     "/api/views/{viewID}/stats": {
-      "get": { "tags": ["views"], "operationId": "getViewStats", "parameters": [{ "$ref": "#/components/parameters/ViewID" }, { "$ref": "#/components/parameters/Keyword" }, { "$ref": "#/components/parameters/From" }, { "$ref": "#/components/parameters/To" }, { "$ref": "#/components/parameters/DateFrom" }, { "$ref": "#/components/parameters/DateTo" }, { "$ref": "#/components/parameters/StationCode" }, { "$ref": "#/components/parameters/SN" }, { "$ref": "#/components/parameters/ProductionOrder" }, { "$ref": "#/components/parameters/SalesOrder" }, { "$ref": "#/components/parameters/Base" }, { "$ref": "#/components/parameters/ProductModel" }, { "$ref": "#/components/parameters/HeadOrder" }, { "$ref": "#/components/parameters/ItemOrder" }, { "$ref": "#/components/parameters/HeadSN" }, { "$ref": "#/components/parameters/ItemSN" }, { "$ref": "#/components/parameters/MissingSalesOrder" }, { "$ref": "#/components/parameters/MaterialCode" }, { "$ref": "#/components/parameters/DOACode" }, { "$ref": "#/components/parameters/DOAType" }, { "$ref": "#/components/parameters/Status" }, { "$ref": "#/components/parameters/Judgment" }, { "$ref": "#/components/parameters/EnrichmentStatus" }, { "$ref": "#/components/parameters/AcceptedDateFrom" }, { "$ref": "#/components/parameters/AcceptedDateTo" }, { "$ref": "#/components/parameters/Customer" }, { "$ref": "#/components/parameters/ServiceOrder" }, { "$ref": "#/components/parameters/ChangeType" }, { "$ref": "#/components/parameters/PartNumber" }, { "$ref": "#/components/parameters/PartSN" }, { "$ref": "#/components/parameters/Operator" }, { "$ref": "#/components/parameters/NeedReturn" }, { "$ref": "#/components/parameters/Revoked" }, { "$ref": "#/components/parameters/Company5000" }], "responses": { "200": { "description": "统计结果", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ViewStats" } } } }, "400": { "$ref": "#/components/responses/BadRequest" }, "501": { "$ref": "#/components/responses/NotImplemented" } } }
+      "get": {
+        "tags": [
+          "views"
+        ],
+        "operationId": "getViewStats",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ViewID"
+          },
+          {
+            "$ref": "#/components/parameters/Keyword"
+          },
+          {
+            "$ref": "#/components/parameters/From"
+          },
+          {
+            "$ref": "#/components/parameters/To"
+          },
+          {
+            "$ref": "#/components/parameters/DateFrom"
+          },
+          {
+            "$ref": "#/components/parameters/DateTo"
+          },
+          {
+            "$ref": "#/components/parameters/StationCode"
+          },
+          {
+            "$ref": "#/components/parameters/SN"
+          },
+          {
+            "$ref": "#/components/parameters/ProductionOrder"
+          },
+          {
+            "$ref": "#/components/parameters/SalesOrder"
+          },
+          {
+            "$ref": "#/components/parameters/Base"
+          },
+          {
+            "$ref": "#/components/parameters/ProductModel"
+          },
+          {
+            "$ref": "#/components/parameters/HeadOrder"
+          },
+          {
+            "$ref": "#/components/parameters/ItemOrder"
+          },
+          {
+            "$ref": "#/components/parameters/HeadSN"
+          },
+          {
+            "$ref": "#/components/parameters/ItemSN"
+          },
+          {
+            "$ref": "#/components/parameters/MissingSalesOrder"
+          },
+          {
+            "$ref": "#/components/parameters/MaterialCode"
+          },
+          {
+            "$ref": "#/components/parameters/DOACode"
+          },
+          {
+            "$ref": "#/components/parameters/DOAType"
+          },
+          {
+            "$ref": "#/components/parameters/Status"
+          },
+          {
+            "$ref": "#/components/parameters/Judgment"
+          },
+          {
+            "$ref": "#/components/parameters/EnrichmentStatus"
+          },
+          {
+            "$ref": "#/components/parameters/AcceptedDateFrom"
+          },
+          {
+            "$ref": "#/components/parameters/AcceptedDateTo"
+          },
+          {
+            "$ref": "#/components/parameters/Customer"
+          },
+          {
+            "$ref": "#/components/parameters/ServiceOrder"
+          },
+          {
+            "$ref": "#/components/parameters/ChangeType"
+          },
+          {
+            "$ref": "#/components/parameters/PartNumber"
+          },
+          {
+            "$ref": "#/components/parameters/PartSN"
+          },
+          {
+            "$ref": "#/components/parameters/Operator"
+          },
+          {
+            "$ref": "#/components/parameters/NeedReturn"
+          },
+          {
+            "$ref": "#/components/parameters/Revoked"
+          },
+          {
+            "$ref": "#/components/parameters/Company5000"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "统计结果",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ViewStats"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "501": {
+            "$ref": "#/components/responses/NotImplemented"
+          }
+        }
+      }
     },
     "/api/views/SCS_DOA": {
-      "get": { "tags": ["scs"], "operationId": "listSCSDoaRecords", "summary": "查询 SCS DOA 申报", "description": "SCS_DOA 申报列表；等价于将 viewID 设为 SCS_DOA 的通用视图查询。", "parameters": [{ "$ref": "#/components/parameters/Page" }, { "$ref": "#/components/parameters/PageSize" }, { "$ref": "#/components/parameters/Keyword" }, { "$ref": "#/components/parameters/DateFrom" }, { "$ref": "#/components/parameters/DateTo" }, { "$ref": "#/components/parameters/SN" }, { "$ref": "#/components/parameters/SalesOrder" }, { "$ref": "#/components/parameters/Customer" }, { "$ref": "#/components/parameters/ServiceOrder" }, { "$ref": "#/components/parameters/DOACode" }, { "$ref": "#/components/parameters/DOAType" }, { "$ref": "#/components/parameters/Status" }, { "$ref": "#/components/parameters/Judgment" }, { "$ref": "#/components/parameters/EnrichmentStatus" }, { "$ref": "#/components/parameters/AcceptedDateFrom" }, { "$ref": "#/components/parameters/AcceptedDateTo" }, { "$ref": "#/components/parameters/Company5000" }], "responses": { "200": { "$ref": "#/components/responses/ViewPage" }, "400": { "$ref": "#/components/responses/BadRequest" }, "501": { "$ref": "#/components/responses/NotImplemented" } } }
+      "get": {
+        "tags": [
+          "scs"
+        ],
+        "operationId": "listSCSDoaRecords",
+        "summary": "查询 SCS DOA 申报",
+        "description": "SCS_DOA 申报列表；等价于将 viewID 设为 SCS_DOA 的通用视图查询。",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Page"
+          },
+          {
+            "$ref": "#/components/parameters/PageSize"
+          },
+          {
+            "$ref": "#/components/parameters/Keyword"
+          },
+          {
+            "$ref": "#/components/parameters/DateFrom"
+          },
+          {
+            "$ref": "#/components/parameters/DateTo"
+          },
+          {
+            "$ref": "#/components/parameters/SN"
+          },
+          {
+            "$ref": "#/components/parameters/SalesOrder"
+          },
+          {
+            "$ref": "#/components/parameters/Customer"
+          },
+          {
+            "$ref": "#/components/parameters/ServiceOrder"
+          },
+          {
+            "$ref": "#/components/parameters/DOACode"
+          },
+          {
+            "$ref": "#/components/parameters/DOAType"
+          },
+          {
+            "$ref": "#/components/parameters/Status"
+          },
+          {
+            "$ref": "#/components/parameters/Judgment"
+          },
+          {
+            "$ref": "#/components/parameters/EnrichmentStatus"
+          },
+          {
+            "$ref": "#/components/parameters/AcceptedDateFrom"
+          },
+          {
+            "$ref": "#/components/parameters/AcceptedDateTo"
+          },
+          {
+            "$ref": "#/components/parameters/Company5000"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/ViewPage"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "501": {
+            "$ref": "#/components/responses/NotImplemented"
+          }
+        }
+      }
     },
     "/api/views/SCS_DOA/detail": {
-      "get": { "tags": ["scs"], "operationId": "getSCSDoaDetail", "summary": "查询 SCS DOA 详情", "parameters": [{ "$ref": "#/components/parameters/Id" }], "responses": { "200": { "description": "SCS DOA 详情", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ViewDetail" } } } }, "400": { "$ref": "#/components/responses/BadRequest" }, "404": { "$ref": "#/components/responses/NotFound" } } }
+      "get": {
+        "tags": [
+          "scs"
+        ],
+        "operationId": "getSCSDoaDetail",
+        "summary": "查询 SCS DOA 详情",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Id"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "SCS DOA 详情",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ViewDetail"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
     },
     "/api/views/SCS_DOA/stats": {
-      "get": { "tags": ["scs"], "operationId": "getSCSDoaStats", "summary": "统计 SCS DOA 申报", "parameters": [{ "$ref": "#/components/parameters/Keyword" }, { "$ref": "#/components/parameters/DateFrom" }, { "$ref": "#/components/parameters/DateTo" }, { "$ref": "#/components/parameters/SN" }, { "$ref": "#/components/parameters/SalesOrder" }, { "$ref": "#/components/parameters/Customer" }, { "$ref": "#/components/parameters/ServiceOrder" }, { "$ref": "#/components/parameters/DOACode" }, { "$ref": "#/components/parameters/DOAType" }, { "$ref": "#/components/parameters/Status" }, { "$ref": "#/components/parameters/Judgment" }, { "$ref": "#/components/parameters/EnrichmentStatus" }, { "$ref": "#/components/parameters/AcceptedDateFrom" }, { "$ref": "#/components/parameters/AcceptedDateTo" }, { "$ref": "#/components/parameters/Company5000" }], "responses": { "200": { "description": "SCS DOA 统计结果", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ViewStats" } } } }, "400": { "$ref": "#/components/responses/BadRequest" } } }
+      "get": {
+        "tags": [
+          "scs"
+        ],
+        "operationId": "getSCSDoaStats",
+        "summary": "统计 SCS DOA 申报",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Keyword"
+          },
+          {
+            "$ref": "#/components/parameters/DateFrom"
+          },
+          {
+            "$ref": "#/components/parameters/DateTo"
+          },
+          {
+            "$ref": "#/components/parameters/SN"
+          },
+          {
+            "$ref": "#/components/parameters/SalesOrder"
+          },
+          {
+            "$ref": "#/components/parameters/Customer"
+          },
+          {
+            "$ref": "#/components/parameters/ServiceOrder"
+          },
+          {
+            "$ref": "#/components/parameters/DOACode"
+          },
+          {
+            "$ref": "#/components/parameters/DOAType"
+          },
+          {
+            "$ref": "#/components/parameters/Status"
+          },
+          {
+            "$ref": "#/components/parameters/Judgment"
+          },
+          {
+            "$ref": "#/components/parameters/EnrichmentStatus"
+          },
+          {
+            "$ref": "#/components/parameters/AcceptedDateFrom"
+          },
+          {
+            "$ref": "#/components/parameters/AcceptedDateTo"
+          },
+          {
+            "$ref": "#/components/parameters/Company5000"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "SCS DOA 统计结果",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ViewStats"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          }
+        }
+      }
     },
     "/api/views/SCS_DOA/all": {
-      "get": { "tags": ["scs"], "operationId": "listAllSCSDoaRecords", "summary": "全量查询 SCS DOA 申报", "description": "按筛选条件同步返回最多 10,000 条 SCS DOA 记录。", "parameters": [{ "$ref": "#/components/parameters/Keyword" }, { "$ref": "#/components/parameters/DateFrom" }, { "$ref": "#/components/parameters/DateTo" }, { "$ref": "#/components/parameters/SN" }, { "$ref": "#/components/parameters/SalesOrder" }, { "$ref": "#/components/parameters/Customer" }, { "$ref": "#/components/parameters/ServiceOrder" }, { "$ref": "#/components/parameters/DOACode" }, { "$ref": "#/components/parameters/DOAType" }, { "$ref": "#/components/parameters/Status" }, { "$ref": "#/components/parameters/Judgment" }, { "$ref": "#/components/parameters/EnrichmentStatus" }, { "$ref": "#/components/parameters/AcceptedDateFrom" }, { "$ref": "#/components/parameters/AcceptedDateTo" }, { "$ref": "#/components/parameters/Company5000" }], "responses": { "200": { "$ref": "#/components/responses/ViewPage" }, "400": { "$ref": "#/components/responses/BadRequest" } } }
+      "get": {
+        "tags": [
+          "scs"
+        ],
+        "operationId": "listAllSCSDoaRecords",
+        "summary": "全量查询 SCS DOA 申报",
+        "description": "按筛选条件同步返回最多 10,000 条 SCS DOA 记录。",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Keyword"
+          },
+          {
+            "$ref": "#/components/parameters/DateFrom"
+          },
+          {
+            "$ref": "#/components/parameters/DateTo"
+          },
+          {
+            "$ref": "#/components/parameters/SN"
+          },
+          {
+            "$ref": "#/components/parameters/SalesOrder"
+          },
+          {
+            "$ref": "#/components/parameters/Customer"
+          },
+          {
+            "$ref": "#/components/parameters/ServiceOrder"
+          },
+          {
+            "$ref": "#/components/parameters/DOACode"
+          },
+          {
+            "$ref": "#/components/parameters/DOAType"
+          },
+          {
+            "$ref": "#/components/parameters/Status"
+          },
+          {
+            "$ref": "#/components/parameters/Judgment"
+          },
+          {
+            "$ref": "#/components/parameters/EnrichmentStatus"
+          },
+          {
+            "$ref": "#/components/parameters/AcceptedDateFrom"
+          },
+          {
+            "$ref": "#/components/parameters/AcceptedDateTo"
+          },
+          {
+            "$ref": "#/components/parameters/Company5000"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/ViewPage"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          }
+        }
+      }
     },
     "/api/views/SCS_DOA/stream": {
-      "get": { "tags": ["scs"], "operationId": "streamSCSDoaRecords", "summary": "导出 SCS DOA 申报", "description": "以 TSV 流式导出 SCS DOA 记录，不受 /all 的 10,000 条上限限制。", "parameters": [{ "$ref": "#/components/parameters/Keyword" }, { "$ref": "#/components/parameters/DateFrom" }, { "$ref": "#/components/parameters/DateTo" }, { "$ref": "#/components/parameters/SN" }, { "$ref": "#/components/parameters/SalesOrder" }, { "$ref": "#/components/parameters/Customer" }, { "$ref": "#/components/parameters/ServiceOrder" }, { "$ref": "#/components/parameters/DOACode" }, { "$ref": "#/components/parameters/DOAType" }, { "$ref": "#/components/parameters/Status" }, { "$ref": "#/components/parameters/Judgment" }, { "$ref": "#/components/parameters/EnrichmentStatus" }, { "$ref": "#/components/parameters/AcceptedDateFrom" }, { "$ref": "#/components/parameters/AcceptedDateTo" }, { "$ref": "#/components/parameters/Company5000" }], "responses": { "200": { "description": "TSV 文件", "content": { "text/tab-separated-values": { "schema": { "type": "string" } } } }, "400": { "$ref": "#/components/responses/BadRequest" } } }
+      "get": {
+        "tags": [
+          "scs"
+        ],
+        "operationId": "streamSCSDoaRecords",
+        "summary": "导出 SCS DOA 申报",
+        "description": "以 TSV 流式导出 SCS DOA 记录，不受 /all 的 10,000 条上限限制。",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Keyword"
+          },
+          {
+            "$ref": "#/components/parameters/DateFrom"
+          },
+          {
+            "$ref": "#/components/parameters/DateTo"
+          },
+          {
+            "$ref": "#/components/parameters/SN"
+          },
+          {
+            "$ref": "#/components/parameters/SalesOrder"
+          },
+          {
+            "$ref": "#/components/parameters/Customer"
+          },
+          {
+            "$ref": "#/components/parameters/ServiceOrder"
+          },
+          {
+            "$ref": "#/components/parameters/DOACode"
+          },
+          {
+            "$ref": "#/components/parameters/DOAType"
+          },
+          {
+            "$ref": "#/components/parameters/Status"
+          },
+          {
+            "$ref": "#/components/parameters/Judgment"
+          },
+          {
+            "$ref": "#/components/parameters/EnrichmentStatus"
+          },
+          {
+            "$ref": "#/components/parameters/AcceptedDateFrom"
+          },
+          {
+            "$ref": "#/components/parameters/AcceptedDateTo"
+          },
+          {
+            "$ref": "#/components/parameters/Company5000"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "TSV 文件",
+            "content": {
+              "text/tab-separated-values": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          }
+        }
+      }
     },
     "/api/views/SCS_CHANGE": {
-      "get": { "tags": ["scs"], "operationId": "listSCSChangeRecords", "summary": "查询 SCS 换上换下", "description": "SCS 换上换下列表；等价于将 viewID 设为 SCS_CHANGE 的通用视图查询。", "parameters": [{ "$ref": "#/components/parameters/Page" }, { "$ref": "#/components/parameters/PageSize" }, { "$ref": "#/components/parameters/Keyword" }, { "$ref": "#/components/parameters/DateFrom" }, { "$ref": "#/components/parameters/DateTo" }, { "$ref": "#/components/parameters/SN" }, { "$ref": "#/components/parameters/Customer" }, { "$ref": "#/components/parameters/ServiceOrder" }, { "$ref": "#/components/parameters/ChangeType" }, { "$ref": "#/components/parameters/PartNumber" }, { "$ref": "#/components/parameters/PartSN" }, { "$ref": "#/components/parameters/Operator" }, { "$ref": "#/components/parameters/NeedReturn" }, { "$ref": "#/components/parameters/Revoked" }, { "$ref": "#/components/parameters/Company5000" }], "responses": { "200": { "$ref": "#/components/responses/ViewPage" }, "400": { "$ref": "#/components/responses/BadRequest" }, "501": { "$ref": "#/components/responses/NotImplemented" } } }
+      "get": {
+        "tags": [
+          "scs"
+        ],
+        "operationId": "listSCSChangeRecords",
+        "summary": "查询 SCS 换上换下",
+        "description": "SCS 换上换下列表；等价于将 viewID 设为 SCS_CHANGE 的通用视图查询。",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Page"
+          },
+          {
+            "$ref": "#/components/parameters/PageSize"
+          },
+          {
+            "$ref": "#/components/parameters/Keyword"
+          },
+          {
+            "$ref": "#/components/parameters/DateFrom"
+          },
+          {
+            "$ref": "#/components/parameters/DateTo"
+          },
+          {
+            "$ref": "#/components/parameters/SN"
+          },
+          {
+            "$ref": "#/components/parameters/Customer"
+          },
+          {
+            "$ref": "#/components/parameters/ServiceOrder"
+          },
+          {
+            "$ref": "#/components/parameters/ChangeType"
+          },
+          {
+            "$ref": "#/components/parameters/PartNumber"
+          },
+          {
+            "$ref": "#/components/parameters/PartSN"
+          },
+          {
+            "$ref": "#/components/parameters/Operator"
+          },
+          {
+            "$ref": "#/components/parameters/NeedReturn"
+          },
+          {
+            "$ref": "#/components/parameters/Revoked"
+          },
+          {
+            "$ref": "#/components/parameters/Company5000"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/ViewPage"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "501": {
+            "$ref": "#/components/responses/NotImplemented"
+          }
+        }
+      }
     },
     "/api/views/SCS_CHANGE/detail": {
-      "get": { "tags": ["scs"], "operationId": "getSCSChangeDetail", "summary": "查询 SCS 换上换下详情", "parameters": [{ "$ref": "#/components/parameters/Id" }], "responses": { "200": { "description": "SCS 换上换下详情", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ViewDetail" } } } }, "400": { "$ref": "#/components/responses/BadRequest" }, "404": { "$ref": "#/components/responses/NotFound" } } }
+      "get": {
+        "tags": [
+          "scs"
+        ],
+        "operationId": "getSCSChangeDetail",
+        "summary": "查询 SCS 换上换下详情",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Id"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "SCS 换上换下详情",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ViewDetail"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
     },
     "/api/views/SCS_CHANGE/stats": {
-      "get": { "tags": ["scs"], "operationId": "getSCSChangeStats", "summary": "统计 SCS 换上换下", "parameters": [{ "$ref": "#/components/parameters/Keyword" }, { "$ref": "#/components/parameters/DateFrom" }, { "$ref": "#/components/parameters/DateTo" }, { "$ref": "#/components/parameters/SN" }, { "$ref": "#/components/parameters/Customer" }, { "$ref": "#/components/parameters/ServiceOrder" }, { "$ref": "#/components/parameters/ChangeType" }, { "$ref": "#/components/parameters/PartNumber" }, { "$ref": "#/components/parameters/PartSN" }, { "$ref": "#/components/parameters/Operator" }, { "$ref": "#/components/parameters/NeedReturn" }, { "$ref": "#/components/parameters/Revoked" }, { "$ref": "#/components/parameters/Company5000" }], "responses": { "200": { "description": "SCS 换上换下统计结果", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ViewStats" } } } }, "400": { "$ref": "#/components/responses/BadRequest" } } }
+      "get": {
+        "tags": [
+          "scs"
+        ],
+        "operationId": "getSCSChangeStats",
+        "summary": "统计 SCS 换上换下",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Keyword"
+          },
+          {
+            "$ref": "#/components/parameters/DateFrom"
+          },
+          {
+            "$ref": "#/components/parameters/DateTo"
+          },
+          {
+            "$ref": "#/components/parameters/SN"
+          },
+          {
+            "$ref": "#/components/parameters/Customer"
+          },
+          {
+            "$ref": "#/components/parameters/ServiceOrder"
+          },
+          {
+            "$ref": "#/components/parameters/ChangeType"
+          },
+          {
+            "$ref": "#/components/parameters/PartNumber"
+          },
+          {
+            "$ref": "#/components/parameters/PartSN"
+          },
+          {
+            "$ref": "#/components/parameters/Operator"
+          },
+          {
+            "$ref": "#/components/parameters/NeedReturn"
+          },
+          {
+            "$ref": "#/components/parameters/Revoked"
+          },
+          {
+            "$ref": "#/components/parameters/Company5000"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "SCS 换上换下统计结果",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ViewStats"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          }
+        }
+      }
     },
     "/api/views/SCS_CHANGE/all": {
-      "get": { "tags": ["scs"], "operationId": "listAllSCSChangeRecords", "summary": "全量查询 SCS 换上换下", "description": "按筛选条件同步返回最多 10,000 条 SCS 换上换下记录。", "parameters": [{ "$ref": "#/components/parameters/Keyword" }, { "$ref": "#/components/parameters/DateFrom" }, { "$ref": "#/components/parameters/DateTo" }, { "$ref": "#/components/parameters/SN" }, { "$ref": "#/components/parameters/Customer" }, { "$ref": "#/components/parameters/ServiceOrder" }, { "$ref": "#/components/parameters/ChangeType" }, { "$ref": "#/components/parameters/PartNumber" }, { "$ref": "#/components/parameters/PartSN" }, { "$ref": "#/components/parameters/Operator" }, { "$ref": "#/components/parameters/NeedReturn" }, { "$ref": "#/components/parameters/Revoked" }, { "$ref": "#/components/parameters/Company5000" }], "responses": { "200": { "$ref": "#/components/responses/ViewPage" }, "400": { "$ref": "#/components/responses/BadRequest" } } }
+      "get": {
+        "tags": [
+          "scs"
+        ],
+        "operationId": "listAllSCSChangeRecords",
+        "summary": "全量查询 SCS 换上换下",
+        "description": "按筛选条件同步返回最多 10,000 条 SCS 换上换下记录。",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Keyword"
+          },
+          {
+            "$ref": "#/components/parameters/DateFrom"
+          },
+          {
+            "$ref": "#/components/parameters/DateTo"
+          },
+          {
+            "$ref": "#/components/parameters/SN"
+          },
+          {
+            "$ref": "#/components/parameters/Customer"
+          },
+          {
+            "$ref": "#/components/parameters/ServiceOrder"
+          },
+          {
+            "$ref": "#/components/parameters/ChangeType"
+          },
+          {
+            "$ref": "#/components/parameters/PartNumber"
+          },
+          {
+            "$ref": "#/components/parameters/PartSN"
+          },
+          {
+            "$ref": "#/components/parameters/Operator"
+          },
+          {
+            "$ref": "#/components/parameters/NeedReturn"
+          },
+          {
+            "$ref": "#/components/parameters/Revoked"
+          },
+          {
+            "$ref": "#/components/parameters/Company5000"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/ViewPage"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          }
+        }
+      }
     },
     "/api/views/SCS_CHANGE/stream": {
-      "get": { "tags": ["scs"], "operationId": "streamSCSChangeRecords", "summary": "导出 SCS 换上换下", "description": "以 TSV 流式导出 SCS 换上换下记录，不受 /all 的 10,000 条上限限制。", "parameters": [{ "$ref": "#/components/parameters/Keyword" }, { "$ref": "#/components/parameters/DateFrom" }, { "$ref": "#/components/parameters/DateTo" }, { "$ref": "#/components/parameters/SN" }, { "$ref": "#/components/parameters/Customer" }, { "$ref": "#/components/parameters/ServiceOrder" }, { "$ref": "#/components/parameters/ChangeType" }, { "$ref": "#/components/parameters/PartNumber" }, { "$ref": "#/components/parameters/PartSN" }, { "$ref": "#/components/parameters/Operator" }, { "$ref": "#/components/parameters/NeedReturn" }, { "$ref": "#/components/parameters/Revoked" }, { "$ref": "#/components/parameters/Company5000" }], "responses": { "200": { "description": "TSV 文件", "content": { "text/tab-separated-values": { "schema": { "type": "string" } } } }, "400": { "$ref": "#/components/responses/BadRequest" } } }
+      "get": {
+        "tags": [
+          "scs"
+        ],
+        "operationId": "streamSCSChangeRecords",
+        "summary": "导出 SCS 换上换下",
+        "description": "以 TSV 流式导出 SCS 换上换下记录，不受 /all 的 10,000 条上限限制。",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Keyword"
+          },
+          {
+            "$ref": "#/components/parameters/DateFrom"
+          },
+          {
+            "$ref": "#/components/parameters/DateTo"
+          },
+          {
+            "$ref": "#/components/parameters/SN"
+          },
+          {
+            "$ref": "#/components/parameters/Customer"
+          },
+          {
+            "$ref": "#/components/parameters/ServiceOrder"
+          },
+          {
+            "$ref": "#/components/parameters/ChangeType"
+          },
+          {
+            "$ref": "#/components/parameters/PartNumber"
+          },
+          {
+            "$ref": "#/components/parameters/PartSN"
+          },
+          {
+            "$ref": "#/components/parameters/Operator"
+          },
+          {
+            "$ref": "#/components/parameters/NeedReturn"
+          },
+          {
+            "$ref": "#/components/parameters/Revoked"
+          },
+          {
+            "$ref": "#/components/parameters/Company5000"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "TSV 文件",
+            "content": {
+              "text/tab-separated-values": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          }
+        }
+      }
     },
     "/api/sync/incremental": {
-      "post": { "tags": ["sync"], "operationId": "startIncrementalSync", "responses": { "202": { "description": "任务已启动", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SyncStatus" } } } }, "409": { "$ref": "#/components/responses/Conflict" }, "500": { "$ref": "#/components/responses/ServerError" } } }
+      "post": {
+        "tags": [
+          "sync"
+        ],
+        "operationId": "startIncrementalSync",
+        "responses": {
+          "202": {
+            "description": "任务已启动",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SyncStatus"
+                }
+              }
+            }
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "500": {
+            "$ref": "#/components/responses/ServerError"
+          }
+        }
+      }
     },
     "/api/sync/status": {
-      "get": { "tags": ["sync"], "operationId": "getSyncStatus", "responses": { "200": { "description": "同步状态", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SyncStatus" } } } } } }
+      "get": {
+        "tags": [
+          "sync"
+        ],
+        "operationId": "getSyncStatus",
+        "responses": {
+          "200": {
+            "description": "同步状态",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SyncStatus"
+                }
+              }
+            }
+          }
+        }
+      }
     },
     "/api/sync/tasks": {
-      "get": { "tags": ["sync"], "operationId": "listSyncTasks", "responses": { "200": { "description": "注册任务及依赖", "content": { "application/json": { "schema": { "type": "object", "properties": { "items": { "type": "array", "items": { "type": "object", "additionalProperties": true } } } } } } } } }
+      "get": {
+        "tags": [
+          "sync"
+        ],
+        "operationId": "listSyncTasks",
+        "responses": {
+          "200": {
+            "description": "注册任务及依赖",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "additionalProperties": true
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
     },
     "/api/sync/runs": {
-      "get": { "tags": ["sync"], "operationId": "listSyncRuns", "parameters": [{ "name": "limit", "in": "query", "schema": { "type": "integer", "minimum": 1, "maximum": 100, "default": 20 } }], "responses": { "200": { "description": "同步运行历史" } } },
-      "post": { "tags": ["sync"], "operationId": "startSyncRun", "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["mode"], "properties": { "mode": { "type": "string", "enum": ["incremental", "full"] }, "taskIds": { "type": "array", "items": { "type": "string" } }, "startDate": { "type": "string", "format": "date", "description": "全量同步必填" }, "endDate": { "type": "string", "format": "date" } } } } } }, "responses": { "202": { "description": "编排运行已启动" }, "400": { "$ref": "#/components/responses/BadRequest" }, "409": { "$ref": "#/components/responses/Conflict" } } }
+      "get": {
+        "tags": [
+          "sync"
+        ],
+        "operationId": "listSyncRuns",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "同步运行历史"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "sync"
+        ],
+        "operationId": "startSyncRun",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "mode"
+                ],
+                "properties": {
+                  "mode": {
+                    "type": "string",
+                    "enum": [
+                      "incremental",
+                      "full"
+                    ]
+                  },
+                  "taskIds": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "startDate": {
+                    "type": "string",
+                    "format": "date",
+                    "description": "全量同步必填"
+                  },
+                  "endDate": {
+                    "type": "string",
+                    "format": "date"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "编排运行已启动"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          }
+        }
+      }
     },
     "/api/sync/runs/{id}": {
-      "get": { "tags": ["sync"], "operationId": "getSyncRun", "parameters": [{ "$ref": "#/components/parameters/Id" }], "responses": { "200": { "description": "同步运行和阶段详情" }, "404": { "$ref": "#/components/responses/NotFound" } } }
+      "get": {
+        "tags": [
+          "sync"
+        ],
+        "operationId": "getSyncRun",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Id"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "同步运行和阶段详情"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
     },
     "/api/sync/runs/{id}/retry": {
-      "post": { "tags": ["sync"], "operationId": "retrySyncRun", "parameters": [{ "$ref": "#/components/parameters/Id" }], "responses": { "202": { "description": "重试运行已启动" }, "404": { "$ref": "#/components/responses/NotFound" }, "409": { "$ref": "#/components/responses/Conflict" } } }
+      "post": {
+        "tags": [
+          "sync"
+        ],
+        "operationId": "retrySyncRun",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Id"
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "重试运行已启动"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          }
+        }
+      }
     },
     "/api/data-status": {
-      "get": { "tags": ["sync"], "operationId": "getDataStatus", "responses": { "200": { "description": "各集合数据状态", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/DataStatus" } } } }, "500": { "$ref": "#/components/responses/ServerError" }, "501": { "$ref": "#/components/responses/NotImplemented" } } }
+      "get": {
+        "tags": [
+          "sync"
+        ],
+        "operationId": "getDataStatus",
+        "responses": {
+          "200": {
+            "description": "各集合数据状态",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DataStatus"
+                }
+              }
+            }
+          },
+          "500": {
+            "$ref": "#/components/responses/ServerError"
+          },
+          "501": {
+            "$ref": "#/components/responses/NotImplemented"
+          }
+        }
+      }
     },
     "/api/views/{viewID}/all": {
       "get": {
-        "tags": ["views"], "operationId": "listAllViewRecords", "description": "按筛选条件同步返回最多 10,000 条视图原始记录。",
-        "parameters": [{ "$ref": "#/components/parameters/ViewID" }, { "$ref": "#/components/parameters/Keyword" }, { "$ref": "#/components/parameters/From" }, { "$ref": "#/components/parameters/To" }, { "$ref": "#/components/parameters/DateFrom" }, { "$ref": "#/components/parameters/DateTo" }, { "$ref": "#/components/parameters/StationCode" }, { "$ref": "#/components/parameters/SN" }, { "$ref": "#/components/parameters/ProductionOrder" }, { "$ref": "#/components/parameters/SalesOrder" }, { "$ref": "#/components/parameters/Base" }, { "$ref": "#/components/parameters/ProductModel" }, { "$ref": "#/components/parameters/HeadOrder" }, { "$ref": "#/components/parameters/ItemOrder" }, { "$ref": "#/components/parameters/HeadSN" }, { "$ref": "#/components/parameters/ItemSN" }, { "$ref": "#/components/parameters/MissingSalesOrder" }, { "$ref": "#/components/parameters/MaterialCode" }, { "$ref": "#/components/parameters/DOACode" }, { "$ref": "#/components/parameters/DOAType" }, { "$ref": "#/components/parameters/Status" }, { "$ref": "#/components/parameters/Judgment" }, { "$ref": "#/components/parameters/EnrichmentStatus" }, { "$ref": "#/components/parameters/AcceptedDateFrom" }, { "$ref": "#/components/parameters/AcceptedDateTo" }, { "$ref": "#/components/parameters/Customer" }, { "$ref": "#/components/parameters/ServiceOrder" }, { "$ref": "#/components/parameters/ChangeType" }, { "$ref": "#/components/parameters/PartNumber" }, { "$ref": "#/components/parameters/PartSN" }, { "$ref": "#/components/parameters/Operator" }, { "$ref": "#/components/parameters/NeedReturn" }, { "$ref": "#/components/parameters/Revoked" }, { "$ref": "#/components/parameters/Company5000" }],
-        "responses": { "200": { "$ref": "#/components/responses/ViewPage" }, "400": { "$ref": "#/components/responses/BadRequest" }, "501": { "$ref": "#/components/responses/NotImplemented" } }
+        "tags": [
+          "views"
+        ],
+        "operationId": "listAllViewRecords",
+        "description": "按筛选条件同步返回最多 10,000 条视图原始记录。",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ViewID"
+          },
+          {
+            "$ref": "#/components/parameters/Keyword"
+          },
+          {
+            "$ref": "#/components/parameters/From"
+          },
+          {
+            "$ref": "#/components/parameters/To"
+          },
+          {
+            "$ref": "#/components/parameters/DateFrom"
+          },
+          {
+            "$ref": "#/components/parameters/DateTo"
+          },
+          {
+            "$ref": "#/components/parameters/StationCode"
+          },
+          {
+            "$ref": "#/components/parameters/SN"
+          },
+          {
+            "$ref": "#/components/parameters/ProductionOrder"
+          },
+          {
+            "$ref": "#/components/parameters/SalesOrder"
+          },
+          {
+            "$ref": "#/components/parameters/Base"
+          },
+          {
+            "$ref": "#/components/parameters/ProductModel"
+          },
+          {
+            "$ref": "#/components/parameters/HeadOrder"
+          },
+          {
+            "$ref": "#/components/parameters/ItemOrder"
+          },
+          {
+            "$ref": "#/components/parameters/HeadSN"
+          },
+          {
+            "$ref": "#/components/parameters/ItemSN"
+          },
+          {
+            "$ref": "#/components/parameters/MissingSalesOrder"
+          },
+          {
+            "$ref": "#/components/parameters/MaterialCode"
+          },
+          {
+            "$ref": "#/components/parameters/DOACode"
+          },
+          {
+            "$ref": "#/components/parameters/DOAType"
+          },
+          {
+            "$ref": "#/components/parameters/Status"
+          },
+          {
+            "$ref": "#/components/parameters/Judgment"
+          },
+          {
+            "$ref": "#/components/parameters/EnrichmentStatus"
+          },
+          {
+            "$ref": "#/components/parameters/AcceptedDateFrom"
+          },
+          {
+            "$ref": "#/components/parameters/AcceptedDateTo"
+          },
+          {
+            "$ref": "#/components/parameters/Customer"
+          },
+          {
+            "$ref": "#/components/parameters/ServiceOrder"
+          },
+          {
+            "$ref": "#/components/parameters/ChangeType"
+          },
+          {
+            "$ref": "#/components/parameters/PartNumber"
+          },
+          {
+            "$ref": "#/components/parameters/PartSN"
+          },
+          {
+            "$ref": "#/components/parameters/Operator"
+          },
+          {
+            "$ref": "#/components/parameters/NeedReturn"
+          },
+          {
+            "$ref": "#/components/parameters/Revoked"
+          },
+          {
+            "$ref": "#/components/parameters/Company5000"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/ViewPage"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "501": {
+            "$ref": "#/components/responses/NotImplemented"
+          }
+        }
       }
     },
     "/api/views/{viewID}/stream": {
       "get": {
-        "tags": ["views"], "operationId": "streamViewRecords", "description": "以 TSV 下载视图数据；支持 ZSGV_ZSD124、SCS_DOA 和 SCS_CHANGE。工位记录不提供流式接口；SCS 流式结果不受 /all 的 10,000 条上限限制。",
-        "parameters": [{ "$ref": "#/components/parameters/ViewID" }, { "$ref": "#/components/parameters/Keyword" }, { "$ref": "#/components/parameters/From" }, { "$ref": "#/components/parameters/To" }, { "$ref": "#/components/parameters/DateFrom" }, { "$ref": "#/components/parameters/DateTo" }, { "$ref": "#/components/parameters/AcceptedDateFrom" }, { "$ref": "#/components/parameters/AcceptedDateTo" }, { "$ref": "#/components/parameters/ProductionOrder" }, { "$ref": "#/components/parameters/SalesOrder" }, { "$ref": "#/components/parameters/StationCode" }, { "$ref": "#/components/parameters/SN" }, { "$ref": "#/components/parameters/Base" }, { "$ref": "#/components/parameters/ProductModel" }, { "$ref": "#/components/parameters/DOACode" }, { "$ref": "#/components/parameters/DOAType" }, { "$ref": "#/components/parameters/Status" }, { "$ref": "#/components/parameters/Judgment" }, { "$ref": "#/components/parameters/EnrichmentStatus" }, { "$ref": "#/components/parameters/Customer" }, { "$ref": "#/components/parameters/ServiceOrder" }, { "$ref": "#/components/parameters/ChangeType" }, { "$ref": "#/components/parameters/PartNumber" }, { "$ref": "#/components/parameters/PartSN" }, { "$ref": "#/components/parameters/Operator" }, { "$ref": "#/components/parameters/NeedReturn" }, { "$ref": "#/components/parameters/Revoked" }, { "$ref": "#/components/parameters/Company5000" }, { "$ref": "#/components/parameters/MissingSalesOrder" }, { "$ref": "#/components/parameters/MaterialCode" }],
-        "responses": { "200": { "description": "TSV 文件", "content": { "text/tab-separated-values": { "schema": { "type": "string" } } } }, "400": { "$ref": "#/components/responses/BadRequest" }, "501": { "$ref": "#/components/responses/NotImplemented" } }
+        "tags": [
+          "views"
+        ],
+        "operationId": "streamViewRecords",
+        "description": "以 TSV 下载视图数据；支持 ZSGV_ZSD124、SCS_DOA 和 SCS_CHANGE。工位记录不提供流式接口；SCS 流式结果不受 /all 的 10,000 条上限限制。",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ViewID"
+          },
+          {
+            "$ref": "#/components/parameters/Keyword"
+          },
+          {
+            "$ref": "#/components/parameters/From"
+          },
+          {
+            "$ref": "#/components/parameters/To"
+          },
+          {
+            "$ref": "#/components/parameters/DateFrom"
+          },
+          {
+            "$ref": "#/components/parameters/DateTo"
+          },
+          {
+            "$ref": "#/components/parameters/AcceptedDateFrom"
+          },
+          {
+            "$ref": "#/components/parameters/AcceptedDateTo"
+          },
+          {
+            "$ref": "#/components/parameters/ProductionOrder"
+          },
+          {
+            "$ref": "#/components/parameters/SalesOrder"
+          },
+          {
+            "$ref": "#/components/parameters/StationCode"
+          },
+          {
+            "$ref": "#/components/parameters/SN"
+          },
+          {
+            "$ref": "#/components/parameters/Base"
+          },
+          {
+            "$ref": "#/components/parameters/ProductModel"
+          },
+          {
+            "$ref": "#/components/parameters/DOACode"
+          },
+          {
+            "$ref": "#/components/parameters/DOAType"
+          },
+          {
+            "$ref": "#/components/parameters/Status"
+          },
+          {
+            "$ref": "#/components/parameters/Judgment"
+          },
+          {
+            "$ref": "#/components/parameters/EnrichmentStatus"
+          },
+          {
+            "$ref": "#/components/parameters/Customer"
+          },
+          {
+            "$ref": "#/components/parameters/ServiceOrder"
+          },
+          {
+            "$ref": "#/components/parameters/ChangeType"
+          },
+          {
+            "$ref": "#/components/parameters/PartNumber"
+          },
+          {
+            "$ref": "#/components/parameters/PartSN"
+          },
+          {
+            "$ref": "#/components/parameters/Operator"
+          },
+          {
+            "$ref": "#/components/parameters/NeedReturn"
+          },
+          {
+            "$ref": "#/components/parameters/Revoked"
+          },
+          {
+            "$ref": "#/components/parameters/Company5000"
+          },
+          {
+            "$ref": "#/components/parameters/MissingSalesOrder"
+          },
+          {
+            "$ref": "#/components/parameters/MaterialCode"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "TSV 文件",
+            "content": {
+              "text/tab-separated-values": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "501": {
+            "$ref": "#/components/responses/NotImplemented"
+          }
+        }
+      }
+    },
+    "/api/kk-sales-order-deliveries/cumulative-counts": {
+      "get": {
+        "summary": "按销售订单和交付月份汇总累计出货台数",
+        "description": "截至 dateTo（含当天），按 VBELN_L + VBELN + POSNR + LFIMG（字符串）归并批次，每批 LFIMG 只计一次。缺失、无法转换或为 0 时，用批次内非空 SN 去重数兜底。按批次最早的有效 WADAT 确定月份，没有有效日期的批次跳过并计数。devices 是各订单月份内非空 SN 去重数，同一 SN 跨组可重复出现。",
+        "operationId": "getKKCumulativeDeliveryCounts",
+        "tags": [
+          "kk-sales-order-deliveries"
+        ],
+        "parameters": [
+          {
+            "name": "dateTo",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "累计出货数量及其分组",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "dateTo",
+                    "items",
+                    "quantity",
+                    "batchCount",
+                    "missingQuantityBatches",
+                    "invalidDateBatches"
+                  ],
+                  "properties": {
+                    "dateTo": {
+                      "type": "string",
+                      "format": "date"
+                    },
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "required": [
+                          "salesOrder",
+                          "month",
+                          "devices",
+                          "quantity"
+                        ],
+                        "properties": {
+                          "salesOrder": {
+                            "type": "string"
+                          },
+                          "month": {
+                            "type": "string",
+                            "example": "2026-11"
+                          },
+                          "devices": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "description": "此订单月份内的非空 SN 去重数"
+                          },
+                          "quantity": {
+                            "type": "number",
+                            "description": "此订单月份内的批次数量之和"
+                          }
+                        }
+                      }
+                    },
+                    "quantity": {
+                      "type": "number",
+                      "description": "全部分组的出货数量之和"
+                    },
+                    "batchCount": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "description": "有有效交付日期的批次数"
+                    },
+                    "missingQuantityBatches": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "description": "有效日期批次中采用 SN 数量兜底的批次数"
+                    },
+                    "invalidDateBatches": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "description": "跳过的无有效交付日期批次数"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          }
+        }
+      }
+    },
+    "/api/kk-sales-order-deliveries/shipment-stats": {
+      "get": {
+        "summary": "KK 出货台数统计（MFR 分母）",
+        "description": "按 WADAT（含首尾）筛选。每个交付项（VBELN_L + POSNR_L）的 LFIMG 只汇总一次，SN 去重数单独返回。byMonth 按交付月份统计，byModel 按机型统计，分组内 SN 分别去重。机型按销售订单及物料唯一匹配，未能唯一匹配时，仅在可核对该交付项全部台数且工位机型一致时采用工位结果，其他归入未知机型。交付项或数量有歧义时返回 422。成功结果缓存 60 秒。",
+        "operationId": "getKKShipmentStats",
+        "tags": [
+          "kk-sales-order-deliveries"
+        ],
+        "parameters": [
+          {
+            "name": "dateFrom",
+            "in": "query",
+            "required": true,
+            "description": "出货日期下界（YYYY-MM-DD，含）",
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          },
+          {
+            "name": "dateTo",
+            "in": "query",
+            "required": true,
+            "description": "出货日期上界（YYYY-MM-DD，含）",
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "统计结果",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "dateFrom": {
+                      "type": "string"
+                    },
+                    "dateTo": {
+                      "type": "string"
+                    },
+                    "recordCount": {
+                      "type": "integer"
+                    },
+                    "deviceCount": {
+                      "type": "integer",
+                      "description": "按 SN 去重的台数，供对照"
+                    },
+                    "missingSerialCount": {
+                      "type": "integer"
+                    },
+                    "undatedDeviceCount": {
+                      "type": "integer"
+                    },
+                    "fallbackModelCount": {
+                      "type": "integer",
+                      "description": "由工位记录兜底机型对应的台数（按数量口径）"
+                    },
+                    "unknownModelCount": {
+                      "type": "integer",
+                      "description": "未匹配机型对应的台数（按数量口径）"
+                    },
+                    "salesOrderCount": {
+                      "type": "integer"
+                    },
+                    "matchedOrderCount": {
+                      "type": "integer"
+                    },
+                    "byMonth": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "month": {
+                            "type": "string"
+                          },
+                          "quantity": {
+                            "type": "number"
+                          },
+                          "devices": {
+                            "type": "integer"
+                          }
+                        }
+                      }
+                    },
+                    "byModel": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "model": {
+                            "type": "string"
+                          },
+                          "quantity": {
+                            "type": "number"
+                          },
+                          "devices": {
+                            "type": "integer"
+                          }
+                        }
+                      }
+                    },
+                    "generatedAt": {
+                      "type": "string"
+                    },
+                    "quantity": {
+                      "type": "number",
+                      "description": "出货台数：按交付批次去重后的 LFIMG 数量汇总"
+                    },
+                    "batchCount": {
+                      "type": "integer",
+                      "description": "交付项数（VBELN_L + POSNR_L 去重）"
+                    },
+                    "missingQuantityBatches": {
+                      "type": "integer",
+                      "description": "兼容字段。成功响应中恒为 0，无法确认数量时返回 422"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "缺少或非法日期范围，或使用了不支持的明细筛选条件"
+          },
+          "422": {
+            "description": "交付项键、交付日期或 LFIMG 无法确认，本次不返回分母",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": { "type": "string" },
+                    "invalidItems": { "type": "integer" },
+                    "quantityIssues": { "type": "integer" }
+                  }
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "数据源读取失败"
+          }
+        }
       }
     }
   },
   "components": {
     "parameters": {
-      "Page": { "name": "page", "in": "query", "schema": { "type": "integer", "minimum": 1, "default": 1 }, "description": "页码；小于 1 或非数字时按 1 处理。" },
-      "PageSize": { "name": "pageSize", "in": "query", "schema": { "type": "integer", "minimum": 1, "maximum": 100, "default": 20 }, "description": "每页条数；超出 1-100 或非数字时按 20 处理。`/api/orders/all` 最多返回 10,000 条。" },
-      "Keyword": { "name": "keyword", "in": "query", "schema": { "type": "string" }, "description": "不区分大小写匹配；用户输入会转义，不支持正则语法。" },
-      "Id": { "name": "id", "in": "query", "required": true, "schema": { "type": "string", "minLength": 1 }, "description": "详情 ID。维修/视图优先使用列表返回的 id；订单通常为 source:AUFNR。" },
-      "ViewID": { "name": "viewID", "in": "path", "required": true, "schema": { "type": "string", "enum": ["ZSGV_ZSD124", "ZSGV_ZPP_SERNOLIST", "Z_V_ZMES_T_001", "SCS_DOA", "SCS_CHANGE"] }, "description": "视图 ID：SCS_DOA 为 SCS DOA 申报，SCS_CHANGE 为 SCS 换上换下。" },
-      "HostBarcode": { "name": "hostBarcode", "in": "query", "schema": { "type": "string" } },
-      "NonCriticalMaterialSerial": { "name": "nonCriticalMaterialSerial", "in": "query", "schema": { "type": "string" }, "description": "精确匹配非关键件物料序号 RECORD01REPAIRM；可用逗号或中文逗号批量传值。" },
-      "DefectResponsibility": { "name": "defectResponsibility", "in": "query", "schema": { "type": "string" } },
-      "NGStation": { "name": "ngStation", "in": "query", "schema": { "type": "string" } },
-      "SalesOrder": { "name": "salesOrder", "in": "query", "schema": { "type": "string" }, "description": "精确匹配；可用逗号或中文逗号批量传值。SAP 订单号支持前导零兼容。" },
-      "ProductionOrder": { "name": "productionOrder", "in": "query", "schema": { "type": "string" }, "description": "精确匹配；SAP 订单号支持前导零兼容。" },
-      "SNS": { "name": "sns", "in": "query", "schema": { "type": "string" }, "description": "维修 SN 批量查询，逗号或中文逗号分隔。" },
-      "ProductionOrders": { "name": "productionOrders", "in": "query", "schema": { "type": "string" }, "description": "生产订单批量查询，逗号或中文逗号分隔。" },
-      "SalesOrders": { "name": "salesOrders", "in": "query", "schema": { "type": "string" }, "description": "销售订单批量查询，逗号或中文逗号分隔。" },
-      "DateFrom": { "name": "dateFrom", "in": "query", "schema": { "type": "string" }, "description": "日期下限；按接口数据集支持 YYYY-MM-DD 或 YYYYMMDD。包含边界。" },
-      "DateTo": { "name": "dateTo", "in": "query", "schema": { "type": "string" }, "description": "日期上限；包含边界。" },
-      "TimeField": { "name": "timeField", "in": "query", "schema": { "type": "string", "enum": ["planned", "repair"], "default": "repair" }, "description": "维修记录日期筛选和排序字段。planned 按 GSTRS（计划生产时间），repair 按 ZDATE_WX（维修日期）；未传时为 repair。" },
-      "Station": { "name": "station", "in": "query", "schema": { "type": "string" } },
-      "ProductModel": { "name": "productModel", "in": "query", "schema": { "type": "string" } },
-      "Source": { "name": "source", "in": "query", "schema": { "type": "string" }, "description": "SAP 来源；当前数据源为 SG 或 KK。服务端按精确值过滤，未知值通常返回空结果。" },
-      "OrderScope": { "name": "orderScope", "in": "query", "schema": { "type": "string" }, "description": "source 的兼容别名；当前数据源为 SG 或 KK。若同时提供，两个条件都会生效。" },
-      "Overseas": { "name": "overseas", "in": "query", "schema": { "type": "boolean", "default": false }, "description": "true、1、yes 或 y 时在全部订单的物料描述 data.MAKTX 中不区分大小写地模糊匹配 WW；省略或为 false 时不限制海外范围。分页、全量查询和统计使用相同条件。" },
-      "GSTRSFrom": { "name": "gstrsFrom", "in": "query", "schema": { "type": "string" }, "description": "订单计划开始日期下限；dateFrom 优先。" },
-      "GSTRSTo": { "name": "gstrsTo", "in": "query", "schema": { "type": "string" }, "description": "订单计划开始日期上限；dateTo 优先。" },
-      "SerialNumber": { "name": "serialNumber", "in": "query", "schema": { "type": "string" } },
-      "Customer": { "name": "customer", "in": "query", "schema": { "type": "string" } },
-      "Base": { "name": "base", "in": "query", "schema": { "type": "string" } },
-      "All": { "name": "all", "in": "query", "schema": { "type": "boolean", "default": false }, "description": "true、1、yes 或 y 时启用全量订单查询。" },
-      "From": { "name": "from", "in": "query", "schema": { "type": "string" }, "description": "视图日期下限；包含边界。" },
-      "To": { "name": "to", "in": "query", "schema": { "type": "string" }, "description": "视图日期上限；包含边界。" },
-      "StationCode": { "name": "stationCode", "in": "query", "schema": { "type": "string" } },
-      "SN": { "name": "sn", "in": "query", "schema": { "type": "string" } },
-      "HeadOrder": { "name": "headOrder", "in": "query", "schema": { "type": "string" } },
-      "ItemOrder": { "name": "itemOrder", "in": "query", "schema": { "type": "string" } },
-      "HeadSN": { "name": "headSn", "in": "query", "schema": { "type": "string" } },
-      "ItemSN": { "name": "itemSn", "in": "query", "schema": { "type": "string" } },
-      "MaterialCode": { "name": "materialCode", "in": "query", "schema": { "type": "string" } },
-      "CPX": { "name": "cpx", "in": "query", "schema": { "type": "string" }, "description": "仅 BOM 过账视图有效；按 CPX 公司字段精确匹配。" },
-      "MissingSalesOrder": { "name": "missingSalesOrder", "in": "query", "schema": { "type": "boolean" }, "description": "仅 BOM 过账视图有效；为 true 时仅返回销售订单字段为空、空白、null 或缺失的数据。" },
-      "DOACode": { "name": "doaCode", "in": "query", "schema": { "type": "string" }, "description": "仅 SCS_DOA：DOA 申报单号精确匹配。" },
-      "DOAType": { "name": "doaType", "in": "query", "schema": { "type": "string" }, "description": "仅 SCS_DOA：DOA 类型精确匹配。" },
-      "Status": { "name": "status", "in": "query", "schema": { "type": "string" }, "description": "仅 SCS_DOA：处理状态精确匹配。" },
-      "Judgment": { "name": "judgment", "in": "query", "schema": { "type": "string" }, "description": "仅 SCS_DOA：DOA 判定结果精确匹配。" },
-      "EnrichmentStatus": { "name": "enrichmentStatus", "in": "query", "schema": { "type": "string" }, "description": "仅 SCS_DOA：生命周期补全状态精确匹配。" },
-      "AcceptedDateFrom": { "name": "acceptedDateFrom", "in": "query", "schema": { "type": "string", "format": "date" }, "description": "仅 SCS_DOA：受理日期下限，包含边界。与 dateFrom（申报日期）独立。" },
-      "AcceptedDateTo": { "name": "acceptedDateTo", "in": "query", "schema": { "type": "string", "format": "date" }, "description": "仅 SCS_DOA：受理日期上限，包含边界。与 dateTo（申报日期）独立。" },
-      "ServiceOrder": { "name": "serviceOrder", "in": "query", "schema": { "type": "string" }, "description": "SCS_DOA 按 service_uid、SCS_CHANGE 按 so_code 精确匹配服务单号。" },
-      "ChangeType": { "name": "changeType", "in": "query", "schema": { "type": "string" }, "description": "仅 SCS_CHANGE：操作类型精确匹配，例如换上-up或换下-down。" },
-      "PartNumber": { "name": "partNumber", "in": "query", "schema": { "type": "string" }, "description": "仅 SCS_CHANGE：备件 PN 精确匹配。" },
-      "PartSN": { "name": "partSn", "in": "query", "schema": { "type": "string" }, "description": "仅 SCS_CHANGE：备件 SN 精确匹配。" },
-      "Operator": { "name": "operator", "in": "query", "schema": { "type": "string" }, "description": "仅 SCS_CHANGE：操作人精确匹配。" },
-      "NeedReturn": { "name": "needReturn", "in": "query", "schema": { "type": "string" }, "description": "仅 SCS_CHANGE：是否需要归还，按结果文本精确匹配。" },
-      "Revoked": { "name": "revoked", "in": "query", "schema": { "type": "string" }, "description": "仅 SCS_CHANGE：是否撤销，按结果文本精确匹配。" },
-      "Company5000": { "name": "company5000", "in": "query", "schema": { "type": "string" }, "description": "维修故障：传 yes/true/1/是 表示生产订单号存在于销售订单看板，传 no/false/0/否 表示不存在；SCS_DOA/SCS_CHANGE：按 is_5000_company 筛选。" }
+      "Page": {
+        "name": "page",
+        "in": "query",
+        "schema": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 1
+        },
+        "description": "页码；小于 1 或非数字时按 1 处理。"
+      },
+      "PageSize": {
+        "name": "pageSize",
+        "in": "query",
+        "schema": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100,
+          "default": 20
+        },
+        "description": "每页条数；超出 1-100 或非数字时按 20 处理。`/api/orders/all` 最多返回 10,000 条。"
+      },
+      "Keyword": {
+        "name": "keyword",
+        "in": "query",
+        "schema": {
+          "type": "string"
+        },
+        "description": "不区分大小写匹配；用户输入会转义，不支持正则语法。"
+      },
+      "Id": {
+        "name": "id",
+        "in": "query",
+        "required": true,
+        "schema": {
+          "type": "string",
+          "minLength": 1
+        },
+        "description": "详情 ID。维修/视图优先使用列表返回的 id；订单通常为 source:AUFNR。"
+      },
+      "ViewID": {
+        "name": "viewID",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string",
+          "enum": [
+            "ZSGV_ZSD124",
+            "ZSGV_ZPP_SERNOLIST",
+            "Z_V_ZMES_T_001",
+            "SCS_DOA",
+            "SCS_CHANGE"
+          ]
+        },
+        "description": "视图 ID：SCS_DOA 为 SCS DOA 申报，SCS_CHANGE 为 SCS 换上换下。"
+      },
+      "HostBarcode": {
+        "name": "hostBarcode",
+        "in": "query",
+        "schema": {
+          "type": "string"
+        }
+      },
+      "NonCriticalMaterialSerial": {
+        "name": "nonCriticalMaterialSerial",
+        "in": "query",
+        "schema": {
+          "type": "string"
+        },
+        "description": "精确匹配非关键件物料序号 RECORD01REPAIRM；可用逗号或中文逗号批量传值。"
+      },
+      "DefectResponsibility": {
+        "name": "defectResponsibility",
+        "in": "query",
+        "schema": {
+          "type": "string"
+        }
+      },
+      "NGStation": {
+        "name": "ngStation",
+        "in": "query",
+        "schema": {
+          "type": "string"
+        }
+      },
+      "SalesOrder": {
+        "name": "salesOrder",
+        "in": "query",
+        "schema": {
+          "type": "string"
+        },
+        "description": "精确匹配；可用逗号或中文逗号批量传值。SAP 订单号支持前导零兼容。"
+      },
+      "ProductionOrder": {
+        "name": "productionOrder",
+        "in": "query",
+        "schema": {
+          "type": "string"
+        },
+        "description": "精确匹配；SAP 订单号支持前导零兼容。"
+      },
+      "SNS": {
+        "name": "sns",
+        "in": "query",
+        "schema": {
+          "type": "string"
+        },
+        "description": "维修 SN 批量查询，逗号或中文逗号分隔。"
+      },
+      "ProductionOrders": {
+        "name": "productionOrders",
+        "in": "query",
+        "schema": {
+          "type": "string"
+        },
+        "description": "生产订单批量查询，逗号或中文逗号分隔。"
+      },
+      "SalesOrders": {
+        "name": "salesOrders",
+        "in": "query",
+        "schema": {
+          "type": "string"
+        },
+        "description": "销售订单批量查询，逗号或中文逗号分隔。"
+      },
+      "DateFrom": {
+        "name": "dateFrom",
+        "in": "query",
+        "schema": {
+          "type": "string"
+        },
+        "description": "日期下限；按接口数据集支持 YYYY-MM-DD 或 YYYYMMDD。包含边界。"
+      },
+      "DateTo": {
+        "name": "dateTo",
+        "in": "query",
+        "schema": {
+          "type": "string"
+        },
+        "description": "日期上限；包含边界。"
+      },
+      "TimeField": {
+        "name": "timeField",
+        "in": "query",
+        "schema": {
+          "type": "string",
+          "enum": [
+            "planned",
+            "repair"
+          ],
+          "default": "repair"
+        },
+        "description": "维修记录日期筛选和排序字段。planned 按 GSTRS（计划生产时间），repair 按 ZDATE_WX（维修日期）；未传时为 repair。"
+      },
+      "Station": {
+        "name": "station",
+        "in": "query",
+        "schema": {
+          "type": "string"
+        }
+      },
+      "ProductModel": {
+        "name": "productModel",
+        "in": "query",
+        "schema": {
+          "type": "string"
+        }
+      },
+      "Source": {
+        "name": "source",
+        "in": "query",
+        "schema": {
+          "type": "string"
+        },
+        "description": "SAP 来源；当前数据源为 SG 或 KK。服务端按精确值过滤，未知值通常返回空结果。"
+      },
+      "OrderScope": {
+        "name": "orderScope",
+        "in": "query",
+        "schema": {
+          "type": "string"
+        },
+        "description": "source 的兼容别名；当前数据源为 SG 或 KK。若同时提供，两个条件都会生效。"
+      },
+      "Overseas": {
+        "name": "overseas",
+        "in": "query",
+        "schema": {
+          "type": "boolean",
+          "default": false
+        },
+        "description": "true、1、yes 或 y 时在全部订单的物料描述 data.MAKTX 中不区分大小写地模糊匹配 WW；省略或为 false 时不限制海外范围。分页、全量查询和统计使用相同条件。"
+      },
+      "GSTRSFrom": {
+        "name": "gstrsFrom",
+        "in": "query",
+        "schema": {
+          "type": "string"
+        },
+        "description": "订单计划开始日期下限；dateFrom 优先。"
+      },
+      "GSTRSTo": {
+        "name": "gstrsTo",
+        "in": "query",
+        "schema": {
+          "type": "string"
+        },
+        "description": "订单计划开始日期上限；dateTo 优先。"
+      },
+      "SerialNumber": {
+        "name": "serialNumber",
+        "in": "query",
+        "schema": {
+          "type": "string"
+        }
+      },
+      "Customer": {
+        "name": "customer",
+        "in": "query",
+        "schema": {
+          "type": "string"
+        }
+      },
+      "Base": {
+        "name": "base",
+        "in": "query",
+        "schema": {
+          "type": "string"
+        }
+      },
+      "All": {
+        "name": "all",
+        "in": "query",
+        "schema": {
+          "type": "boolean",
+          "default": false
+        },
+        "description": "true、1、yes 或 y 时启用全量订单查询。"
+      },
+      "From": {
+        "name": "from",
+        "in": "query",
+        "schema": {
+          "type": "string"
+        },
+        "description": "视图日期下限；包含边界。"
+      },
+      "To": {
+        "name": "to",
+        "in": "query",
+        "schema": {
+          "type": "string"
+        },
+        "description": "视图日期上限；包含边界。"
+      },
+      "StationCode": {
+        "name": "stationCode",
+        "in": "query",
+        "schema": {
+          "type": "string"
+        }
+      },
+      "SN": {
+        "name": "sn",
+        "in": "query",
+        "schema": {
+          "type": "string"
+        }
+      },
+      "HeadOrder": {
+        "name": "headOrder",
+        "in": "query",
+        "schema": {
+          "type": "string"
+        }
+      },
+      "ItemOrder": {
+        "name": "itemOrder",
+        "in": "query",
+        "schema": {
+          "type": "string"
+        }
+      },
+      "HeadSN": {
+        "name": "headSn",
+        "in": "query",
+        "schema": {
+          "type": "string"
+        }
+      },
+      "ItemSN": {
+        "name": "itemSn",
+        "in": "query",
+        "schema": {
+          "type": "string"
+        }
+      },
+      "MaterialCode": {
+        "name": "materialCode",
+        "in": "query",
+        "schema": {
+          "type": "string"
+        }
+      },
+      "CPX": {
+        "name": "cpx",
+        "in": "query",
+        "schema": {
+          "type": "string"
+        },
+        "description": "仅 BOM 过账视图有效；按 CPX 公司字段精确匹配。"
+      },
+      "MissingSalesOrder": {
+        "name": "missingSalesOrder",
+        "in": "query",
+        "schema": {
+          "type": "boolean"
+        },
+        "description": "仅 BOM 过账视图有效；为 true 时仅返回销售订单字段为空、空白、null 或缺失的数据。"
+      },
+      "DOACode": {
+        "name": "doaCode",
+        "in": "query",
+        "schema": {
+          "type": "string"
+        },
+        "description": "仅 SCS_DOA：DOA 申报单号精确匹配。"
+      },
+      "DOAType": {
+        "name": "doaType",
+        "in": "query",
+        "schema": {
+          "type": "string"
+        },
+        "description": "仅 SCS_DOA：DOA 类型精确匹配。"
+      },
+      "Status": {
+        "name": "status",
+        "in": "query",
+        "schema": {
+          "type": "string"
+        },
+        "description": "仅 SCS_DOA：处理状态精确匹配。"
+      },
+      "Judgment": {
+        "name": "judgment",
+        "in": "query",
+        "schema": {
+          "type": "string"
+        },
+        "description": "仅 SCS_DOA：DOA 判定结果精确匹配。"
+      },
+      "EnrichmentStatus": {
+        "name": "enrichmentStatus",
+        "in": "query",
+        "schema": {
+          "type": "string"
+        },
+        "description": "仅 SCS_DOA：生命周期补全状态精确匹配。"
+      },
+      "AcceptedDateFrom": {
+        "name": "acceptedDateFrom",
+        "in": "query",
+        "schema": {
+          "type": "string",
+          "format": "date"
+        },
+        "description": "仅 SCS_DOA：受理日期下限，包含边界。与 dateFrom（申报日期）独立。"
+      },
+      "AcceptedDateTo": {
+        "name": "acceptedDateTo",
+        "in": "query",
+        "schema": {
+          "type": "string",
+          "format": "date"
+        },
+        "description": "仅 SCS_DOA：受理日期上限，包含边界。与 dateTo（申报日期）独立。"
+      },
+      "ServiceOrder": {
+        "name": "serviceOrder",
+        "in": "query",
+        "schema": {
+          "type": "string"
+        },
+        "description": "SCS_DOA 按 service_uid、SCS_CHANGE 按 so_code 精确匹配服务单号。"
+      },
+      "ChangeType": {
+        "name": "changeType",
+        "in": "query",
+        "schema": {
+          "type": "string"
+        },
+        "description": "仅 SCS_CHANGE：操作类型精确匹配，例如换上-up或换下-down。"
+      },
+      "PartNumber": {
+        "name": "partNumber",
+        "in": "query",
+        "schema": {
+          "type": "string"
+        },
+        "description": "仅 SCS_CHANGE：备件 PN 精确匹配。"
+      },
+      "PartSN": {
+        "name": "partSn",
+        "in": "query",
+        "schema": {
+          "type": "string"
+        },
+        "description": "仅 SCS_CHANGE：备件 SN 精确匹配。"
+      },
+      "Operator": {
+        "name": "operator",
+        "in": "query",
+        "schema": {
+          "type": "string"
+        },
+        "description": "仅 SCS_CHANGE：操作人精确匹配。"
+      },
+      "NeedReturn": {
+        "name": "needReturn",
+        "in": "query",
+        "schema": {
+          "type": "string"
+        },
+        "description": "仅 SCS_CHANGE：是否需要归还，按结果文本精确匹配。"
+      },
+      "Revoked": {
+        "name": "revoked",
+        "in": "query",
+        "schema": {
+          "type": "string"
+        },
+        "description": "仅 SCS_CHANGE：是否撤销，按结果文本精确匹配。"
+      },
+      "Company5000": {
+        "name": "company5000",
+        "in": "query",
+        "schema": {
+          "type": "string"
+        },
+        "description": "维修故障：传 yes/true/1/是 表示生产订单号存在于销售订单看板，传 no/false/0/否 表示不存在；SCS_DOA/SCS_CHANGE：按 is_5000_company 筛选。"
+      }
     },
     "responses": {
-      "BadRequest": { "description": "请求参数无效", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" }, "example": { "error": "id is required" } } } },
-      "NotFound": { "description": "记录不存在", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
-      "Conflict": { "description": "已有同步任务运行", "content": { "application/json": { "schema": { "allOf": [{ "$ref": "#/components/schemas/Error" }, { "type": "object", "properties": { "status": { "$ref": "#/components/schemas/SyncStatus" } } }] } } } },
-      "ServerError": { "description": "数据库或服务端错误", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
-      "ServiceUnavailable": { "description": "MongoDB 不可用", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/HealthUnhealthy" } } } },
-      "NotImplemented": { "description": "当前部署未提供可选能力", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
-      "PayloadTooLarge": { "description": "批量请求超过 10,000 个序列号", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
-      "FaultPage": { "description": "维修记录分页结果", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/FaultPage" } } } },
-      "OrderPage": { "description": "销售订单分页或全量结果", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/OrderPage" } } } },
-      "ViewPage": { "description": "视图分页结果", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ViewPage" } } } }
+      "BadRequest": {
+        "description": "请求参数无效",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            },
+            "example": {
+              "error": "id is required"
+            }
+          }
+        }
+      },
+      "NotFound": {
+        "description": "记录不存在",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "Conflict": {
+        "description": "已有同步任务运行",
+        "content": {
+          "application/json": {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Error"
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "$ref": "#/components/schemas/SyncStatus"
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "ServerError": {
+        "description": "数据库或服务端错误",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "ServiceUnavailable": {
+        "description": "MongoDB 不可用",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/HealthUnhealthy"
+            }
+          }
+        }
+      },
+      "NotImplemented": {
+        "description": "当前部署未提供可选能力",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "PayloadTooLarge": {
+        "description": "批量请求超过 10,000 个序列号",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "FaultPage": {
+        "description": "维修记录分页结果",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/FaultPage"
+            }
+          }
+        }
+      },
+      "OrderPage": {
+        "description": "销售订单分页或全量结果",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/OrderPage"
+            }
+          }
+        }
+      },
+      "ViewPage": {
+        "description": "视图分页结果",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ViewPage"
+            }
+          }
+        }
+      }
     },
     "schemas": {
-      "Error": { "type": "object", "required": ["error"], "properties": { "error": { "type": "string" } }, "additionalProperties": true },
-      "FaultLookupRequest": { "type": "object", "properties": { "productionOrders": { "type": "array", "items": { "type": "string" } }, "salesOrders": { "type": "array", "items": { "type": "string" } }, "dateFrom": { "type": "string" }, "dateTo": { "type": "string" } }, "additionalProperties": false },
-      "FaultRowsBySNSRequest": { "type": "object", "required": ["sns"], "properties": { "sns": { "type": "array", "maxItems": 10000, "items": { "type": "string" } }, "dateFrom": { "type": "string" }, "dateTo": { "type": "string" }, "station": { "type": "string" }, "timeField": { "type": "string", "enum": ["planned", "repair"], "description": "planned 按维修记录的计划开始时间 GSTRS 筛选，repair 或不传按维修日期 ZDATE_WX 筛选。" } }, "additionalProperties": false },
-      "FaultSN": { "type": "object", "properties": { "productionOrder": { "type": "string" }, "serialNumber": { "type": "string" } } },
-      "FaultSNList": { "type": "object", "required": ["items"], "properties": { "items": { "type": "array", "items": { "$ref": "#/components/schemas/FaultSN" } } } },
-      "RawItems": { "type": "object", "required": ["items"], "properties": { "items": { "type": "array", "items": { "type": "object", "additionalProperties": true } } } },
-      "Health": { "type": "object", "required": ["status"], "properties": { "status": { "const": "ok" } } },
-      "HealthUnhealthy": { "type": "object", "required": ["status", "error"], "properties": { "status": { "const": "unhealthy" }, "error": { "type": "string" } } },
-      "ServiceConfig": { "type": "object", "required": ["serviceName", "version", "database", "collections", "features"], "properties": { "serviceName": { "type": "string" }, "version": { "type": "string" }, "environment": { "type": "string" }, "runtime": { "type": "string" }, "listenAddress": { "type": "string" }, "frontendURL": { "type": "string" }, "apiBasePath": { "type": "string" }, "database": { "type": "object", "properties": { "address": { "type": "string" }, "name": { "type": "string" }, "authSource": { "type": "string" }, "replicaSet": { "type": "string" }, "authenticationConfigured": { "type": "boolean" }, "tls": { "type": "boolean" }, "status": { "type": "string" } } }, "collections": { "type": "array", "items": { "type": "object", "properties": { "label": { "type": "string" }, "name": { "type": "string" } } } }, "features": { "type": "array", "items": { "type": "object", "properties": { "label": { "type": "string" }, "enabled": { "type": "boolean" } } } } } },
-      "Field": { "type": "object", "required": ["key", "label", "value"], "properties": { "key": { "type": "string" }, "label": { "type": "string" }, "value": { "type": "string" } } },
-      "Fault": { "type": "object", "required": ["id"], "properties": { "id": { "type": "string" }, "hostBarcode": { "type": "string" }, "serialNumber": { "type": "string" }, "errorCode": { "type": "string" }, "faultDescription": { "type": "string" }, "errorDescription": { "type": "string" }, "reviewProblem": { "type": "string" }, "defectResponsibility": { "type": "string" }, "repairAt": { "type": "string", "format": "date-time" }, "readBy": { "type": "string" }, "repairPerson": { "type": "string" }, "salesOrder": { "type": "string" }, "productionOrder": { "type": "string" }, "plannedStartDate": { "type": "string" }, "materialCode": { "type": "string" }, "materialDescription": { "type": "string" }, "ngStation": { "type": "string" }, "retestStation": { "type": "string" }, "repairRemarks": { "type": "string" }, "raw": { "type": "object", "additionalProperties": true } }, "additionalProperties": false },
-      "FaultPage": { "type": "object", "required": ["items", "page", "pageSize", "total"], "properties": { "items": { "type": "array", "items": { "$ref": "#/components/schemas/Fault" } }, "page": { "type": "integer" }, "pageSize": { "type": "integer" }, "total": { "type": "integer", "format": "int64" } } },
-      "FaultDetail": { "type": "object", "required": ["fault", "fields", "raw"], "properties": { "fault": { "$ref": "#/components/schemas/Fault" }, "fields": { "type": "array", "items": { "$ref": "#/components/schemas/Field" } }, "raw": { "type": "object", "additionalProperties": true } } },
-      "FaultStats": { "type": "object", "properties": { "total": { "type": "integer", "format": "int64" }, "withError": { "type": "integer", "format": "int64" }, "withRepairPerson": { "type": "integer", "format": "int64" }, "salesOrders": { "type": "integer", "format": "int64" }, "productionOrders": { "type": "integer", "format": "int64" }, "hostBarcodes": { "type": "integer", "format": "int64", "description": "去重后的非空 PCODE 数量" }, "missingSalesOrder": { "type": "integer", "format": "int64" }, "missingProductionOrder": { "type": "integer", "format": "int64" }, "dataStartDate": { "type": "string" }, "dataEndDate": { "type": "string" }, "latestSyncedAt": { "type": "string" } } },
-      "Order": { "type": "object", "required": ["id", "source", "aufnr"], "properties": { "id": { "type": "string" }, "source": { "type": "string" }, "aufnr": { "type": "string" }, "salesOrder": { "type": "string" }, "customerId": { "type": "string" }, "finalUser": { "type": "string" }, "materialDescription": { "type": "string" }, "productionModel": { "type": "string" }, "inventoryLocation": { "type": "string" }, "plannedStartDate": { "type": "string" }, "orderQuantity": { "type": "number" }, "storageQuantity": { "type": "number" }, "recordCount": { "type": "integer" }, "raw": { "type": "object", "additionalProperties": true } }, "additionalProperties": false },
-      "OrderPage": { "type": "object", "required": ["items", "page", "pageSize", "total"], "properties": { "items": { "type": "array", "items": { "$ref": "#/components/schemas/Order" } }, "page": { "type": "integer" }, "pageSize": { "type": "integer" }, "total": { "type": "integer", "format": "int64" } } },
-      "OrderDetail": { "type": "object", "required": ["order", "fields", "raw"], "properties": { "order": { "$ref": "#/components/schemas/Order" }, "fields": { "type": "array", "items": { "$ref": "#/components/schemas/Field" } }, "raw": { "type": "object", "additionalProperties": true } } },
-      "OrderStats": { "type": "object", "properties": { "total": { "type": "integer", "format": "int64" }, "salesOrders": { "type": "integer", "format": "int64" }, "sg": { "type": "integer", "format": "int64" }, "kk": { "type": "integer", "format": "int64" }, "orderQuantity": { "type": "number" }, "machineQuantity": { "type": "number" }, "storageQuantity": { "type": "number" }, "dataStartDate": { "type": "string" }, "dataEndDate": { "type": "string" }, "latestSyncedAt": { "type": "string" } } },
-      "OrderModels": { "type": "object", "required": ["items"], "properties": { "items": { "type": "array", "items": { "type": "string" } } } },
-      "OrderCustomerIDs": { "type": "object", "required": ["items"], "properties": { "items": { "type": "array", "items": { "type": "string" } } } },
-      "OrderOptions": { "type": "object", "required": ["productionOrders", "salesOrders", "materialNumbers", "productModels", "bases", "customerIds"], "properties": { "productionOrders": { "type": "array", "items": { "type": "string" } }, "salesOrders": { "type": "array", "items": { "type": "string" } }, "materialNumbers": { "type": "array", "items": { "type": "string" } }, "productModels": { "type": "array", "items": { "type": "string" } }, "bases": { "type": "array", "items": { "type": "string" } }, "customerIds": { "type": "array", "items": { "type": "string" } } } },
-      "ViewPage": { "type": "object", "required": ["items", "page", "pageSize", "total"], "properties": { "items": { "type": "array", "items": { "type": "object", "additionalProperties": true } }, "page": { "type": "integer" }, "pageSize": { "type": "integer" }, "total": { "type": "integer", "format": "int64" } } },
-      "ViewDetail": { "type": "object", "required": ["item", "fields"], "properties": { "item": { "type": "object", "additionalProperties": true }, "fields": { "type": "array", "items": { "$ref": "#/components/schemas/Field" } } } },
-      "ViewStats": { "type": "object", "properties": { "total": { "type": "integer", "format": "int64" }, "salesOrders": { "type": "integer", "format": "int64", "description": "ZSGV_ZSD124 去重后的非空 VBELN_EX 数量，其他视图为 0" }, "productionOrders": { "type": "integer", "format": "int64", "description": "ZSGV_ZSD124 去重后的非空 AUFNR_1 数量，其他视图为 0" }, "missingSalesOrder": { "type": "integer", "format": "int64" }, "missingProductionOrder": { "type": "integer", "format": "int64" }, "missingProductionOrderDistinct": { "type": "integer", "format": "int64", "description": "ZSGV_ZSD124 中生产订单为空的 BOM 行按非空 VBELN_EX 去重后的数量，销售订单也为空时按 _source_key 计数" }, "dataStartDate": { "type": "string" }, "dataEndDate": { "type": "string" }, "latestSyncedAt": { "type": "string" } } },
-      "SyncStatus": { "type": "object", "required": ["state"], "properties": { "state": { "type": "string", "enum": ["idle", "running", "success", "failed"] }, "startedAt": { "type": "string", "format": "date-time" }, "finishedAt": { "type": "string", "format": "date-time" }, "message": { "type": "string" }, "summary": { "type": "object", "additionalProperties": true } } },
-      "DataStatus": { "type": "object", "properties": { "salesOrdersLastSyncedAt": { "type": "string" }, "faultsLastSyncedAt": { "type": "string" }, "stationRecordsLastSyncedAt": { "type": "string" }, "serialBindingsLastSyncedAt": { "type": "string" }, "bomPostingsLastSyncedAt": { "type": "string" }, "state": { "type": "string" }, "startedAt": { "type": "string" }, "finishedAt": { "type": "string" } } }
+      "MachineConfigItem": {
+        "type": "object",
+        "required": [
+          "needNum",
+          "num",
+          "totalNum",
+          "name",
+          "materialgroup",
+          "dn",
+          "relationId",
+          "id",
+          "type",
+          "params"
+        ],
+        "properties": {
+          "needNum": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "description": "上游 steps 的需求数，本地无来源，恒为 null。"
+          },
+          "num": {
+            "type": "number",
+            "description": "单机数量，等于有符号净发料量除以订单台数。"
+          },
+          "totalNum": {
+            "type": "number",
+            "description": "订单内有符号净发料总量。"
+          },
+          "name": {
+            "type": "string",
+            "description": "物料描述 MAKTX。"
+          },
+          "materialgroup": {
+            "type": "string",
+            "description": "物料组 MATKL。"
+          },
+          "dn": {
+            "type": "string",
+            "description": "物料号 MATNR。"
+          },
+          "relationId": {
+            "type": "string",
+            "description": "本地代理关联键。"
+          },
+          "id": {
+            "type": "string",
+            "description": "本地代理主键。"
+          },
+          "type": {
+            "type": "string",
+            "description": "steps 部件类型代码，未映射的物料组为空字符串。"
+          },
+          "params": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MachineConfigParam"
+            }
+          }
+        }
+      },
+      "MachineConfigParam": {
+        "type": "object",
+        "required": [
+          "id",
+          "orderId",
+          "relationId",
+          "materialSn",
+          "comparionValue",
+          "name",
+          "partsDescription",
+          "materialGroup"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "orderId": {
+            "type": "integer"
+          },
+          "relationId": {
+            "type": "string"
+          },
+          "materialSn": {
+            "type": "string"
+          },
+          "comparionValue": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string",
+            "description": "参数名，如型号或库位。"
+          },
+          "partsDescription": {
+            "type": "string",
+            "description": "物料所属部件类别。"
+          },
+          "materialGroup": {
+            "type": "string"
+          }
+        }
+      },
+      "Error": {
+        "type": "object",
+        "required": [
+          "error"
+        ],
+        "properties": {
+          "error": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": true
+      },
+      "FaultLookupRequest": {
+        "type": "object",
+        "properties": {
+          "productionOrders": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "salesOrders": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "dateFrom": {
+            "type": "string"
+          },
+          "dateTo": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "FaultRowsBySNSRequest": {
+        "type": "object",
+        "required": [
+          "sns"
+        ],
+        "properties": {
+          "sns": {
+            "type": "array",
+            "maxItems": 10000,
+            "items": {
+              "type": "string"
+            }
+          },
+          "dateFrom": {
+            "type": "string"
+          },
+          "dateTo": {
+            "type": "string"
+          },
+          "station": {
+            "type": "string"
+          },
+          "timeField": {
+            "type": "string",
+            "enum": [
+              "planned",
+              "repair"
+            ],
+            "description": "planned 按维修记录的计划开始时间 GSTRS 筛选，repair 或不传按维修日期 ZDATE_WX 筛选。"
+          }
+        },
+        "additionalProperties": false
+      },
+      "FaultSN": {
+        "type": "object",
+        "properties": {
+          "productionOrder": {
+            "type": "string"
+          },
+          "serialNumber": {
+            "type": "string"
+          }
+        }
+      },
+      "FaultSNList": {
+        "type": "object",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FaultSN"
+            }
+          }
+        }
+      },
+      "RawItems": {
+        "type": "object",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": true
+            }
+          }
+        }
+      },
+      "Health": {
+        "type": "object",
+        "required": [
+          "status"
+        ],
+        "properties": {
+          "status": {
+            "const": "ok"
+          }
+        }
+      },
+      "HealthUnhealthy": {
+        "type": "object",
+        "required": [
+          "status",
+          "error"
+        ],
+        "properties": {
+          "status": {
+            "const": "unhealthy"
+          },
+          "error": {
+            "type": "string"
+          }
+        }
+      },
+      "ServiceConfig": {
+        "type": "object",
+        "required": [
+          "serviceName",
+          "version",
+          "database",
+          "collections",
+          "features"
+        ],
+        "properties": {
+          "serviceName": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          },
+          "environment": {
+            "type": "string"
+          },
+          "runtime": {
+            "type": "string"
+          },
+          "listenAddress": {
+            "type": "string"
+          },
+          "frontendURL": {
+            "type": "string"
+          },
+          "apiBasePath": {
+            "type": "string"
+          },
+          "database": {
+            "type": "object",
+            "properties": {
+              "address": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "authSource": {
+                "type": "string"
+              },
+              "replicaSet": {
+                "type": "string"
+              },
+              "authenticationConfigured": {
+                "type": "boolean"
+              },
+              "tls": {
+                "type": "boolean"
+              },
+              "status": {
+                "type": "string"
+              }
+            }
+          },
+          "collections": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "label": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "features": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "label": {
+                  "type": "string"
+                },
+                "enabled": {
+                  "type": "boolean"
+                }
+              }
+            }
+          }
+        }
+      },
+      "Field": {
+        "type": "object",
+        "required": [
+          "key",
+          "label",
+          "value"
+        ],
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "value": {
+            "type": "string"
+          }
+        }
+      },
+      "Fault": {
+        "type": "object",
+        "required": [
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "hostBarcode": {
+            "type": "string"
+          },
+          "serialNumber": {
+            "type": "string"
+          },
+          "errorCode": {
+            "type": "string"
+          },
+          "faultDescription": {
+            "type": "string"
+          },
+          "errorDescription": {
+            "type": "string"
+          },
+          "reviewProblem": {
+            "type": "string"
+          },
+          "defectResponsibility": {
+            "type": "string"
+          },
+          "repairAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "readBy": {
+            "type": "string"
+          },
+          "repairPerson": {
+            "type": "string"
+          },
+          "salesOrder": {
+            "type": "string"
+          },
+          "productionOrder": {
+            "type": "string"
+          },
+          "plannedStartDate": {
+            "type": "string"
+          },
+          "materialCode": {
+            "type": "string"
+          },
+          "materialDescription": {
+            "type": "string"
+          },
+          "ngStation": {
+            "type": "string"
+          },
+          "retestStation": {
+            "type": "string"
+          },
+          "repairRemarks": {
+            "type": "string"
+          },
+          "raw": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "FaultPage": {
+        "type": "object",
+        "required": [
+          "items",
+          "page",
+          "pageSize",
+          "total"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Fault"
+            }
+          },
+          "page": {
+            "type": "integer"
+          },
+          "pageSize": {
+            "type": "integer"
+          },
+          "total": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "FaultDetail": {
+        "type": "object",
+        "required": [
+          "fault",
+          "fields",
+          "raw"
+        ],
+        "properties": {
+          "fault": {
+            "$ref": "#/components/schemas/Fault"
+          },
+          "fields": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Field"
+            }
+          },
+          "raw": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        }
+      },
+      "FaultStats": {
+        "type": "object",
+        "properties": {
+          "total": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "withError": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "withRepairPerson": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "salesOrders": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "productionOrders": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "hostBarcodes": {
+            "type": "integer",
+            "format": "int64",
+            "description": "去重后的非空 PCODE 数量"
+          },
+          "missingSalesOrder": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "missingProductionOrder": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "dataStartDate": {
+            "type": "string"
+          },
+          "dataEndDate": {
+            "type": "string"
+          },
+          "latestSyncedAt": {
+            "type": "string"
+          }
+        }
+      },
+      "Order": {
+        "type": "object",
+        "required": [
+          "id",
+          "source",
+          "aufnr"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          },
+          "aufnr": {
+            "type": "string"
+          },
+          "salesOrder": {
+            "type": "string"
+          },
+          "customerId": {
+            "type": "string"
+          },
+          "finalUser": {
+            "type": "string"
+          },
+          "materialDescription": {
+            "type": "string"
+          },
+          "productionModel": {
+            "type": "string"
+          },
+          "inventoryLocation": {
+            "type": "string"
+          },
+          "plannedStartDate": {
+            "type": "string"
+          },
+          "orderQuantity": {
+            "type": "number"
+          },
+          "storageQuantity": {
+            "type": "number"
+          },
+          "recordCount": {
+            "type": "integer"
+          },
+          "raw": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "OrderPage": {
+        "type": "object",
+        "required": [
+          "items",
+          "page",
+          "pageSize",
+          "total"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Order"
+            }
+          },
+          "page": {
+            "type": "integer"
+          },
+          "pageSize": {
+            "type": "integer"
+          },
+          "total": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "OrderDetail": {
+        "type": "object",
+        "required": [
+          "order",
+          "fields",
+          "raw"
+        ],
+        "properties": {
+          "order": {
+            "$ref": "#/components/schemas/Order"
+          },
+          "fields": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Field"
+            }
+          },
+          "raw": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        }
+      },
+      "OrderStats": {
+        "type": "object",
+        "properties": {
+          "total": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "salesOrders": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "sg": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "kk": {
+            "type": "integer",
+            "format": "int64",
+            "description": "销售订单号以 XNC 开头的订单记录数，不限制 source；其他订单仍出现在列表中但不计入此统计。"
+          },
+          "orderQuantity": {
+            "type": "number"
+          },
+          "machineQuantity": {
+            "type": "number"
+          },
+          "storageQuantity": {
+            "type": "number"
+          },
+          "dataStartDate": {
+            "type": "string"
+          },
+          "dataEndDate": {
+            "type": "string"
+          },
+          "latestSyncedAt": {
+            "type": "string"
+          }
+        }
+      },
+      "OrderModels": {
+        "type": "object",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "OrderCustomerIDs": {
+        "type": "object",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "OrderOptions": {
+        "type": "object",
+        "required": [
+          "productionOrders",
+          "salesOrders",
+          "materialNumbers",
+          "productModels",
+          "bases",
+          "customerIds"
+        ],
+        "properties": {
+          "productionOrders": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "salesOrders": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "materialNumbers": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "productModels": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "bases": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "customerIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "ViewPage": {
+        "type": "object",
+        "required": [
+          "items",
+          "page",
+          "pageSize",
+          "total"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": true
+            }
+          },
+          "page": {
+            "type": "integer"
+          },
+          "pageSize": {
+            "type": "integer"
+          },
+          "total": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "ViewDetail": {
+        "type": "object",
+        "required": [
+          "item",
+          "fields"
+        ],
+        "properties": {
+          "item": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "fields": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Field"
+            }
+          }
+        }
+      },
+      "ViewStats": {
+        "type": "object",
+        "properties": {
+          "total": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "salesOrders": {
+            "type": "integer",
+            "format": "int64",
+            "description": "ZSGV_ZSD124 去重后的非空 VBELN_EX 数量，其他视图为 0"
+          },
+          "productionOrders": {
+            "type": "integer",
+            "format": "int64",
+            "description": "ZSGV_ZSD124 去重后的非空 AUFNR_1 数量，其他视图为 0"
+          },
+          "missingSalesOrder": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "missingProductionOrder": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "missingProductionOrderDistinct": {
+            "type": "integer",
+            "format": "int64",
+            "description": "ZSGV_ZSD124 中生产订单为空的 BOM 行按非空 VBELN_EX 去重后的数量，销售订单也为空时按 _source_key 计数"
+          },
+          "dataStartDate": {
+            "type": "string"
+          },
+          "dataEndDate": {
+            "type": "string"
+          },
+          "latestSyncedAt": {
+            "type": "string"
+          }
+        }
+      },
+      "SyncStatus": {
+        "type": "object",
+        "required": [
+          "state"
+        ],
+        "properties": {
+          "state": {
+            "type": "string",
+            "enum": [
+              "idle",
+              "running",
+              "success",
+              "failed"
+            ]
+          },
+          "startedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "finishedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "message": {
+            "type": "string"
+          },
+          "summary": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        }
+      },
+      "DataStatus": {
+        "type": "object",
+        "properties": {
+          "salesOrdersLastSyncedAt": {
+            "type": "string"
+          },
+          "faultsLastSyncedAt": {
+            "type": "string"
+          },
+          "stationRecordsLastSyncedAt": {
+            "type": "string"
+          },
+          "serialBindingsLastSyncedAt": {
+            "type": "string"
+          },
+          "bomPostingsLastSyncedAt": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          },
+          "startedAt": {
+            "type": "string"
+          },
+          "finishedAt": {
+            "type": "string"
+          }
+        }
+      }
     }
   }
 }

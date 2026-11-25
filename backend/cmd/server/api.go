@@ -40,4 +40,9 @@ type storeAPI interface {
 	SCSDevices(context.Context, store.SCSDeviceFilters, int, int) (store.SCSDevicePage, error)
 	ViewDetail(context.Context, string, string) (store.ViewDetailResult, error)
 	ViewStats(context.Context, string, store.ViewFilters) (store.ViewStatsResult, error)
+	KKDeliveryRecords(context.Context, store.KKDeliveryFilters, int, int) (store.KKDeliveryListResult, error)
+	KKDeliveryStream(context.Context, store.KKDeliveryFilters, io.Writer) error
+	KKDeliveryDetail(context.Context, string) (bson.M, error)
+	KKCumulativeDeliveries(context.Context, string) (store.KKCumulativeResult, error)
+	KKDeliveryShipmentStats(context.Context, store.KKDeliveryFilters) (store.KKShipmentStats, error)
 }

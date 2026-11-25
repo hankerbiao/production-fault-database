@@ -2,7 +2,6 @@ package store
 
 import (
 	"context"
-	"fmt"
 	"math"
 	"sort"
 	"strings"
@@ -36,32 +35,23 @@ type KKShipmentModel struct {
 // KKShipmentStats is the shipment denominator of the MFR dashboard: delivered
 // units in a WADAT window, summed from LFIMG once per delivery batch.
 type KKShipmentStats struct {
-	DateFrom          string            `json:"dateFrom"`
-	DateTo            string            `json:"dateTo"`
-	RecordCount       int               `json:"recordCount"`
-	DeviceCount       int               `json:"deviceCount"`
-	Quantity          float64           `json:"quantity"`
-	BatchCount        int               `json:"batchCount"`
-	MissingQtyBatches int               `json:"missingQuantityBatches"`
-	MissingSerial     int               `json:"missingSerialCount"`
-	UndatedDevices    int               `json:"undatedDeviceCount"`
-	FallbackModel     int               `json:"fallbackModelCount"`
-	UnknownModel      int               `json:"unknownModelCount"`
-	SalesOrderCount   int               `json:"salesOrderCount"`
-	MatchedOrderCount int               `json:"matchedOrderCount"`
-	ByMonth           []KKShipmentMonth `json:"byMonth"`
-	ByModel           []KKShipmentModel `json:"byModel"`
-	GeneratedAt       string            `json:"generatedAt"`
-}
-
-// KKShipmentDataError means a precise denominator cannot be calculated for the window.
-type KKShipmentDataError struct {
-	InvalidItems   int `json:"invalidItems"`
-	QuantityIssues int `json:"quantityIssues"`
-}
-
-func (e *KKShipmentDataError) Error() string {
-	return fmt.Sprintf("KK 出货数据有 %d 个无法确认的交付项，其中 %d 个数量缺失、无效或冲突", e.InvalidItems, e.QuantityIssues)
+	DateFrom           string            `json:"dateFrom"`
+	DateTo             string            `json:"dateTo"`
+	RecordCount        int               `json:"recordCount"`
+	DeviceCount        int               `json:"deviceCount"`
+	Quantity           float64           `json:"quantity"`
+	BatchCount         int               `json:"batchCount"`
+	MissingQtyBatches  int               `json:"missingQuantityBatches"`
+	InvalidDateBatches int               `json:"invalidDateBatches"`
+	MissingSerial      int               `json:"missingSerialCount"`
+	UndatedDevices     int               `json:"undatedDeviceCount"`
+	FallbackModel      int               `json:"fallbackModelCount"`
+	UnknownModel       int               `json:"unknownModelCount"`
+	SalesOrderCount    int               `json:"salesOrderCount"`
+	MatchedOrderCount  int               `json:"matchedOrderCount"`
+	ByMonth            []KKShipmentMonth `json:"byMonth"`
+	ByModel            []KKShipmentModel `json:"byModel"`
+	GeneratedAt        string            `json:"generatedAt"`
 }
 
 type kkShipmentBatch struct {
@@ -85,13 +75,13 @@ func (s *Store) KKDeliveryShipmentStats(ctx context.Context, filters KKDeliveryF
 	defer cursor.Close(ctx)
 
 	var batches []kkShipmentBatch
-	var issues KKShipmentDataError
 	devices := kkSerialSet{}
 	for cursor.Next(ctx) {
 		var row struct {
 			ID struct {
 				Delivery string `bson:"delivery"`
 				Item     string `bson:"item"`
+				Quantity string `bson:"quantity"`
 			} `bson:"_id"`
 			Orders        []string `bson:"orders"`
 			Materials     []string `bson:"materials"`
@@ -108,39 +98,56 @@ func (s *Store) KKDeliveryShipmentStats(ctx context.Context, filters KKDeliveryF
 		}
 		stats.RecordCount += row.Rows
 		stats.MissingSerial += row.MissingSerial
-		badQuantity := row.InvalidQty > 0 || row.Min != row.Max || row.Min < 0 ||
-			math.IsNaN(row.Min) || math.IsInf(row.Min, 0) || math.Trunc(row.Min) != row.Min
-		if badQuantity {
-			issues.QuantityIssues++
-		}
-		validDate := false
-		if len(row.Dates) == 1 {
-			_, err := time.Parse("20060102", row.Dates[0])
-			validDate = err == nil
-		}
-		if badQuantity || !validDate || strings.TrimSpace(row.ID.Delivery) == "" || strings.TrimSpace(row.ID.Item) == "" {
-			issues.InvalidItems++
-			continue
-		}
 
 		serials := make([]string, 0, len(row.Serials))
 		for _, sn := range row.Serials {
+			sn = strings.TrimSpace(sn)
 			if sn != "" {
 				serials = append(serials, sn)
 				devices[sn] = struct{}{}
 			}
 		}
-		batch := kkShipmentBatch{Quantity: row.Min, Serials: serials, DeliveryAt: row.Dates[0]}
+
+		// LFIMG is stored once per delivery batch, but a batch can still arrive
+		// without a usable quantity; count its serials instead of dropping units.
+		quantity := row.Min
+		badQuantity := row.InvalidQty > 0 || row.Min <= 0 || row.Min != row.Max ||
+			math.IsNaN(row.Min) || math.IsInf(row.Min, 0) || math.Trunc(row.Min) != row.Min
+		if badQuantity {
+			quantity = float64(len(serials))
+			if quantity > 0 {
+				stats.MissingQtyBatches++
+			}
+		}
+
+		// A batch belongs to one delivery date; if its dates disagree or are
+		// malformed, keep the units out of the monthly split but count the batch.
+		deliveryAt := ""
+		for _, value := range row.Dates {
+			value = strings.TrimSpace(value)
+			if _, err := time.Parse("20060102", value); err == nil {
+				if deliveryAt == "" || value < deliveryAt {
+					deliveryAt = value
+				}
+			}
+		}
+		if deliveryAt == "" {
+			stats.InvalidDateBatches++
+			continue
+		}
+		if quantity <= 0 {
+			continue
+		}
+
+		batch := kkShipmentBatch{Quantity: quantity, Serials: serials, DeliveryAt: deliveryAt}
 		if len(row.Orders) == 1 && len(row.Materials) == 1 {
-			batch.SalesOrder, batch.Material = row.Orders[0], row.Materials[0]
+			batch.SalesOrder = strings.TrimSpace(row.Orders[0])
+			batch.Material = strings.TrimSpace(row.Materials[0])
 		}
 		batches = append(batches, batch)
 	}
 	if err := cursor.Err(); err != nil {
 		return stats, err
-	}
-	if issues.InvalidItems != 0 {
-		return stats, &issues
 	}
 	stats.DeviceCount = len(devices)
 
@@ -161,12 +168,14 @@ func kkShipmentPipeline(filters KKDeliveryFilters) mongo.Pipeline {
 	return mongo.Pipeline{
 		{{Key: "$match", Value: kkDeliveryFilter(filters)}},
 		{{Key: "$project", Value: bson.M{
-			"delivery": clean("VBELN_L"), "item": clean("POSNR_L"), "order": clean("VBELN"),
+			"delivery": clean("VBELN_L"), "item": bson.M{"$ifNull": bson.A{clean("POSNR"), clean("POSNR_L")}}, "order": clean("VBELN"),
 			"material": clean("MATNR"), "serial": clean("SN"), "date": "$WADAT",
 			"qty": bson.M{"$convert": bson.M{"input": "$LFIMG", "to": "double", "onError": nil, "onNull": nil}},
 		}}},
 		{{Key: "$group", Value: bson.M{
-			"_id":    bson.M{"delivery": "$delivery", "item": "$item"},
+			// LFIMG is part of the key: SAP splits a delivery item across
+			// quantity blocks, and each block is one shipment batch.
+			"_id":    bson.M{"delivery": "$delivery", "item": "$item", "quantity": bson.M{"$toString": bson.M{"$ifNull": bson.A{"$LFIMG", ""}}}},
 			"orders": bson.M{"$addToSet": "$order"}, "materials": bson.M{"$addToSet": "$material"},
 			"dates": bson.M{"$addToSet": "$date"}, "serials": bson.M{"$addToSet": "$serial"},
 			"min": bson.M{"$min": "$qty"}, "max": bson.M{"$max": "$qty"}, "rows": bson.M{"$sum": 1},

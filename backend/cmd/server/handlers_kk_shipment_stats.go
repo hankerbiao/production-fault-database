@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"errors"
 	"net/http"
 	"sync"
 	"time"
@@ -53,13 +52,6 @@ func (s *server) kkDeliveryShipmentStats(w http.ResponseWriter, r *http.Request)
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
 	stats, err := s.store.KKDeliveryShipmentStats(ctx, filters)
-	var dataErr *store.KKShipmentDataError
-	if errors.As(err, &dataErr) {
-		writeJSON(w, http.StatusUnprocessableEntity, map[string]any{
-			"error": dataErr.Error(), "invalidItems": dataErr.InvalidItems, "quantityIssues": dataErr.QuantityIssues,
-		})
-		return
-	}
 	if err != nil {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "无法统计 KK 出货数据"})
 		return

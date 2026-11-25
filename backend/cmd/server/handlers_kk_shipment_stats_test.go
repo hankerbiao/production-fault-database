@@ -5,8 +5,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
-
-	"production-fault-gateway/internal/store"
 )
 
 func TestKKShipmentStatsRouteReturnsModelCounts(t *testing.T) {
@@ -50,21 +48,5 @@ func TestKKShipmentStatsRouteRequiresCompleteDateRange(t *testing.T) {
 		if response.Code != http.StatusBadRequest {
 			t.Fatalf("%s status=%d", target, response.Code)
 		}
-	}
-}
-
-func TestKKShipmentStatsRejectsAmbiguousQuantity(t *testing.T) {
-	router := registerRoutes(newTestServer(&fakeStore{
-		err: &store.KKShipmentDataError{InvalidItems: 9, QuantityIssues: 9},
-	}))
-	response := httptest.NewRecorder()
-	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet,
-		"/api/kk-sales-order-deliveries/shipment-stats?dateFrom=2020-01-01&dateTo=2026-11-25", nil))
-	var body struct {
-		QuantityIssues int `json:"quantityIssues"`
-	}
-	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil ||
-		response.Code != http.StatusUnprocessableEntity || body.QuantityIssues != 9 {
-		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
 	}
 }

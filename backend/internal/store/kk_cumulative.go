@@ -104,7 +104,7 @@ func kkCumulativePipeline(filter bson.M) mongo.Pipeline {
 			"_id": bson.M{"salesOrder": "$_id.salesOrder", "month": bson.M{"$dateToString": bson.M{
 				"date": "$date", "format": "%Y-%m", "onNull": "",
 			}}},
-			"quantity":   bson.M{"$sum": bson.M{"$cond": bson.A{zeroQty, bson.M{"$size": "$serials"}, "$qty"}}},
+			"quantity":   bson.M{"$sum": "$qty"},
 			"serialSets": bson.M{"$push": "$serials"}, "batchCount": bson.M{"$sum": 1},
 			"missingQuantityBatches": bson.M{"$sum": bson.M{"$cond": bson.A{zeroQty, 1, 0}}},
 		}}},

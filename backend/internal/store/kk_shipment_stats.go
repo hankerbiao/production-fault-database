@@ -108,16 +108,14 @@ func (s *Store) KKDeliveryShipmentStats(ctx context.Context, filters KKDeliveryF
 			}
 		}
 
-		// LFIMG is stored once per delivery batch, but a batch can still arrive
-		// without a usable quantity; count its serials instead of dropping units.
+		// LFIMG is the only shipped-units measure. A batch without a usable
+		// LFIMG is reported and left out instead of being counted by serials.
 		quantity := row.Min
 		badQuantity := row.InvalidQty > 0 || row.Min <= 0 || row.Min != row.Max ||
 			math.IsNaN(row.Min) || math.IsInf(row.Min, 0) || math.Trunc(row.Min) != row.Min
 		if badQuantity {
-			quantity = float64(len(serials))
-			if quantity > 0 {
-				stats.MissingQtyBatches++
-			}
+			stats.MissingQtyBatches++
+			continue
 		}
 
 		// A batch belongs to one delivery date; if its dates disagree or are

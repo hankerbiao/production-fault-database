@@ -308,6 +308,8 @@ GET /api/views/{viewID}/detail?id={id}
 
 `SCS_DOA` 详情保留 DOA 列表字段、`sales_order`、`is_5000_company` 以及 `details` 中的申报、服务单、设备和产品实体字段；`details` 是 JSON 字符串。`is_5000_company` 表示 DOA 自身 `sales_order` 去除首尾空白后是否以 `XNC` 开头（忽略大小写）；空值或其他前缀均为 false，不再关联销售订单交付明细或销售订单表。
 
+`GET /api/views/SCS_DOA/stream` 的 TSV 末列为 `host_model`。对每台设备优先取 `details.equipment[].product_fields["主机型号"]`，为空时取该设备的 `host_model`。去除首尾空白后，如果记录中只有一个不同的非空型号，返回该值。缺失或多个型号冲突时返回空字符串。TSV 不包含 `details` 对象。
+
 `SCS_CHANGE` 详情保留换上换下结果表字段：`so_code`、`customer_name`、`device_sn`、`change_type`、`part_number`、`part_sn`、`part_name`、`original_code`、`remark`、`need_return`、`operator`、`create_time`、`is_revoked`、`revoked_by`、`revoked_time` 和 `is_5000_company`。该标识通过服务单号匹配已判定为 5000 公司的 `SCS_DOA` 记录。
 
 其他未定义字段使用“字段 / Field（字段名）”格式。未知 `viewID` 返回 `400`，缺少 `id` 返回 `400`，记录不存在返回 `404`。

@@ -2064,7 +2064,7 @@
         ],
         "operationId": "streamSCSDoaRecords",
         "summary": "导出 SCS DOA 申报",
-        "description": "以 TSV 流式导出 SCS DOA 记录，不受 /all 的 10,000 条上限限制。",
+        "description": "以 TSV 流式导出 SCS DOA 记录，不受 /all 的 10,000 条上限限制。末列 host_model 取各设备的 product_fields.主机型号，该值为空时使用该设备的 host_model。去除首尾空白后，仅有一个不同的非空型号时返回该值，缺失或冲突时返回空字符串。TSV 不包含 details 对象。",
         "parameters": [
           {
             "$ref": "#/components/parameters/Keyword"

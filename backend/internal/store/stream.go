@@ -118,7 +118,13 @@ func (s *Store) ViewSCSStream(ctx context.Context, viewID string, f ViewFilters,
 	fields := scsStreamFields(viewID)
 	projection := bson.M{"_id": 1}
 	for _, field := range fields[1:] {
-		projection[field] = 1
+		if field != "host_model" {
+			projection[field] = 1
+		}
+	}
+	if viewID == "SCS_DOA" {
+		projection["details.equipment.product_fields.主机型号"] = 1
+		projection["details.equipment.host_model"] = 1
 	}
 	cur, err := s.views[viewID].Find(ctx, filter, options.Find().SetProjection(projection).SetSort(bson.D{{Key: config.orderFields[0], Value: -1}}).SetLimit(MaxSCSStreamRows).SetBatchSize(10000))
 	if err != nil {
@@ -137,8 +143,11 @@ func (s *Store) ViewSCSStream(ctx context.Context, viewID string, f ViewFilters,
 		row := make([]string, 0, len(fields))
 		for _, field := range fields {
 			value := doc[field]
-			if field == "id" {
+			switch field {
+			case "id":
 				value = doc["_id"]
+			case "host_model":
+				value = scsDOAStreamHostModel(doc)
 			}
 			row = append(row, tsvSanitizer.Replace(csvValue(value)))
 		}
@@ -154,9 +163,31 @@ func (s *Store) ViewSCSStream(ctx context.Context, viewID string, f ViewFilters,
 
 func scsStreamFields(viewID string) []string {
 	if viewID == "SCS_DOA" {
-		return []string{"id", "doa_code", "doa_type", "service_uid", "status", "doa_judge", "customer_uid", "sugon_sn", "spare_part_sn", "product_name", "problem_batch_number", "declare_time", "acceptance_time", "sales_order", "is_5000_company", "factory_date", "warranty_end_date", "enrichment_status", "GSTRS", "gstrs_status", "production_orders", "shipment_date"}
+		return []string{"id", "doa_code", "doa_type", "service_uid", "status", "doa_judge", "customer_uid", "sugon_sn", "spare_part_sn", "product_name", "problem_batch_number", "declare_time", "acceptance_time", "sales_order", "is_5000_company", "factory_date", "warranty_end_date", "enrichment_status", "GSTRS", "gstrs_status", "production_orders", "shipment_date", "host_model"}
 	}
 	return []string{"id", "so_code", "customer_name", "device_sn", "change_type", "part_number", "part_sn", "part_name", "operator", "need_return", "is_revoked", "create_time", "is_5000_company"}
+}
+
+func scsDOAStreamHostModel(doc bson.M) string {
+	equipment, _ := mapDoc(doc["details"])["equipment"].(bson.A)
+	var unique string
+	for _, item := range equipment {
+		device := mapDoc(item)
+		model, _ := mapDoc(device["product_fields"])["主机型号"].(string)
+		model = strings.TrimSpace(model)
+		if model == "" {
+			legacy, _ := device["host_model"].(string)
+			model = strings.TrimSpace(legacy)
+		}
+		if model == "" {
+			continue
+		}
+		if unique != "" && unique != model {
+			return ""
+		}
+		unique = model
+	}
+	return unique
 }
 
 func ensureStreamRowLimit(ctx context.Context, collection interface {
